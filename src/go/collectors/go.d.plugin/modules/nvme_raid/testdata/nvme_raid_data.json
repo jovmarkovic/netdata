@@ -1,0 +1,318 @@
+{
+    "DATA1": {
+        "active": true,
+        "block_size": 4096,
+        "config": true,
+        "devices": [
+            [
+                0,
+                "/dev/nvme0n1",
+                [
+                    "online"
+                ]
+            ],
+            [
+                1,
+                "/dev/nvme12n1",
+                [
+                    "online"
+                ]
+            ],
+            [
+                2,
+                "/dev/nvme4n1",
+                [
+                    "online"
+                ]
+            ],
+            [
+                3,
+                "/dev/nvme16n1",
+                [
+                    "online"
+                ]
+            ],
+            [
+                4,
+                "/dev/nvme8n1",
+                [
+                    "online"
+                ]
+            ],
+            [
+                5,
+                "/dev/nvme20n1",
+                [
+                    "online"
+                ]
+            ],
+            [
+                6,
+                "/dev/nvme1n1",
+                [
+                    "online"
+                ]
+            ],
+            [
+                7,
+                "/dev/nvme13n1",
+                [
+                    "online"
+                ]
+            ],
+            [
+                8,
+                "/dev/nvme5n1",
+                [
+                    "online"
+                ]
+            ],
+            [
+                9,
+                "/dev/nvme17n1",
+                [
+                    "online"
+                ]
+            ],
+            [
+                10,
+                "/dev/nvme9n1",
+                [
+                    "online"
+                ]
+            ],
+            [
+                11,
+                "/dev/nvme21n1",
+                [
+                    "online"
+                ]
+            ]
+        ],
+        "devices_health": [
+            "100%",
+            "100%",
+            "100%",
+            "100%",
+            "100%",
+            "100%",
+            "100%",
+            "100%",
+            "100%",
+            "100%",
+            "100%",
+            "100%"
+        ],
+        "devices_wear": [
+            "0%",
+            "0%",
+            "0%",
+            "0%",
+            "0%",
+            "0%",
+            "0%",
+            "0%",
+            "0%",
+            "0%",
+            "0%",
+            "0%"
+        ],
+        "group_size": 12,
+        "init_depth": 128,
+        "init_prio": 100,
+        "level": "6",
+        "memory_limit_mb": 0,
+        "memory_usage_mb": "-",
+        "merge_max_usecs": 1000,
+        "merge_read_enabled": 0,
+        "merge_wait_usecs": 300,
+        "merge_write_enabled": 0,
+        "name": "DATA1",
+        "recon_depth": 64,
+        "recon_prio": 100,
+        "request_limit": 0,
+        "restripe_prio": 100,
+        "resync_enabled": 1,
+        "sched_enabled": 0,
+        "serials": [
+            "20522C2D3081_1",
+            "20522C2D2F6C_1",
+            "20522C2D19FB_1",
+            "20522C2D192E_1",
+            "213230F4FACC_1",
+            "20522C295730_1",
+            "213230F4FAAF_1",
+            "20522C2D2EC4_1",
+            "20522C2D2E55_1",
+            "20522C2D2F2F_1",
+            "213230F4FAE0_1",
+            "20522C2D22A9_1"
+        ],
+        "size": "71537 GiB",
+        "sparepool": "-",
+        "state": [
+            "online",
+            "initialized"
+        ],
+        "strip_size": 16,
+        "uuid": "8670DF97-4935-4E88-A8E5-7EB2FC19C17A"
+    },
+    "DATA2": {
+        "active": true,
+        "block_size": 4096,
+        "config": true,
+        "devices": [
+            [
+                0,
+                "/dev/nvme2n1",
+                [
+                    "online"
+                ]
+            ],
+            [
+                1,
+                "/dev/nvme14n1",
+                [
+                    "online"
+                ]
+            ],
+            [
+                2,
+                "/dev/nvme6n1",
+                [
+                    "online"
+                ]
+            ],
+            [
+                3,
+                "/dev/nvme18n1",
+                [
+                    "online"
+                ]
+            ],
+            [
+                4,
+                "/dev/nvme10n1",
+                [
+                    "online"
+                ]
+            ],
+            [
+                5,
+                "/dev/nvme22n1",
+                [
+                    "online"
+                ]
+            ],
+            [
+                6,
+                "/dev/nvme3n1",
+                [
+                    "online"
+                ]
+            ],
+            [
+                7,
+                "/dev/nvme15n1",
+                [
+                    "online"
+                ]
+            ],
+            [
+                8,
+                "/dev/nvme7n1",
+                [
+                    "online"
+                ]
+            ],
+            [
+                9,
+                "/dev/nvme19n1",
+                [
+                    "online"
+                ]
+            ],
+            [
+                10,
+                "/dev/nvme11n1",
+                [
+                    "online"
+                ]
+            ],
+            [
+                11,
+                "/dev/nvme23n1",
+                [
+                    "online"
+                ]
+            ]
+        ],
+        "devices_health": [
+            "100%",
+            "100%",
+            "100%",
+            "100%",
+            "100%",
+            "100%",
+            "100%",
+            "100%",
+            "100%",
+            "100%",
+            "100%",
+            "100%"
+        ],
+        "devices_wear": [
+            "0%",
+            "0%",
+            "0%",
+            "0%",
+            "0%",
+            "0%",
+            "0%",
+            "0%",
+            "0%",
+            "0%",
+            "0%",
+            "0%"
+        ],
+        "group_size": 12,
+        "init_depth": 128,
+        "init_prio": 100,
+        "level": "6",
+        "memory_limit_mb": 0,
+        "memory_usage_mb": "-",
+        "merge_max_usecs": 1000,
+        "merge_read_enabled": 0,
+        "merge_wait_usecs": 300,
+        "merge_write_enabled": 0,
+        "name": "DATA2",
+        "recon_depth": 64,
+        "recon_prio": 100,
+        "request_limit": 0,
+        "restripe_prio": 100,
+        "resync_enabled": 1,
+        "sched_enabled": 0,
+        "serials": [
+            "20522C2D2FCF_1",
+            "213230F4FAC3_1",
+            "20522C2D144D_1",
+            "213230F4FE27_1",
+            "213230F4FAD2_1",
+            "20522C2D18BF_1",
+            "20522C2D20E6_1",
+            "20522C296403_1",
+            "20522C2D2E98_1",
+            "213230F4FAD8_1",
+            "213230F4FAAE_1",
+            "213230F4FA9D_1"
+        ],
+        "size": "71537 GiB",
+        "sparepool": "-",
+        "state": [
+            "online",
+            "initialized"
+        ],
+        "strip_size": 16,
+        "uuid": "CFBBDF25-E40D-488A-8CE0-4C79D8D01CA9"
+    }
+}

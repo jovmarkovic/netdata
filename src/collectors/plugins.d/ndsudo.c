@@ -13,6 +13,15 @@ struct command {
     const char *params;
     const char *search[MAX_SEARCH];
 } allowed_commands[] = {
+      {
+        // Custom nvme_raid plugin
+        .name = "nvme_raid-show",
+        .params = "show -f json -e",
+        .search = {
+            [0] = "eraraid",
+            [1] = "xiraid",
+        },
+    },
     {
         .name = "smartctl-json-scan",
         .params = "--json --scan",

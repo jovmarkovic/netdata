@@ -51,6 +51,7 @@ import (
 	_ "github.com/netdata/netdata/go/go.d.plugin/modules/ntpd"
 	_ "github.com/netdata/netdata/go/go.d.plugin/modules/nvidia_smi"
 	_ "github.com/netdata/netdata/go/go.d.plugin/modules/nvme"
+	_ "github.com/netdata/netdata/go/go.d.plugin/modules/nvme_raid"
 	_ "github.com/netdata/netdata/go/go.d.plugin/modules/openvpn"
 	_ "github.com/netdata/netdata/go/go.d.plugin/modules/openvpn_status_log"
 	_ "github.com/netdata/netdata/go/go.d.plugin/modules/pgbouncer"
