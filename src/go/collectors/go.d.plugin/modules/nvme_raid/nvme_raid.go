@@ -71,13 +71,13 @@ func (s *Nvme_Raid) Init() error {
 }
 
 func (s *Nvme_Raid) Check() error {
-	raid, err := s.collect()
+	raids, err := s.collect()
 	if err != nil {
 		s.Error(err)
 		return err
 	}
 
-	if len(raid) == 0 {
+	if len(raids) == 0 {
 		return errors.New("no metrics collected")
 	}
 

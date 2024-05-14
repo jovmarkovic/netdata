@@ -3,23 +3,20 @@ package nvme_raid
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 )
 
 type (
+	// Define structs to model JSON responses
 	nvme_RaidInfoResponse struct {
-		Raids []struct {
-			Raid_Data raid_data `json:"raid_data"`
-		} `json:"raids"`
+		Raids map[string]raid_data `json:"raids"`
 	}
 	raid_data struct {
-		Active     bool `json:"active"`
-		Block_Size int  `json:"block_size"`
-		Config     bool `json:"config"`
-		Devices    []struct {
-			ID     int      `json:"id"`
-			Device string   `json:"device"`
-			Status []string `json:"status"`
-		} `json:"devices"`
+		Active              bool     `json:"active"`
+		Block_Size          int      `json:"block_size"`
+		Config              bool     `json:"config"`
+		Devices             []device `json:"devices"`
 		Devices_Health      []string `json:"devices_health"`
 		Devices_Wear        []string `json:"devices_wear"`
 		Group_Size          int      `json:"group_size"`
@@ -46,22 +43,83 @@ type (
 		Strip_Size          int      `json:"strip_size"`
 		UUID                string   `json:"uuid"`
 	}
+	device struct {
+		ID     int      `json:"id"`
+		Device string   `json:"device"`
+		Status []string `json:"status"`
+	}
 )
 
-func (s *Nvme_Raid) collectRaidInfo(raid map[string]int64, resp *nvme_RaidInfoResponse) error {
+func (s *Nvme_Raid) collectRaidInfo(mx map[string]int64, resp *nvme_RaidInfoResponse) error {
 	for _, raid := range resp.Raids {
-		// Assuming there's only one RAID per response
-		raidData := raid.Raid_Data
-		if !s.raids[raidData.Name] {
-			s.raids[raidData.Name] = true
+		raidData := raid
+		raidName := raidData.Name
+
+		// Check if the RAID has already been processed
+		if !s.raids[raidName] {
+			// Mark RAID as processed
+			s.raids[raidName] = true
+			// Add RAID data charts
 			s.addRaidDataCharts(raidData)
 		}
-		// Example logic:
-		// Generate device labels
-	}
 
+		// Create prefix for metrics related to this RAID
+		px := fmt.Sprintf("raid_%s_", raidName)
+		// Define RAID states
+		raidStates := []string{
+			"online", "initialized", "initing", "degraded", "reconstructing",
+			"offline", "need_recon", "need_init", "read Only", "unrecovered",
+			"none", "restriping", "need_resize", "need_restripe",
+		}
+
+		// Initialize metrics for common RAID states
+		for _, state := range raidStates {
+			// Set the initial value of each state metric to 0
+			mx[px+"state_"+state] = 0
+		}
+		// Switch statement to handle different numbers of state types
+		// Note: strings.ToLower is used to ensure consistency in the metric keys
+		switch len(raidData.State) {
+		case 1:
+			// If there is only one RAID state, set its corresponding metric to 1
+			state := strings.ToLower(raidData.State[0])
+			mx[px+"state_"+state] = 1
+		case 2:
+			// If there are two RAID states, set the corresponding metrics to 1
+			state1 := strings.ToLower(raidData.State[0])
+			state2 := strings.ToLower(raidData.State[1])
+			mx[px+"state_"+state1] = 1 // Set the first state metric to 1
+			mx[px+"state_"+state2] = 1 // Set the second state metric to 1
+		case 3:
+			// If there are three RAID states, set the corresponding metrics to 1
+			state1 := strings.ToLower(raidData.State[0])
+			state2 := strings.ToLower(raidData.State[1])
+			state3 := strings.ToLower(raidData.State[2])
+			mx[px+"state_"+state1] = 1 // Set the first state metric to 1
+			mx[px+"state_"+state2] = 1 // Set the second state metric to 1
+			mx[px+"state_"+state3] = 1 // Set the third state metric to 1
+		default:
+			// Handle the case where the number of states is unexpected
+			return errors.New("unexpected number of states")
+		}
+	}
 	return nil
 }
+
+// 		// Example logic:
+// 		// Generate device labels
+// 		for i, device := range raidData.Devices {
+// 			// Assuming you have a function to add device charts
+// 			s.addDeviceCharts(i, device)
+
+// 			// Construct the metric name using the prefix 'px' and the device index 'i'
+// 			// and add it to the 'mx' map
+// 			mx[px+"device_"+strconv.Itoa(i)] = 1 // You can set a value based on your requirements
+// 		}
+// 	}
+
+// 	return nil
+// }
 
 // func (s *Nvme_Raid) collectDeviceInfo(raidData raid_data) {
 // 	for i, device := range raidData.Devices {

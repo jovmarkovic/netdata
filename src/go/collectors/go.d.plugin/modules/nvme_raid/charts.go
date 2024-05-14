@@ -12,55 +12,92 @@ const (
 )
 
 var raidDataChartsTmpl = module.Charts{
-	raidDataChartTmpl.Copy(),
+	raidStateChartTmpl.Copy(),
+	// Add more chart templates as needed...
 }
 
 var (
-	raidDataChartTmpl = module.Chart{
-		ID:       "raid_data_%s",
-		Title:    "Raid Data",
+	raidStateChartTmpl = module.Chart{
+		ID:       "raid_%s_state",
+		Title:    "RAID State",
 		Units:    "status",
-		Fam:      "raid data",
-		Ctx:      "nvme_raid.raid_data",
+		Fam:      "raid state",
+		Ctx:      "storcli.raid_state",
 		Type:     module.Line,
 		Priority: prioRaidData,
 		Dims: module.Dims{
-			{ID: "raid_data_%s_active", Name: "active"},
-			{ID: "raid_data_%s_config", Name: "config"},
-			// Add more dimensions as needed
+			// Define dimensions for different RAID states
+			{ID: "raid_%s_state_online", Name: "online"},
+			{ID: "raid_%s_state_initialized", Name: "initialized"},
+			{ID: "raid_%s_state_initing", Name: "initing"},
+			{ID: "raid_%s_state_degraded", Name: "degraded"},
+			{ID: "raid_%s_state_reconstructing", Name: "reconstructing"},
+			{ID: "raid_%s_state_offline", Name: "offline"},
+			{ID: "raid_%s_state_need_recon", Name: "need_recon"},
+			{ID: "raid_%s_state_need_init", Name: "need_init"},
+			{ID: "raid_%s_state_read_only", Name: "read Only"},
+			{ID: "raid_%s_state_unrecovered", Name: "unrecovered"},
+			{ID: "raid_%s_state_none", Name: "none"},
+			{ID: "raid_%s_state_restriping", Name: "restriping"},
+			{ID: "raid_%s_state_need_resize", Name: "need_resize"},
+			{ID: "raid_%s_state_need_restripe", Name: "need_restripe"},
 		},
 	}
-	deviceChartsTmpl = module.Charts{
-		deviceChartTmpl.Copy(),
-	}
-
-	deviceChartTmpl = module.Chart{
-		ID:       "device_%s_%d_status",
-		Title:    "Device Status",
-		Units:    "status",
-		Fam:      "device status",
-		Ctx:      "nvme_raid.device_status",
-		Type:     module.Line,
-		Priority: prioDevice,
-		Dims: module.Dims{
-			{ID: "device_%s_%d_status_online", Name: "online"},
-			{ID: "device_%s_%d_status_offline", Name: "offline"},
-			// Add more dimensions as needed
-		},
-	}
+	// Add more chart templates as needed...
 )
 
-func (s *Nvme_Raid) addRaidDataCharts(raidData raid_data) {
+// var raidDataChartsTmpl = module.Charts{
+// 	raidDataChartTmpl.Copy(),
+// }
+
+// var (
+// 	raidDataChartTmpl = module.Chart{
+// 		ID:       "raid_data_%s",
+// 		Title:    "Raid Data",
+// 		Units:    "status",
+// 		Fam:      "raid data",
+// 		Ctx:      "nvme_raid.raid_data",
+// 		Type:     module.Line,
+// 		Priority: prioRaidData,
+// 		Dims: module.Dims{
+// 			{ID: "raid_data_%s_active", Name: "active"},
+// 			{ID: "raid_data_%s_config", Name: "config"},
+// 			// Add more dimensions as needed
+// 		},
+// 	}
+// 	deviceChartsTmpl = module.Charts{
+// 		deviceChartTmpl.Copy(),
+// 	}
+
+// 	deviceChartTmpl = module.Chart{
+// 		ID:       "device_%s_%d_status",
+// 		Title:    "Device Status",
+// 		Units:    "status",
+// 		Fam:      "device status",
+// 		Ctx:      "nvme_raid.device_status",
+// 		Type:     module.Line,
+// 		Priority: prioDevice,
+// 		Dims: module.Dims{
+// 			{ID: "device_%s_%d_status_online", Name: "online"},
+// 			{ID: "device_%s_%d_status_offline", Name: "offline"},
+// 			// Add more dimensions as needed
+// 		},
+// 	}
+// )
+
+func (s *Nvme_Raid) addRaidDataCharts(raid raid_data) {
 	charts := raidDataChartsTmpl.Copy()
 
+	raidName := raid.Name
+
 	for _, chart := range *charts {
-		chart.ID = fmt.Sprintf(chart.ID, raidData.Name)
+		chart.ID = fmt.Sprintf(chart.ID, raidName)
 		chart.Labels = []module.Label{
-			{Key: "raid_data_name", Value: raidData.Name},
-			// Add more labels as needed
+			{Key: "raid_name", Value: raidName},
+			// You can add more labels here if needed
 		}
 		for _, dim := range chart.Dims {
-			dim.ID = fmt.Sprintf(dim.ID, raidData.Name)
+			dim.ID = fmt.Sprintf(dim.ID, raidName)
 		}
 	}
 

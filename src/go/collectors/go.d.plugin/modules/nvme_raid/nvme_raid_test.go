@@ -145,7 +145,7 @@ func TestNvme_Raid_Collect(t *testing.T) {
 	}{
 		"success Nvme_Raid Raid": {
 			prepareMock: prepareMockNvme_RaidOK,
-			wantCharts:  len(raidDataChartsTmpl)*2 + len(deviceChartsTmpl)*12,
+			wantCharts:  len(raidDataChartsTmpl) * 2,
 			wantMetrics: map[string]int64{},
 		},
 		"err on exec": {
