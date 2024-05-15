@@ -13,13 +13,12 @@ struct command {
     const char *params;
     const char *search[MAX_SEARCH];
 } allowed_commands[] = {
-      {
-        // Custom nvme_raid plugin
-        .name = "nvme_raid-show",
-        .params = "show -f json -e",
+    {
+        .name = "ssacli-controllers-info",
+        .params = "ctrl all show config detail",
         .search = {
-            [0] = "eraraid",
-            [1] = "xiraid",
+            [0] = "ssacli",
+            [1] = NULL,
         },
     },
     {

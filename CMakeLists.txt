@@ -49,6 +49,12 @@ endif()
 
 set(NETDATA_VERSION ${FIELD_MAJOR}.${FIELD_MINOR}.${FIELD_PATCH}.${FIELD_TWEAK})
 
+if(FIELD_DESCR STREQUAL "N/A")
+        set(CPACK_PACKAGE_VERSION ${FIELD_MAJOR}.${FIELD_MINOR}.${FIELD_PATCH})
+else()
+        set(CPACK_PACKAGE_VERSION ${FIELD_MAJOR}.${FIELD_MINOR}.${FIELD_PATCH}-${FIELD_TWEAK}-${FIELD_DESCR})
+endif()
+
 #
 # project
 #
@@ -171,7 +177,7 @@ mark_as_advanced(ENABLE_SENTRY)
 option(BUILD_FOR_PACKAGING "Include component files for native packages" False)
 mark_as_advanced(BUILD_FOR_PACKAGING)
 
-cmake_dependent_option(FORCE_LEGACY_LIBBPF "Force usage of libbpf 0.0.9 instead of the latest version." False "ENABLE_PLUGIN_LIBBPF" False)
+cmake_dependent_option(FORCE_LEGACY_LIBBPF "Force usage of libbpf 0.0.9 instead of the latest version." False "ENABLE_PLUGIN_EBPF" False)
 mark_as_advanced(FORCE_LEGACY_LIBBPF)
 
 if(ENABLE_ACLK OR ENABLE_EXPORTER_PROMETHEUS_REMOTE_WRITE)
@@ -2723,7 +2729,6 @@ install(FILES
         src/collectors/python.d.plugin/am2320/am2320.conf
         src/collectors/python.d.plugin/anomalies/anomalies.conf
         src/collectors/python.d.plugin/beanstalk/beanstalk.conf
-        src/collectors/python.d.plugin/bind_rndc/bind_rndc.conf
         src/collectors/python.d.plugin/boinc/boinc.conf
         src/collectors/python.d.plugin/ceph/ceph.conf
         src/collectors/python.d.plugin/changefinder/changefinder.conf
@@ -2733,7 +2738,6 @@ install(FILES
         src/collectors/python.d.plugin/gearman/gearman.conf
         src/collectors/python.d.plugin/go_expvar/go_expvar.conf
         src/collectors/python.d.plugin/haproxy/haproxy.conf
-        src/collectors/python.d.plugin/hpssa/hpssa.conf
         src/collectors/python.d.plugin/icecast/icecast.conf
         src/collectors/python.d.plugin/ipfs/ipfs.conf
         src/collectors/python.d.plugin/litespeed/litespeed.conf
@@ -2750,7 +2754,6 @@ install(FILES
         src/collectors/python.d.plugin/retroshare/retroshare.conf
         src/collectors/python.d.plugin/riakkv/riakkv.conf
         src/collectors/python.d.plugin/samba/samba.conf
-        src/collectors/python.d.plugin/smartd_log/smartd_log.conf
         src/collectors/python.d.plugin/spigotmc/spigotmc.conf
         src/collectors/python.d.plugin/squid/squid.conf
         src/collectors/python.d.plugin/tomcat/tomcat.conf
@@ -2768,7 +2771,6 @@ install(FILES
         src/collectors/python.d.plugin/am2320/am2320.chart.py
         src/collectors/python.d.plugin/anomalies/anomalies.chart.py
         src/collectors/python.d.plugin/beanstalk/beanstalk.chart.py
-        src/collectors/python.d.plugin/bind_rndc/bind_rndc.chart.py
         src/collectors/python.d.plugin/boinc/boinc.chart.py
         src/collectors/python.d.plugin/ceph/ceph.chart.py
         src/collectors/python.d.plugin/changefinder/changefinder.chart.py
@@ -2778,7 +2780,6 @@ install(FILES
         src/collectors/python.d.plugin/gearman/gearman.chart.py
         src/collectors/python.d.plugin/go_expvar/go_expvar.chart.py
         src/collectors/python.d.plugin/haproxy/haproxy.chart.py
-        src/collectors/python.d.plugin/hpssa/hpssa.chart.py
         src/collectors/python.d.plugin/icecast/icecast.chart.py
         src/collectors/python.d.plugin/ipfs/ipfs.chart.py
         src/collectors/python.d.plugin/litespeed/litespeed.chart.py
@@ -2795,7 +2796,6 @@ install(FILES
         src/collectors/python.d.plugin/retroshare/retroshare.chart.py
         src/collectors/python.d.plugin/riakkv/riakkv.chart.py
         src/collectors/python.d.plugin/samba/samba.chart.py
-        src/collectors/python.d.plugin/smartd_log/smartd_log.chart.py
         src/collectors/python.d.plugin/spigotmc/spigotmc.chart.py
         src/collectors/python.d.plugin/squid/squid.chart.py
         src/collectors/python.d.plugin/tomcat/tomcat.chart.py
