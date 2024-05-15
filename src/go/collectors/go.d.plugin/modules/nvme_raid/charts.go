@@ -69,7 +69,7 @@ var (
 // 		deviceChartTmpl.Copy(),
 // 	}
 
-// 	deviceChartTmpl = module.Chart{
+// 	devicehartTmpl = module.Chart{
 // 		ID:       "device_%s_%d_status",
 // 		Title:    "Device Status",
 // 		Units:    "status",
