@@ -142,7 +142,7 @@ void web_client_api_v1_init(void) {
 
     time_grouping_init();
 
-	uuid_t uuid;
+    nd_uuid_t uuid;
 
 	// generate
 	uuid_generate(uuid);
@@ -181,7 +181,7 @@ char *get_mgmt_api_key(void) {
 
     // generate a new one?
     if(!guid[0]) {
-        uuid_t uuid;
+        nd_uuid_t uuid;
 
         uuid_generate_time(uuid);
         uuid_unparse_lower(uuid, guid);
@@ -1233,7 +1233,7 @@ static inline void web_client_api_request_v1_info_mirrored_hosts(BUFFER *wb) {
     }
     buffer_json_array_close(wb);
 
-    rrd_unlock();
+    rrd_rdunlock();
 }
 
 void host_labels2json(RRDHOST *host, BUFFER *wb, const char *key) {
@@ -1581,11 +1581,24 @@ static int web_client_api_request_v1_config(RRDHOST *host, struct web_client *w,
             rrd_call_function_error(w->response.data, "invalid id given", HTTP_RESP_BAD_REQUEST);
             return HTTP_RESP_BAD_REQUEST;
         }
+
         if(c == DYNCFG_CMD_NONE) {
             rrd_call_function_error(w->response.data, "invalid action given", HTTP_RESP_BAD_REQUEST);
             return HTTP_RESP_BAD_REQUEST;
         }
-        else if(c == DYNCFG_CMD_ADD) {
+
+        if(c == DYNCFG_CMD_ADD || c == DYNCFG_CMD_USERCONFIG || c == DYNCFG_CMD_TEST) {
+            if(c == DYNCFG_CMD_TEST && (!add_name || !*add_name)) {
+                // backwards compatibility for TEST without a name
+                char *colon = strrchr(id, ':');
+                if(colon) {
+                    *colon = '\0';
+                    add_name = ++colon;
+                }
+                else
+                    add_name = "test";
+            }
+
             if(!add_name || !*add_name || !dyncfg_is_valid_id(add_name)) {
                 rrd_call_function_error(w->response.data, "invalid name given", HTTP_RESP_BAD_REQUEST);
                 return HTTP_RESP_BAD_REQUEST;

@@ -19,6 +19,7 @@ func init() {
 	module.Register("traefik", module.Creator{
 		JobConfigSchema: configSchema,
 		Create:          func() module.Module { return New() },
+		Config:          func() any { return &Config{} },
 	})
 }
 
@@ -44,8 +45,8 @@ func New() *Traefik {
 }
 
 type Config struct {
+	UpdateEvery int `yaml:"update_every,omitempty" json:"update_every"`
 	web.HTTP    `yaml:",inline" json:""`
-	UpdateEvery int `yaml:"update_every" json:"update_every"`
 }
 
 type (
@@ -126,4 +127,4 @@ func (t *Traefik) Collect() map[string]int64 {
 	return mx
 }
 
-func (Traefik) Cleanup() {}
+func (t *Traefik) Cleanup() {}

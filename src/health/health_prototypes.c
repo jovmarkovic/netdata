@@ -176,6 +176,21 @@ void alert_action_options_to_buffer_json_array(BUFFER *wb, const char *key, ALER
     buffer_json_array_close(wb);
 }
 
+void alert_action_options_to_buffer(BUFFER *wb, ALERT_ACTION_OPTIONS options) {
+    RRDR_OPTIONS used = 0; // to prevent adding duplicates
+    for(int i = 0; alert_action_options[i].name ; i++) {
+        if (unlikely((alert_action_options[i].value & options) && !(alert_action_options[i].value & used))) {
+            if(used != 0)
+                buffer_strcat(wb, " ");
+
+            const char *name = alert_action_options[i].name;
+            used |= alert_action_options[i].value;
+
+            buffer_strcat(wb, name);
+        }
+    }
+}
+
 static void alert_action_options_init(void) {
     for(int i = 0; alert_action_options[i].name ; i++)
         alert_action_options[i].hash = simple_hash(alert_action_options[i].name);
@@ -374,7 +389,7 @@ static void health_prototype_activate_match_patterns(struct rrd_alert_match *am)
 void health_prototype_hash_id(RRD_ALERT_PROTOTYPE *ap) {
     CLEAN_BUFFER *wb = buffer_create(100, NULL);
     health_prototype_to_json(wb, ap, true);
-    UUID uuid = UUID_generate_from_hash(buffer_tostring(wb), buffer_strlen(wb));
+    ND_UUID uuid = UUID_generate_from_hash(buffer_tostring(wb), buffer_strlen(wb));
     uuid_copy(ap->config.hash_id, uuid.uuid);
 
     sql_alert_store_config(ap);
