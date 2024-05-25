@@ -204,6 +204,7 @@ endif()
 
 if(ENABLE_WEBRTC)
         include(FetchContent)
+        include(NetdataFetchContentExtra)
 
         # ignore debhelper
         set(FETCHCONTENT_FULLY_DISCONNECTED Off)
@@ -217,6 +218,7 @@ if(ENABLE_WEBRTC)
         FetchContent_Declare(libdatachannel
             GIT_REPOSITORY https://github.com/paullouisageneau/libdatachannel.git
             GIT_TAG v0.20.1
+            CMAKE_ARGS ${NETDATA_PROPAGATE_TOOLCHAIN_ARGS}
         )
         FetchContent_MakeAvailable(libdatachannel)
 endif()
@@ -1003,6 +1005,7 @@ set(INTERNAL_COLLECTORS_FILES
         src/collectors/common-contexts/common-contexts.h
         src/collectors/common-contexts/disk.io.h
         src/collectors/common-contexts/system.io.h
+        src/collectors/common-contexts/system.processes.h
         src/collectors/common-contexts/system.ram.h
         src/collectors/common-contexts/mem.swap.h
         src/collectors/common-contexts/mem.pgfaults.h
@@ -1272,6 +1275,7 @@ set(WINDOWS_PLUGIN_FILES
         src/collectors/windows.plugin/perflib-processor.c
         src/collectors/windows.plugin/perflib-network.c
         src/collectors/windows.plugin/perflib-memory.c
+        src/collectors/windows.plugin/perflib-processes.c
 )
 
 set(PROC_PLUGIN_FILES
