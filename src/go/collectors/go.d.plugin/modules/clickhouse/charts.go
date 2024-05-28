@@ -19,12 +19,14 @@ const (
 
 	prioDiskSpaceUsage
 
+	prioRunningQueries
+	prioQueriesPreempted
 	prioQueries
 	prioSelectQueries
 	prioInsertQueries
-	prioQueriesPreempted
 	prioQueriesMemoryLimitExceeded
 
+	prioLongestRunningQueryTime
 	prioQueriesLatency
 	prioSelectQueriesLatency
 	prioInsertQueriesLatency
@@ -40,6 +42,7 @@ const (
 	prioDatabaseTableRows
 
 	prioReplicatedPartsCurrentActivity
+	prioReplicasMaxAbsoluteDelay
 	prioReadOnlyReplica
 	prioReplicatedDataLoss
 	prioReplicatedPartFetches
@@ -70,6 +73,7 @@ const (
 	prioUncompressedCacheRequests
 	prioMarkCacheRequests
 
+	prioMaxPartCountForPartition
 	prioParts
 
 	prioDistributedSend
@@ -95,12 +99,14 @@ var chCharts = module.Charts{
 	chartSlowReads.Copy(),
 	chartReadBackoff.Copy(),
 
+	chartRunningQueries.Copy(),
 	chartQueries.Copy(),
 	chartSelectQueries.Copy(),
 	chartInsertQueries.Copy(),
 	chartQueriesPreempted.Copy(),
 	chartQueriesMemoryLimitExceeded.Copy(),
 
+	chartLongestRunningQueryTime.Copy(),
 	chartQueriesLatency.Copy(),
 	chartSelectQueriesLatency.Copy(),
 	chartInsertQueriesLatency.Copy(),
@@ -112,6 +118,7 @@ var chCharts = module.Charts{
 	chartIOFileOpens.Copy(),
 
 	chartReplicatedPartsActivity.Copy(),
+	chartReplicasMaxAbsoluteDelay.Copy(),
 	chartReadonlyReplica.Copy(),
 	chartReplicatedDataLoss.Copy(),
 	chartReplicatedPartFetches.Copy(),
@@ -142,6 +149,7 @@ var chCharts = module.Charts{
 	chartUncompressedCacheRequests.Copy(),
 	chartMarkCacheRequests.Copy(),
 
+	chartMaxPartCountForPartition.Copy(),
 	chartPartsCount.Copy(),
 
 	chartDistributedConnections.Copy(),
@@ -238,6 +246,28 @@ var (
 )
 
 var (
+	chartRunningQueries = module.Chart{
+		ID:       "running_queries",
+		Title:    "Running queries",
+		Units:    "queries",
+		Fam:      "queries",
+		Ctx:      "clickhouse.running_queries",
+		Priority: prioRunningQueries,
+		Dims: module.Dims{
+			{ID: "metrics_Query", Name: "running"},
+		},
+	}
+	chartQueriesPreempted = module.Chart{
+		ID:       "queries_preempted",
+		Title:    "Queries waiting due to priority",
+		Units:    "queries",
+		Fam:      "queries",
+		Ctx:      "clickhouse.queries_preempted",
+		Priority: prioQueriesPreempted,
+		Dims: module.Dims{
+			{ID: "metrics_QueryPreempted", Name: "preempted"},
+		},
+	}
 	chartQueries = module.Chart{
 		ID:       "queries",
 		Title:    "Queries",
@@ -277,17 +307,6 @@ var (
 			{ID: "events_FailedInsertQuery", Name: "failed", Algo: module.Incremental},
 		},
 	}
-	chartQueriesPreempted = module.Chart{
-		ID:       "queries_preempted",
-		Title:    "Queries waiting due to priority",
-		Units:    "queries",
-		Fam:      "queries",
-		Ctx:      "clickhouse.queries_preempted",
-		Priority: prioQueriesPreempted,
-		Dims: module.Dims{
-			{ID: "metrics_QueryPreempted", Name: "preempted"},
-		},
-	}
 	chartQueriesMemoryLimitExceeded = module.Chart{
 		ID:       "queries_memory_limit_exceeded",
 		Title:    "Memory limit exceeded for query",
@@ -302,6 +321,17 @@ var (
 )
 
 var (
+	chartLongestRunningQueryTime = module.Chart{
+		ID:       "longest_running_query_time",
+		Title:    "Longest running query time",
+		Units:    "seconds",
+		Fam:      "query latency",
+		Ctx:      "clickhouse.longest_running_query_time",
+		Priority: prioLongestRunningQueryTime,
+		Dims: module.Dims{
+			{ID: "LongestRunningQueryTime", Name: "longest_query_time", Div: precision},
+		},
+	}
 	chartQueriesLatency = module.Chart{
 		ID:       "queries_latency",
 		Title:    "Queries latency",
@@ -454,6 +484,17 @@ var (
 			{ID: "metrics_ReplicatedFetch", Name: "fetch"},
 			{ID: "metrics_ReplicatedSend", Name: "send"},
 			{ID: "metrics_ReplicatedChecks", Name: "check"},
+		},
+	}
+	chartReplicasMaxAbsoluteDelay = module.Chart{
+		ID:       "replicas_max_absolute_delay",
+		Title:    "Replicas max absolute delay",
+		Units:    "seconds",
+		Fam:      "replicas",
+		Ctx:      "clickhouse.replicas_max_absolute_delay",
+		Priority: prioReplicasMaxAbsoluteDelay,
+		Dims: module.Dims{
+			{ID: "async_metrics_ReplicasMaxAbsoluteDelay", Name: "replication_delay", Div: precision},
 		},
 	}
 	chartReadonlyReplica = module.Chart{
@@ -746,6 +787,17 @@ var (
 )
 
 var (
+	chartMaxPartCountForPartition = module.Chart{
+		ID:       "max_part_count_for_partition",
+		Title:    "Max part count for partition",
+		Units:    "parts",
+		Fam:      "parts",
+		Ctx:      "clickhouse.max_part_count_for_partition",
+		Priority: prioMaxPartCountForPartition,
+		Dims: module.Dims{
+			{ID: "async_metrics_MaxPartCountForPartition", Name: "max_parts_partition"},
+		},
+	}
 	chartPartsCount = module.Chart{
 		ID:       "parts_count",
 		Title:    "Parts",
