@@ -149,6 +149,43 @@ issystemd() {
   return 1
 }
 
+# shellcheck disable=SC2009
+running_under_anacron() {
+    pid="${1:-$$}"
+    iter="${2:-0}"
+
+    [ "${iter}" -gt 50 ] && return 1
+
+    if [ "$(uname -s)" = "Linux" ] && [ -r "/proc/${pid}/stat" ]; then
+        ppid="$(cut -f 4 -d ' ' "/proc/${pid}/stat")"
+        if [ -n "${ppid}" ]; then
+            # The below case accounts for the hidepid mount option for procfs, as well as setups with LSM
+            [ ! -r "/proc/${ppid}/comm" ] && return 1
+
+            [ "${ppid}" -eq "${pid}" ] && return 1
+
+            grep -q anacron "/proc/${ppid}/comm" && return 0
+
+            running_under_anacron "${ppid}" "$((iter + 1))"
+
+            return "$?"
+        fi
+    else
+        ppid="$(ps -o pid= -o ppid= 2>/dev/null | grep -e "^ *${pid}" | xargs | cut -f 2 -d ' ')"
+        if [ -n "${ppid}" ]; then
+            [ "${ppid}" -eq "${pid}" ] && return 1
+
+            ps -o pid= -o command= 2>/dev/null | grep -e "^ *${ppid}" | grep -q anacron && return 0
+
+            running_under_anacron "${ppid}" "$((iter + 1))"
+
+            return "$?"
+        fi
+    fi
+
+    return 1
+}
+
 _get_intervaldir() {
   if [ -d /etc/cron.daily ]; then
     echo /etc/cron.daily
@@ -1079,6 +1116,12 @@ if [ -n "${NETDATA_OFFLINE_INSTALL_SOURCE}" ]; then
   NETDATA_NO_UPDATER_SELF_UPDATE=1
   NETDATA_UPDATER_JITTER=0
   NETDATA_FORCE_UPDATE=1
+fi
+
+# If we seem to be running under anacron, act as if we’re not running from cron.
+# This is mostly to disable jitter, which should not be needed when run from anacron.
+if running_under_anacron; then
+  NETDATA_NOT_RUNNING_FROM_CRON="${NETDATA_NOT_RUNNING_FROM_CRON:-1}"
 fi
 
 # Random sleep to alleviate stampede effect of Agents upgrading

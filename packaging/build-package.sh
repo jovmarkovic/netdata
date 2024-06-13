@@ -38,7 +38,7 @@ add_cmake_option ENABLE_PLUGIN_DEBUGFS On
 add_cmake_option ENABLE_PLUGIN_FREEIPMI On
 add_cmake_option ENABLE_PLUGIN_GO On
 add_cmake_option ENABLE_PLUGIN_LOCAL_LISTENERS On
-add_cmake_option ENABLE_PLUGIN_LOGS_MANAGEMENT On
+add_cmake_option ENABLE_PLUGIN_LOGS_MANAGEMENT Off
 add_cmake_option ENABLE_PLUGIN_NFACCT On
 add_cmake_option ENABLE_PLUGIN_PERF On
 add_cmake_option ENABLE_PLUGIN_SLABINFO On
@@ -84,10 +84,6 @@ if [ "${ENABLE_SENTRY}" = "true" ]; then
     add_cmake_option NETDATA_SENTRY_ENVIRONMENT "${RELEASE_PIPELINE:-Unknown}"
     add_cmake_option NETDATA_SENTRY_DIST "${BUILD_DESTINATION:-Unknown}"
     add_cmake_option NETDATA_SENTRY_DSN "${SENTRY_DSN}"
-
-    if [ -n "${VERSION}" ]; then
-        add_cmake_option NETDATA_SENTRY_RELEASE "${VERSION}"
-    fi
 else
     add_cmake_option ENABLE_SENTRY Off
 fi
