@@ -141,23 +141,23 @@ option(ENABLE_DBENGINE "Enable dbengine metrics storage" True)
 option(ENABLE_PLUGIN_APPS "Enable per-process resource usage monitoring" ${DEFAULT_FEATURE_STATE})
 option(ENABLE_PLUGIN_GO "Enable metric collectors written in Go" ${DEFAULT_FEATURE_STATE})
 
-cmake_dependent_option(ENABLE_PLUGIN_CUPS "Enable CUPS monitoring" ${DEFAULT_FEATURE_STATE} "LINUX OR FREEBSD OR MACOS" False)
+cmake_dependent_option(ENABLE_PLUGIN_CUPS "Enable CUPS monitoring" ${DEFAULT_FEATURE_STATE} "OS_LINUX OR OS_FREEBSD OR OS_MACOS" False)
 
-cmake_dependent_option(ENABLE_PLUGIN_FREEIPMI "Enable IPMI monitoring" ${DEFAULT_FEATURE_STATE} "LINUX OR FREEBSD" False)
+cmake_dependent_option(ENABLE_PLUGIN_FREEIPMI "Enable IPMI monitoring" ${DEFAULT_FEATURE_STATE} "OS_LINUX OR OS_FREEBSD" False)
 
-cmake_dependent_option(ENABLE_PLUGIN_CGROUP_NETWORK "Enable Linux CGroup network usage monitoring" ${DEFAULT_FEATURE_STATE} "LINUX" False)
-cmake_dependent_option(ENABLE_PLUGIN_DEBUGFS "Enable Linux DebugFS metric collection" ${DEFAULT_FEATURE_STATE} "LINUX" False)
-cmake_dependent_option(ENABLE_PLUGIN_EBPF "Enable Linux eBPF metric collection" ${DEFAULT_FEATURE_STATE} "LINUX" False)
+cmake_dependent_option(ENABLE_PLUGIN_CGROUP_NETWORK "Enable Linux CGroup network usage monitoring" ${DEFAULT_FEATURE_STATE} "OS_LINUX" False)
+cmake_dependent_option(ENABLE_PLUGIN_DEBUGFS "Enable Linux DebugFS metric collection" ${DEFAULT_FEATURE_STATE} "OS_LINUX" False)
+cmake_dependent_option(ENABLE_PLUGIN_EBPF "Enable Linux eBPF metric collection" ${DEFAULT_FEATURE_STATE} "OS_LINUX" False)
 cmake_dependent_option(ENABLE_LEGACY_EBPF_PROGRAMS "Enable eBPF programs for kernels without BTF support" True "ENABLE_PLUGIN_EBPF" False)
 mark_as_advanced(ENABLE_LEGACY_EBPF_PROGRAMS)
-cmake_dependent_option(ENABLE_PLUGIN_LOCAL_LISTENERS "Enable local listening socket tracking (including service auto-discovery support)" ${DEFAULT_FEATURE_STATE} "LINUX" False)
-cmake_dependent_option(ENABLE_PLUGIN_LOGS_MANAGEMENT "Enable log collection and monitoring based on Fluent Bit" ${DEFAULT_FEATURE_STATE} "LINUX" False)
-cmake_dependent_option(ENABLE_PLUGIN_NETWORK_VIEWER "Enable network viewer functionality" ${DEFAULT_FEATURE_STATE} "LINUX" False)
-cmake_dependent_option(ENABLE_PLUGIN_NFACCT "Enable Linux NFACCT metric collection" ${DEFAULT_FEATURE_STATE} "LINUX" False)
-cmake_dependent_option(ENABLE_PLUGIN_PERF "Enable Linux performance counter monitoring" ${DEFAULT_FEATURE_STATE} "LINUX" False)
-cmake_dependent_option(ENABLE_PLUGIN_SLABINFO "Enable Linux kernel SLAB allocator monitoring" ${DEFAULT_FEATURE_STATE} "LINUX" False)
-cmake_dependent_option(ENABLE_PLUGIN_SYSTEMD_JOURNAL "Enable systemd journal log collection" ${DEFAULT_FEATURE_STATE} "LINUX" False)
-cmake_dependent_option(ENABLE_PLUGIN_XENSTAT "Enable Xen domain monitoring" ${DEFAULT_FEATURE_STATE} "LINUX" False)
+cmake_dependent_option(ENABLE_PLUGIN_LOCAL_LISTENERS "Enable local listening socket tracking (including service auto-discovery support)" ${DEFAULT_FEATURE_STATE} "OS_LINUX" False)
+cmake_dependent_option(ENABLE_PLUGIN_LOGS_MANAGEMENT "Enable log collection and monitoring based on Fluent Bit" ${DEFAULT_FEATURE_STATE} "OS_LINUX" False)
+cmake_dependent_option(ENABLE_PLUGIN_NETWORK_VIEWER "Enable network viewer functionality" ${DEFAULT_FEATURE_STATE} "OS_LINUX" False)
+cmake_dependent_option(ENABLE_PLUGIN_NFACCT "Enable Linux NFACCT metric collection" ${DEFAULT_FEATURE_STATE} "OS_LINUX" False)
+cmake_dependent_option(ENABLE_PLUGIN_PERF "Enable Linux performance counter monitoring" ${DEFAULT_FEATURE_STATE} "OS_LINUX" False)
+cmake_dependent_option(ENABLE_PLUGIN_SLABINFO "Enable Linux kernel SLAB allocator monitoring" ${DEFAULT_FEATURE_STATE} "OS_LINUX" False)
+cmake_dependent_option(ENABLE_PLUGIN_SYSTEMD_JOURNAL "Enable systemd journal log collection" ${DEFAULT_FEATURE_STATE} "OS_LINUX" False)
+cmake_dependent_option(ENABLE_PLUGIN_XENSTAT "Enable Xen domain monitoring" ${DEFAULT_FEATURE_STATE} "OS_LINUX" False)
 
 # Metrics exporters
 option(ENABLE_EXPORTER_PROMETHEUS_REMOTE_WRITE "Enable exporting to Prometheus via remote write API" ${DEFAULT_FEATURE_STATE})
@@ -230,6 +230,8 @@ if(NEED_PROTOBUF)
                 netdata_bundle_protobuf()
         endif()
 endif()
+
+set(PKG_FILES_PATH "${CMAKE_SOURCE_DIR}/packaging/cmake/pkg-files")
 
 if(ENABLE_PLUGIN_EBPF)
         include(NetdataLibBPF)
@@ -1750,7 +1752,7 @@ if(ENABLE_PLUGIN_DEBUGFS)
 
     if(BUILD_FOR_PACKAGING)
         install(FILES
-                packaging/cmake/control/copyright
+                ${PKG_FILES_PATH}/copyright
                 COMPONENT plugin-debugfs
                 DESTINATION usr/share/doc/netdata-plugin-debugfs)
     endif()
@@ -1792,7 +1794,7 @@ if(ENABLE_PLUGIN_APPS)
 
     if(BUILD_FOR_PACKAGING)
         install(FILES
-                packaging/cmake/control/copyright
+                ${PKG_FILES_PATH}/copyright
                 COMPONENT plugin-apps
                 DESTINATION usr/share/doc/netdata-plugin-apps)
     endif()
@@ -1818,7 +1820,7 @@ if(ENABLE_PLUGIN_FREEIPMI)
 
     if(BUILD_FOR_PACKAGING)
         install(FILES
-                packaging/cmake/control/copyright
+                ${PKG_FILES_PATH}/copyright
                 COMPONENT plugin-freeipmi
                 DESTINATION usr/share/doc/netdata-plugin-freeipmi)
     endif()
@@ -1844,7 +1846,7 @@ if(ENABLE_PLUGIN_NFACCT)
 
     if(BUILD_FOR_PACKAGING)
         install(FILES
-                packaging/cmake/control/copyright
+                ${PKG_FILES_PATH}/copyright
                 COMPONENT plugin-nfacct
                 DESTINATION usr/share/doc/netdata-plugin-nfacct)
     endif()
@@ -1867,7 +1869,7 @@ if(ENABLE_PLUGIN_XENSTAT)
 
     if(BUILD_FOR_PACKAGING)
         install(FILES
-                packaging/cmake/control/copyright
+                ${PKG_FILES_PATH}/copyright
                 COMPONENT plugin-xenstat
                 DESTINATION usr/share/doc/netdata-plugin-xenstat)
     endif()
@@ -1885,7 +1887,7 @@ if(ENABLE_PLUGIN_PERF)
 
     if(BUILD_FOR_PACKAGING)
          install(FILES
-                 packaging/cmake/control/copyright
+                 ${PKG_FILES_PATH}/copyright
                  COMPONENT plugin-perf
                  DESTINATION usr/share/doc/netdata-plugin-perf)
     endif()
@@ -1903,7 +1905,7 @@ if(ENABLE_PLUGIN_SLABINFO)
 
     if(BUILD_FOR_PACKAGING)
         install(FILES
-                packaging/cmake/control/copyright
+                ${PKG_FILES_PATH}/copyright
                 COMPONENT plugin-slabinfo
                 DESTINATION usr/share/doc/netdata-plugin-slabinfo)
     endif()
@@ -1943,7 +1945,7 @@ if(ENABLE_PLUGIN_LOGS_MANAGEMENT)
 
     if(BUILD_FOR_PACKAGING)
         install(FILES
-                packaging/cmake/control/copyright
+                ${PKG_FILES_PATH}/copyright
                 COMPONENT plugin-logs-management
                 DESTINATION usr/share/doc/netdata-plugin-logs-management)
     endif()
@@ -1982,7 +1984,7 @@ if(ENABLE_PLUGIN_CUPS)
 
         if(BUILD_FOR_PACKAGING)
                 install(FILES
-                        packaging/cmake/control/copyright
+                        ${PKG_FILES_PATH}/copyright
                         COMPONENT plugin-cups
                         DESTINATION usr/share/doc/netdata-plugin-cups)
         endif()
@@ -2022,7 +2024,7 @@ if(ENABLE_PLUGIN_SYSTEMD_JOURNAL)
 
         if(BUILD_FOR_PACKAGING)
                 install(FILES
-                        packaging/cmake/control/copyright
+                        ${PKG_FILES_PATH}/copyright
                         COMPONENT plugin-systemd-journal
                         DESTINATION usr/share/doc/netdata-plugin-systemd-journal)
         endif()
@@ -2111,7 +2113,7 @@ if(ENABLE_PLUGIN_EBPF)
 
     if(BUILD_FOR_PACKAGING)
         install(FILES
-                packaging/cmake/control/copyright
+                ${PKG_FILES_PATH}/copyright
                 COMPONENT plugin-ebpf
                 DESTINATION usr/share/doc/netdata-plugin-ebpf)
     endif()
@@ -2163,7 +2165,7 @@ if(ENABLE_PLUGIN_NETWORK_VIEWER)
 
         if(BUILD_FOR_PACKAGING)
                 install(FILES
-                        packaging/cmake/control/copyright
+                        ${PKG_FILES_PATH}/copyright
                         COMPONENT plugin-network-viewer
                         DESTINATION usr/share/doc/netdata-plugin-network-viewer)
         endif()
@@ -2367,7 +2369,6 @@ set(CONFIGURE_COMMAND "dummy-configure-command")
 if (NOT NETDATA_USER)
         set(NETDATA_USER "netdata")
 endif()
-set(VERSION "${GIT_DESCRIBE_OUTPUT}")
 
 configure_file(packaging/cmake/config.cmake.h.in config.h)
 
@@ -2626,16 +2627,14 @@ install(FILES
 #
 if(BUILD_FOR_PACKAGING)
         install(FILES
-                packaging/cmake/control/netdata/etc/default/netdata
+                ${PKG_FILES_PATH}/deb/netdata/etc/default/netdata
                 COMPONENT netdata
                 DESTINATION etc/default)
-endif()
 
-if(BUILD_FOR_PACKAGING)
-install(PROGRAMS
-        packaging/cmake/control/netdata/etc/init.d/netdata
-        COMPONENT netdata
-        DESTINATION etc/init.d)
+        install(PROGRAMS
+                ${PKG_FILES_PATH}/deb/netdata/etc/init.d/netdata
+                COMPONENT netdata
+                DESTINATION etc/init.d)
 endif()
 
 install(PROGRAMS
@@ -2760,7 +2759,7 @@ install(FILES
 
 if(BUILD_FOR_PACKAGING)
         install(FILES
-                packaging/cmake/control/copyright
+                ${PKG_FILES_PATH}/copyright
                 COMPONENT plugin-chartsd
                 DESTINATION usr/share/doc/netdata-plugin-chartsd)
 endif()
@@ -2883,7 +2882,7 @@ install(FILES
 
 if(BUILD_FOR_PACKAGING)
         install(FILES
-                packaging/cmake/control/copyright
+                ${PKG_FILES_PATH}/copyright
                 COMPONENT plugin-pythond
                 DESTINATION usr/share/doc/netdata-plugin-pythond)
 endif()
@@ -2923,7 +2922,7 @@ if(ENABLE_PLUGIN_GO)
 
     if(BUILD_FOR_PACKAGING)
         install(FILES
-                packaging/cmake/control/copyright
+                ${PKG_FILES_PATH}/copyright
                 COMPONENT plugin-go
                 DESTINATION usr/share/doc/netdata-plugin-go)
     endif()
