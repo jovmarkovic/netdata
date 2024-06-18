@@ -19,42 +19,13 @@ logger.addHandler(stream_handler)
 
 priority = 90000
 
-ORDER = [
-    "raid_state"
-]
-
-CHARTS = {
-    "raid_state": {
-        "options": ["raid_state", "RAID State", "status", "raid state", "storcli", "line"],
-        "lines": [
-            ["online"],
-            ["initialized"],
-            ["initing"],
-            ["degraded"],
-            ["reconstructing"],
-            ["offline"],
-            ["need_recon"],
-            ["need_init"],
-            ["read_only"],
-            ["unrecovered"],
-            ["none"],
-            ["restriping"],
-            ["need_resize"],
-            ["need_restripe"]
-        ]
-    }
-}
-
 
 class Service(SimpleService):
     def __init__(self, configuration=None, name=None):
         SimpleService.__init__(self, configuration=configuration, name=name)
-        self.order = ORDER
-        self.definitions = CHARTS
-
-    @staticmethod
-    def check():
-        return True
+        self.order = []
+        self.definitions = {}
+        self.raid_states = {}
 
     def fetch_raid_info(self):
         try:
@@ -72,15 +43,15 @@ class Service(SimpleService):
     def collect_raid_info(self):
         raid_data = self.fetch_raid_info()
         if raid_data:
+            # print(raid_data)  # Debugging: Print fetched RAID data
             raid_states = {}
-            for raid in raid_data["Raids"]:
-                raid_name = raid["Name"]
+            for raid_name, raid in raid_data.items():
                 raid_states[raid_name] = {state.lower(): 0 for state in [
                     "online", "initialized", "initing", "degraded", "reconstructing",
                     "offline", "need_recon", "need_init", "read_only", "unrecovered",
                     "none", "restriping", "need_resize", "need_restripe"
                 ]}
-                for state in raid.get("State", []):
+                for state in raid.get("state", []):
                     raid_states[raid_name][state.lower()] = 1
             return raid_states
         else:
@@ -97,6 +68,31 @@ class Service(SimpleService):
             return data
         else:
             return {}
+
+    def create_chart(self, raid_name, states):
+        chart_id = f"raid_{raid_name}_state"
+        chart_title = f"RAID State - {raid_name}"
+        options = ["", chart_title, "status", "raid state", "storcli.raid_state", "line"]
+        lines = [[state] for state in states]
+        self.order.append(chart_id)
+        self.definitions[chart_id] = {
+            "options": options,
+            "lines": lines
+        }
+
+    def setup_charts(self, raid_states):
+        for raid_name, states in raid_states.items():
+            active_states = [state for state, value in states.items() if value == 1]
+            if len(active_states) > 3:
+                active_states = active_states[:3]
+            self.create_chart(raid_name, active_states)
+
+    def check(self):
+        raid_states = self.collect_raid_info()
+        if raid_states:
+            self.setup_charts(raid_states)
+            return True
+        return False
 
 
 if __name__ == "__main__":
