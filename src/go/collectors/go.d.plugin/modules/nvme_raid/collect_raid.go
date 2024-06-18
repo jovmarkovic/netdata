@@ -62,9 +62,6 @@ func (r *raid_data) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	// Debugging: Print raw devices data
-	fmt.Printf("Raw Devices Data: %+v\n", aux.Devices)
-
 	// Convert the parsed data into Device structs
 	r.Devices = make([]device, len(aux.Devices))
 	for i, dev := range aux.Devices {
@@ -98,9 +95,6 @@ func (r *raid_data) UnmarshalJSON(data []byte) error {
 			Status: statusStr,
 		}
 	}
-
-	// Debugging: Print the final unmarshaled raid_data
-	fmt.Printf("Unmarshaled Raid Data: %+v\n", r)
 
 	return nil
 }
@@ -173,9 +167,6 @@ func (s *Nvme_Raid) queryRaidInfo() (*nvme_RaidInfoResponse, error) {
 		return nil, errors.New("empty response")
 	}
 
-	// Debugging: Print raw JSON response
-	fmt.Printf("Raw JSON Response: %s\n", string(bs))
-
 	// Create a temporary map to hold the data
 	tempMap := make(map[string]json.RawMessage)
 	if err := json.Unmarshal(bs, &tempMap); err != nil {
@@ -193,8 +184,6 @@ func (s *Nvme_Raid) queryRaidInfo() (*nvme_RaidInfoResponse, error) {
 		if err := json.Unmarshal(value, &rd); err != nil {
 			return nil, fmt.Errorf("error unmarshalling RAID data for %s: %v", key, err)
 		}
-		// Debugging: Print unmarshaled RAID data for each RAID
-		fmt.Printf("Unmarshaled RAID Data for %s: %+v\n", key, rd)
 		resp.Raids[key] = rd
 	}
 
