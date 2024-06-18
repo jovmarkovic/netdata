@@ -50,7 +50,7 @@ type (
 	}
 )
 
-func (s *Nvme_Raid) collectRaidInfo(mx map[string]int64, resp *nvme_RaidInfoResponse) error {
+func (s *Nvme_Raid) collectRaidInfo(raids map[string]int64, resp *nvme_RaidInfoResponse) error {
 	for _, raid := range resp.Raids {
 		raidData := raid
 		raidName := raidData.Name
@@ -75,7 +75,7 @@ func (s *Nvme_Raid) collectRaidInfo(mx map[string]int64, resp *nvme_RaidInfoResp
 		// Initialize metrics for common RAID states
 		for _, state := range raidStates {
 			// Set the initial value of each state metric to 0
-			mx[px+"state_"+state] = 0
+			raids[px+"state_"+state] = 0
 		}
 		// Switch statement to handle different numbers of state types
 		// Note: strings.ToLower is used to ensure consistency in the metric keys
@@ -83,21 +83,21 @@ func (s *Nvme_Raid) collectRaidInfo(mx map[string]int64, resp *nvme_RaidInfoResp
 		case 1:
 			// If there is only one RAID state, set its corresponding metric to 1
 			state := strings.ToLower(raidData.State[0])
-			mx[px+"state_"+state] = 1
+			raids[px+"state_"+state] = 1
 		case 2:
 			// If there are two RAID states, set the corresponding metrics to 1
 			state1 := strings.ToLower(raidData.State[0])
 			state2 := strings.ToLower(raidData.State[1])
-			mx[px+"state_"+state1] = 1 // Set the first state metric to 1
-			mx[px+"state_"+state2] = 1 // Set the second state metric to 1
+			raids[px+"state_"+state1] = 1 // Set the first state metric to 1
+			raids[px+"state_"+state2] = 1 // Set the second state metric to 1
 		case 3:
 			// If there are three RAID states, set the corresponding metrics to 1
 			state1 := strings.ToLower(raidData.State[0])
 			state2 := strings.ToLower(raidData.State[1])
 			state3 := strings.ToLower(raidData.State[2])
-			mx[px+"state_"+state1] = 1 // Set the first state metric to 1
-			mx[px+"state_"+state2] = 1 // Set the second state metric to 1
-			mx[px+"state_"+state3] = 1 // Set the third state metric to 1
+			raids[px+"state_"+state1] = 1 // Set the first state metric to 1
+			raids[px+"state_"+state2] = 1 // Set the second state metric to 1
+			raids[px+"state_"+state3] = 1 // Set the third state metric to 1
 		default:
 			// Handle the case where the number of states is unexpected
 			return errors.New("unexpected number of states")
@@ -113,8 +113,8 @@ func (s *Nvme_Raid) collectRaidInfo(mx map[string]int64, resp *nvme_RaidInfoResp
 // 			s.addDeviceCharts(i, device)
 
 // 			// Construct the metric name using the prefix 'px' and the device index 'i'
-// 			// and add it to the 'mx' map
-// 			mx[px+"device_"+strconv.Itoa(i)] = 1 // You can set a value based on your requirements
+// 			// and add it to the 'raids' map
+// 			raids[px+"device_"+strconv.Itoa(i)] = 1 // You can set a value based on your requirements
 // 		}
 // 	}
 
