@@ -10,7 +10,7 @@ import (
 type (
 	// Define structs to model JSON responses
 	nvme_RaidInfoResponse struct {
-		Raids map[string]raid_data `json:"-"`
+		Raids map[string]raid_data `json:"raids"`
 	}
 	raid_data struct {
 		Active              bool     `json:"active"`
@@ -44,9 +44,9 @@ type (
 		UUID                string   `json:"uuid"`
 	}
 	device struct {
-		ID     int      `json:"-"`
-		Device string   `json:"-"`
-		Status []string `json:"-"`
+		ID     int      `json:"id"`
+		Device string   `json:"device"`
+		Status []string `json:"status"`
 	}
 )
 
