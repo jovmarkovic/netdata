@@ -85,10 +85,10 @@ var (
 // 	}
 // )
 
-func (s *Nvme_Raid) addRaidDataCharts(raid raid_data) {
+func (s *Nvme_Raid) addRaidDataCharts(raids raid_data) {
 	charts := raidDataChartsTmpl.Copy()
 
-	raidName := raid.Name
+	raidName := raids.Name
 
 	for _, chart := range *charts {
 		chart.ID = fmt.Sprintf(chart.ID, raidName)
