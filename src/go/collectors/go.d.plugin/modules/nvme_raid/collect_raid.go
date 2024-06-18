@@ -50,6 +50,55 @@ type (
 	}
 )
 
+func (r *raid_data) UnmarshalJSON(data []byte) error {
+	type Alias raid_data // Define an alias to prevent infinite recursion
+	aux := &struct {
+		Devices [][]interface{} `json:"devices"` // Use interface{} to handle mixed types
+		*Alias
+	}{
+		Alias: (*Alias)(r),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	// Convert the parsed data into Device structs
+	r.Devices = make([]device, len(aux.Devices))
+	for i, dev := range aux.Devices {
+		if len(dev) != 3 {
+			return fmt.Errorf("unexpected device format")
+		}
+
+		id, ok := dev[0].(float64) // JSON numbers are float64 by default
+		if !ok {
+			return fmt.Errorf("unexpected type for device ID")
+		}
+		devicePath, ok := dev[1].(string)
+		if !ok {
+			return fmt.Errorf("unexpected type for device path")
+		}
+		status, ok := dev[2].([]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type for device status")
+		}
+		statusStr := make([]string, len(status))
+		for j, s := range status {
+			statusStr[j], ok = s.(string)
+			if !ok {
+				return fmt.Errorf("unexpected type in device status")
+			}
+		}
+
+		r.Devices[i] = device{
+			ID:     int(id),
+			Device: devicePath,
+			Status: statusStr,
+		}
+	}
+
+	return nil
+}
+
 func (s *Nvme_Raid) collectRaidInfo(raids map[string]int64, resp *nvme_RaidInfoResponse) error {
 	for _, raid := range resp.Raids {
 		raidData := raid
@@ -182,9 +231,6 @@ func (s *Nvme_Raid) queryRaidInfo() (*nvme_RaidInfoResponse, error) {
 		return nil, errors.New("empty response")
 	}
 
-	// Debug: Print the raw JSON data before unmarshalling
-	fmt.Println("Raw JSON data:", string(bs))
-
 	// Define a struct to hold the JSON response
 	var resp nvme_RaidInfoResponse
 
@@ -195,8 +241,6 @@ func (s *Nvme_Raid) queryRaidInfo() (*nvme_RaidInfoResponse, error) {
 
 	// Check if there are RAID configurations present in the response
 	if len(resp.Raids) == 0 {
-		// Debug: Print the length of resp.Raids
-		fmt.Println("No RAID configurations found. Length of resp.Raids:", len(resp.Raids))
 		return nil, errors.New("no RAID configurations found")
 	}
 
