@@ -182,8 +182,8 @@ func (s *Nvme_Raid) queryRaidInfo() (*nvme_RaidInfoResponse, error) {
 		return nil, errors.New("empty response")
 	}
 
-	// Debug: Print the length of bs
-	fmt.Println("Length of bs:", len(bs))
+	// Debug: Print the raw JSON data before unmarshalling
+	fmt.Println("Raw JSON data:", string(bs))
 
 	// Define a struct to hold the JSON response
 	var resp nvme_RaidInfoResponse
@@ -192,9 +192,6 @@ func (s *Nvme_Raid) queryRaidInfo() (*nvme_RaidInfoResponse, error) {
 	if err := json.Unmarshal(bs, &resp); err != nil {
 		return nil, fmt.Errorf("error unmarshalling JSON: %v", err)
 	}
-
-	// Debug: Print the unmarshalled response
-	fmt.Println("Unmarshalled response:", resp)
 
 	// Check if there are RAID configurations present in the response
 	if len(resp.Raids) == 0 {
