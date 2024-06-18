@@ -171,23 +171,38 @@ func (s *Nvme_Raid) collectRaidInfo(raids map[string]int64, resp *nvme_RaidInfoR
 // }
 
 func (s *Nvme_Raid) queryRaidInfo() (*nvme_RaidInfoResponse, error) {
+	// Call the exec method to retrieve RAID information
 	bs, err := s.exec.nvme_raidInfo()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error retrieving RAID info: %v", err)
 	}
 
+	// Check if the response is empty
 	if len(bs) == 0 {
 		return nil, errors.New("empty response")
 	}
 
+	// Debug: Print the length of bs
+	fmt.Println("Length of bs:", len(bs))
+
+	// Define a struct to hold the JSON response
 	var resp nvme_RaidInfoResponse
+
+	// Unmarshal the JSON byte slice into the resp struct
 	if err := json.Unmarshal(bs, &resp); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error unmarshalling JSON: %v", err)
 	}
 
-	// Check if RAID configurations are present
+	// Debug: Print the unmarshalled response
+	fmt.Println("Unmarshalled response:", resp)
+
+	// Check if there are RAID configurations present in the response
 	if len(resp.Raids) == 0 {
+		// Debug: Print the length of resp.Raids
+		fmt.Println("No RAID configurations found. Length of resp.Raids:", len(resp.Raids))
 		return nil, errors.New("no RAID configurations found")
 	}
+
+	// Return the parsed response and no error
 	return &resp, nil
 }
