@@ -10,7 +10,7 @@ import (
 type (
 	// Define structs to model JSON responses
 	nvme_RaidInfoResponse struct {
-		Raids map[string]raid_data `json:"raids"`
+		Raids map[string]raid_data `json:"-"` // Use map to dynamically hold RAID configurations
 	}
 	raid_data struct {
 		Active              bool     `json:"active"`
@@ -44,9 +44,9 @@ type (
 		UUID                string   `json:"uuid"`
 	}
 	device struct {
-		ID     int      `json:"id"`
-		Device string   `json:"device"`
-		Status []string `json:"status"`
+		ID     int      `json:"-"`
+		Device string   `json:"-"`
+		Status []string `json:"-"`
 	}
 )
 
@@ -61,6 +61,9 @@ func (r *raid_data) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
+
+	// Debugging: Print raw devices data
+	fmt.Printf("Raw Devices Data: %+v\n", aux.Devices)
 
 	// Convert the parsed data into Device structs
 	r.Devices = make([]device, len(aux.Devices))
@@ -95,6 +98,9 @@ func (r *raid_data) UnmarshalJSON(data []byte) error {
 			Status: statusStr,
 		}
 	}
+
+	// Debugging: Print the final unmarshaled raid_data
+	fmt.Printf("Unmarshaled Raid Data: %+v\n", r)
 
 	return nil
 }
@@ -153,6 +159,52 @@ func (s *Nvme_Raid) collectRaidInfo(raids map[string]int64, resp *nvme_RaidInfoR
 		}
 	}
 	return nil
+}
+
+func (s *Nvme_Raid) queryRaidInfo() (*nvme_RaidInfoResponse, error) {
+	// Call the exec method to retrieve RAID information
+	bs, err := s.exec.nvme_raidInfo()
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving RAID info: %v", err)
+	}
+
+	// Check if the response is empty
+	if len(bs) == 0 {
+		return nil, errors.New("empty response")
+	}
+
+	// Debugging: Print raw JSON response
+	fmt.Printf("Raw JSON Response: %s\n", string(bs))
+
+	// Create a temporary map to hold the data
+	tempMap := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(bs, &tempMap); err != nil {
+		return nil, fmt.Errorf("error unmarshalling JSON: %v", err)
+	}
+
+	// Initialize the response
+	resp := nvme_RaidInfoResponse{
+		Raids: make(map[string]raid_data),
+	}
+
+	// Unmarshal each RAID individually
+	for key, value := range tempMap {
+		var rd raid_data
+		if err := json.Unmarshal(value, &rd); err != nil {
+			return nil, fmt.Errorf("error unmarshalling RAID data for %s: %v", key, err)
+		}
+		// Debugging: Print unmarshaled RAID data for each RAID
+		fmt.Printf("Unmarshaled RAID Data for %s: %+v\n", key, rd)
+		resp.Raids[key] = rd
+	}
+
+	// Check if there are RAID configurations present in the response
+	if len(resp.Raids) == 0 {
+		return nil, errors.New("no RAID configurations found")
+	}
+
+	// Return the parsed response and no error
+	return &resp, nil
 }
 
 // 		// Example logic:
@@ -218,32 +270,3 @@ func (s *Nvme_Raid) collectRaidInfo(raids map[string]int64, resp *nvme_RaidInfoR
 
 // 	return nil
 // }
-
-func (s *Nvme_Raid) queryRaidInfo() (*nvme_RaidInfoResponse, error) {
-	// Call the exec method to retrieve RAID information
-	bs, err := s.exec.nvme_raidInfo()
-	if err != nil {
-		return nil, fmt.Errorf("error retrieving RAID info: %v", err)
-	}
-
-	// Check if the response is empty
-	if len(bs) == 0 {
-		return nil, errors.New("empty response")
-	}
-
-	// Define a struct to hold the JSON response
-	var resp nvme_RaidInfoResponse
-
-	// Unmarshal the JSON byte slice into the resp struct
-	if err := json.Unmarshal(bs, &resp); err != nil {
-		return nil, fmt.Errorf("error unmarshalling JSON: %v", err)
-	}
-
-	// Check if there are RAID configurations present in the response
-	if len(resp.Raids) == 0 {
-		return nil, errors.New("no RAID configurations found")
-	}
-
-	// Return the parsed response and no error
-	return &resp, nil
-}
