@@ -22,7 +22,7 @@ var (
 		Title:    "RAID State",
 		Units:    "status",
 		Fam:      "raid state",
-		Ctx:      "storcli.raid_state",
+		Ctx:      "nvme_raid.raid_state",
 		Type:     module.Line,
 		Priority: prioRaidData,
 		Dims: module.Dims{
