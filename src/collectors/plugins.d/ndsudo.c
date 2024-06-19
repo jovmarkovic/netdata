@@ -23,6 +23,14 @@ struct command {
         },
     },
     {
+        .name = "dmsetup-status-cache",
+        .params = "status --target cache --noflush",
+        .search = {
+            [0] = "dmsetup",
+            [1] = NULL,
+        },
+    },
+    {
         .name = "ssacli-controllers-info",
         .params = "ctrl all show config detail",
         .search = {
