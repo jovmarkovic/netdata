@@ -18,7 +18,7 @@ type (
 		Config              bool     `json:"config"`
 		Devices             []device `json:"devices"`
 		Devices_Health      []string `json:"devices_health"`
-		Devices_Wear        []string `json:"devices_wear"`
+		Devices_Wear        []string `json:"devices_wear,omitempty"` // Handle optional field
 		Group_Size          int      `json:"group_size"`
 		Init_Depth          int      `json:"init_depth"`
 		Init_Prio           int      `json:"init_prio"`
