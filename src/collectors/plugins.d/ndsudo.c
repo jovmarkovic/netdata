@@ -14,6 +14,22 @@ struct command {
     const char *search[MAX_SEARCH];
 } allowed_commands[] = {
     {
+        .name = "chronyc-serverstats",
+        .params = "serverstats",
+        .search = {
+            [0] = "chronyc",
+            [1] = NULL,
+        },
+    },
+    {
+        .name = "dmsetup-status-cache",
+        .params = "status --target cache --noflush",
+        .search = {
+            [0] = "dmsetup",
+            [1] = NULL,
+        },
+    },
+    {
         .name = "ssacli-controllers-info",
         .params = "ctrl all show config detail",
         .search = {
