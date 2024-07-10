@@ -62,8 +62,24 @@ struct command {
         },
     },
     {
+        .name = "fail2ban-client-status-socket",
+        .params = "-s {{socket_path}} status",
+        .search = {
+            [0] = "fail2ban-client",
+            [1] = NULL,
+        },
+    },
+    {
         .name = "fail2ban-client-status-jail",
         .params = "status {{jail}}",
+        .search = {
+            [0] = "fail2ban-client",
+            [1] = NULL,
+        },
+    },
+    {
+        .name = "fail2ban-client-status-jail-socket",
+        .params = "-s {{socket_path}} status {{jail}}",
         .search = {
             [0] = "fail2ban-client",
             [1] = NULL,
@@ -405,6 +421,10 @@ int main(int argc, char *argv[]) {
         exit(0);
     }
     else {
+        setuid(0);
+        setgid(0);
+        setegid(0);
+
         char *clean_env[] = {NULL};
         execve(filename, params, clean_env);
         perror("execve"); // execve only returns on error
