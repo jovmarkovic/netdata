@@ -240,7 +240,7 @@ static struct perf_event {
     {EV_ID_END, 0, 0, NULL, NULL, 0, 0, 0, NULL, NULL, NULL}
 };
 
-static int perf_init() {
+static bool perf_init() {
     int cpu, group;
     struct perf_event_attr perf_event_attr;
     struct perf_event *current_event = NULL;
@@ -269,6 +269,8 @@ static int perf_init() {
     }
 
     memset(&perf_event_attr, 0, sizeof(perf_event_attr));
+
+    int enabled = 0;
 
     for(cpu = 0; cpu < number_of_cpus; cpu++) {
         for(current_event = &perf_events[0]; current_event->id != EV_ID_END; current_event++) {
@@ -304,6 +306,8 @@ static int perf_init() {
                 }
                 collector_error("Disabling event %u", current_event->id);
                 current_event->disabled = 1;
+            } else {
+                enabled++;
             }
 
             *(current_event->fd + cpu) = fd;
@@ -313,7 +317,7 @@ static int perf_init() {
         }
     }
 
-    return 0;
+    return enabled > 0;
 }
 
 static void perf_free(void) {
@@ -1208,9 +1212,8 @@ void parse_command_line(int argc, char **argv) {
             fprintf(stderr,
                     "\n"
                     " netdata perf.plugin %s\n"
-                    " Copyright (C) 2019 Netdata Inc.\n"
+                    " Copyright 2018-2025 Netdata Inc.\n"
                     " Released under GNU General Public License v3 or later.\n"
-                    " All rights reserved.\n"
                     "\n"
                     " This program is a data collector plugin for netdata.\n"
                     "\n"
@@ -1283,8 +1286,8 @@ void parse_command_line(int argc, char **argv) {
 }
 
 int main(int argc, char **argv) {
-    clocks_init();
     nd_log_initialize_for_external_plugins("perf.plugin");
+    netdata_threads_init_for_external_plugins(0);
 
     parse_command_line(argc, argv);
 
@@ -1295,8 +1298,16 @@ int main(int argc, char **argv) {
     else if(freq)
         collector_error("update frequency %d seconds is too small for PERF. Using %d.", freq, update_every);
 
-    if(unlikely(debug)) fprintf(stderr, "perf.plugin: calling perf_init()\n");
-    int perf = !perf_init();
+    if (unlikely(debug))
+        fprintf(stderr, "perf.plugin: calling perf_init()\n");
+
+    if (!perf_init()) {
+        perf_free();
+        collector_info("all perf counters are disabled");
+        fprintf(stdout, "EXIT\n");
+        fflush(stdout);
+        exit(1);
+    }
 
     // ------------------------------------------------------------------------
     // the main loop
@@ -1306,27 +1317,30 @@ int main(int argc, char **argv) {
     time_t started_t = now_monotonic_sec();
 
     size_t iteration;
-    usec_t step = update_every * USEC_PER_SEC;
+
+    int perf = 1;
 
     heartbeat_t hb;
-    heartbeat_init(&hb);
+    heartbeat_init(&hb, update_every * USEC_PER_SEC);
     for(iteration = 0; 1; iteration++) {
-        usec_t dt = heartbeat_next(&hb, step);
+        usec_t dt = heartbeat_next(&hb);
 
-        if(unlikely(netdata_exit)) break;
+        if (unlikely(exit_initiated))
+            break;
 
-        if(unlikely(debug && iteration))
-            fprintf(stderr, "perf.plugin: iteration %zu, dt %"PRIu64" usec\n"
-                    , iteration
-                    , dt
-            );
+        if (unlikely(debug && iteration))
+            fprintf(stderr, "perf.plugin: iteration %zu, dt %" PRIu64 " usec\n", iteration, dt);
 
         if(likely(perf)) {
-            if(unlikely(debug)) fprintf(stderr, "perf.plugin: calling perf_collect()\n");
+            if (unlikely(debug))
+                fprintf(stderr, "perf.plugin: calling perf_collect()\n");
+
             perf = !perf_collect();
 
             if(likely(perf)) {
-                if(unlikely(debug)) fprintf(stderr, "perf.plugin: calling perf_send_metrics()\n");
+                if (unlikely(debug))
+                    fprintf(stderr, "perf.plugin: calling perf_send_metrics()\n");
+
                 perf_send_metrics();
             }
         }
@@ -1334,7 +1348,8 @@ int main(int argc, char **argv) {
         fflush(stdout);
 
         // restart check (14400 seconds)
-        if(now_monotonic_sec() - started_t > 14400) break;
+        if (now_monotonic_sec() - started_t > 14400)
+            break;
     }
 
     collector_info("process exiting");

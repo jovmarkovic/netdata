@@ -14,15 +14,20 @@ struct rrdengine_instance;
 #define DATAFILE_EXTENSION ".ndf"
 
 #ifndef MAX_DATAFILE_SIZE
-#define MAX_DATAFILE_SIZE   (512LU * 1024LU * 1024LU)
+#define MAX_DATAFILE_SIZE   (UINT32_MAX)
 #endif
 #if  MIN_DATAFILE_SIZE > MAX_DATAFILE_SIZE
 #error MIN_DATAFILE_SIZE > MAX_DATAFILE_SIZE
 #endif
 
-#define MIN_DATAFILE_SIZE   (4LU * 1024LU * 1024LU)
+#define MIN_DATAFILE_SIZE   (512LU * 1024LU)
 #define MAX_DATAFILES (65536 * 4) /* Supports up to 64TiB for now */
-#define TARGET_DATAFILES (50)
+#define TARGET_DATAFILES (100)
+
+// When trying to acquire a datafile for deletion and an attempt to evict pages is completed
+// the acquire for deletion will return true after this timeout
+#define DATAFILE_DELETE_TIMEOUT_SHORT (1)
+#define DATAFILE_DELETE_TIMEOUT_LONG (120)
 
 typedef enum __attribute__ ((__packed__)) {
     DATAFILE_ACQUIRE_OPEN_CACHE = 0,
@@ -32,6 +37,12 @@ typedef enum __attribute__ ((__packed__)) {
     // terminator
     DATAFILE_ACQUIRE_MAX,
 } DATAFILE_ACQUIRE_REASONS;
+
+struct extent_page_details_list;
+typedef struct {
+    SPINLOCK spinlock;
+    struct extent_page_details_list *base;
+} EPDL_EXTENT;
 
 /* only one event loop is supported for now */
 struct rrdengine_datafile {
@@ -65,14 +76,15 @@ struct rrdengine_datafile {
     } users;
 
     struct {
-        SPINLOCK spinlock;
-        Pvoid_t pending_epdl_by_extent_offset_judyL;
-    } extent_queries;
+        RW_SPINLOCK spinlock;
+        Pvoid_t epdl_per_extent;
+    } extent_epdl;
 };
 
 bool datafile_acquire(struct rrdengine_datafile *df, DATAFILE_ACQUIRE_REASONS reason);
-void datafile_release(struct rrdengine_datafile *df, DATAFILE_ACQUIRE_REASONS reason);
-bool datafile_acquire_for_deletion(struct rrdengine_datafile *df);
+void datafile_release_with_trace(struct rrdengine_datafile *df, DATAFILE_ACQUIRE_REASONS reason, const char *func);
+#define datafile_release(df, reason) datafile_release_with_trace(df, reason, __FUNCTION__)
+bool datafile_acquire_for_deletion(struct rrdengine_datafile *df, bool is_shutdown);
 
 void datafile_list_insert(struct rrdengine_instance *ctx, struct rrdengine_datafile *datafile, bool having_lock);
 void datafile_list_delete_unsafe(struct rrdengine_instance *ctx, struct rrdengine_datafile *datafile);

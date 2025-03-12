@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "health_internals.h"
+#include "health-alert-entry.h"
 
 // ---------------------------------------------------------------------------------------------------------------------
 
@@ -205,7 +206,7 @@ static void health_prototype_cleanup_one_unsafe(RRD_ALERT_PROTOTYPE *ap) {
 }
 
 void health_prototype_cleanup(RRD_ALERT_PROTOTYPE *ap) {
-    spinlock_lock(&ap->_internal.spinlock);
+    rw_spinlock_write_lock(&ap->_internal.rw_spinlock);
 
     while(ap->_internal.next) {
         RRD_ALERT_PROTOTYPE *t = ap->_internal.next;
@@ -214,7 +215,7 @@ void health_prototype_cleanup(RRD_ALERT_PROTOTYPE *ap) {
         freez(t);
     }
 
-    spinlock_unlock(&ap->_internal.spinlock);
+    rw_spinlock_write_unlock(&ap->_internal.rw_spinlock);
 
     health_prototype_cleanup_one_unsafe(ap);
 }
@@ -227,7 +228,7 @@ void health_prototype_free(RRD_ALERT_PROTOTYPE *ap) {
 
 void health_prototype_insert_cb(const DICTIONARY_ITEM *item __maybe_unused, void *value, void *data __maybe_unused) {
     RRD_ALERT_PROTOTYPE *ap = value;
-    spinlock_init(&ap->_internal.spinlock);
+    rw_spinlock_init(&ap->_internal.rw_spinlock);
     if(ap->config.source_type != DYNCFG_SOURCE_TYPE_DYNCFG)
         ap->_internal.is_on_disk = true;
 }
@@ -252,9 +253,9 @@ bool health_prototype_conflict_cb(const DICTIONARY_ITEM *item __maybe_unused, vo
             nap = callocz(1, sizeof(*nap));
             memcpy(nap, new_value, sizeof(*nap));
 
-            spinlock_lock(&ap->_internal.spinlock);
+            rw_spinlock_write_lock(&ap->_internal.rw_spinlock);
             DOUBLE_LINKED_LIST_APPEND_ITEM_UNSAFE(ap->_internal.next, nap, _internal.prev, _internal.next);
-            spinlock_unlock(&ap->_internal.spinlock);
+            rw_spinlock_write_unlock(&ap->_internal.rw_spinlock);
 
             if(nap->_internal.enabled)
                 ap->_internal.enabled = true;
@@ -262,14 +263,13 @@ bool health_prototype_conflict_cb(const DICTIONARY_ITEM *item __maybe_unused, vo
     }
     else {
         // alerts with the same name replace the existing one
-        spinlock_init(&nap->_internal.spinlock);
-        nap->_internal.uses = ap->_internal.uses;
+        rw_spinlock_init(&nap->_internal.rw_spinlock);
 
-        spinlock_lock(&nap->_internal.spinlock);
-        spinlock_lock(&ap->_internal.spinlock);
+        rw_spinlock_write_lock(&nap->_internal.rw_spinlock);
+        rw_spinlock_write_lock(&ap->_internal.rw_spinlock);
         SWAP(*ap, *nap);
-        spinlock_unlock(&ap->_internal.spinlock);
-        spinlock_unlock(&nap->_internal.spinlock);
+        rw_spinlock_write_unlock(&ap->_internal.rw_spinlock);
+        rw_spinlock_write_unlock(&nap->_internal.rw_spinlock);
 
         health_prototype_cleanup(nap);
         memset(nap, 0, sizeof(*nap));
@@ -287,7 +287,7 @@ void health_init_prototypes(void) {
     if(health_globals.prototypes.dict)
         return;
 
-    health_globals.prototypes.dict = dictionary_create(DICT_OPTION_DONT_OVERWRITE_VALUE);
+    health_globals.prototypes.dict = dictionary_create_advanced(DICT_OPTION_DONT_OVERWRITE_VALUE | DICT_OPTION_FIXED_SIZE, &dictionary_stats_category_rrdhealth, sizeof(RRD_ALERT_PROTOTYPE));
     dictionary_register_insert_callback(health_globals.prototypes.dict, health_prototype_insert_cb, NULL);
     dictionary_register_conflict_callback(health_globals.prototypes.dict, health_prototype_conflict_cb, NULL);
     dictionary_register_delete_callback(health_globals.prototypes.dict, health_prototype_delete_cb, NULL);
@@ -471,7 +471,7 @@ bool health_prototype_add(RRD_ALERT_PROTOTYPE *ap, char **msg) {
     // add it to the prototypes
     dictionary_set_advanced(health_globals.prototypes.dict,
                             string2str(ap->config.name), string_strlen(ap->config.name),
-                            ap, sizeof(*ap),
+                            ap, sizeof(RRD_ALERT_PROTOTYPE),
                             NULL);
 
     return true;
@@ -597,7 +597,7 @@ static void health_prototype_apply_to_rrdset(RRDSET *st, RRD_ALERT_PROTOTYPE *ap
     if(!ap->_internal.enabled)
         return;
 
-    spinlock_lock(&ap->_internal.spinlock);
+    rw_spinlock_read_lock(&ap->_internal.rw_spinlock);
     for(size_t template = 0; template < 2; template++) {
         bool want_template = template ? true : false;
 
@@ -616,11 +616,10 @@ static void health_prototype_apply_to_rrdset(RRDSET *st, RRD_ALERT_PROTOTYPE *ap
             if (!prototype_matches_rrdset(st, t))
                 continue;
 
-            if (rrdcalc_add_from_prototype(st->rrdhost, st, t))
-                ap->_internal.uses++;
+            rrdcalc_add_from_prototype(st->rrdhost, st, t);
         }
     }
-    spinlock_unlock(&ap->_internal.spinlock);
+    rw_spinlock_read_unlock(&ap->_internal.rw_spinlock);
 }
 
 void health_prototype_alerts_for_rrdset_incrementally(RRDSET *st) {
@@ -642,7 +641,7 @@ void health_apply_prototype_to_host(RRDHOST *host, RRD_ALERT_PROTOTYPE *ap) {
     if(!ap->_internal.enabled)
         return;
 
-    if(unlikely(!host->health.health_enabled) && !rrdhost_flag_check(host, RRDHOST_FLAG_INITIALIZED_HEALTH))
+    if(unlikely(!host->health.enabled) && !rrdhost_flag_check(host, RRDHOST_FLAG_INITIALIZED_HEALTH))
         return;
 
     RRDSET *st;
@@ -666,7 +665,7 @@ void health_prototype_apply_to_all_hosts(RRD_ALERT_PROTOTYPE *ap) {
 // ---------------------------------------------------------------------------------------------------------------------
 
 void health_apply_prototypes_to_host(RRDHOST *host) {
-    if(unlikely(!host->health.health_enabled) && !rrdhost_flag_check(host, RRDHOST_FLAG_INITIALIZED_HEALTH))
+    if(unlikely(!host->health.enabled) && !rrdhost_flag_check(host, RRDHOST_FLAG_INITIALIZED_HEALTH))
         return;
 
     // free all running alarms
@@ -687,15 +686,6 @@ void health_apply_prototypes_to_host(RRDHOST *host) {
         health_prototype_reset_alerts_for_rrdset(st);
     }
     rrdset_foreach_done(st);
-
-#ifdef ENABLE_ACLK
-    if (netdata_cloud_enabled) {
-        struct aclk_sync_cfg_t *wc = host->aclk_config;
-        if (likely(wc)) {
-            wc->alert_queue_removed = SEND_REMOVED_AFTER_HEALTH_LOOPS;
-        }
-    }
-#endif
 }
 
 void health_apply_prototypes_to_all_hosts(void) {

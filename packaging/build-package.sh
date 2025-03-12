@@ -18,7 +18,7 @@ SCRIPT_SOURCE="$(
 )"
 SOURCE_DIR="$(dirname "$(dirname "${SCRIPT_SOURCE}")")"
 
-CMAKE_ARGS="-S ${SOURCE_DIR} -B ${BUILD_DIR} -G Ninja"
+CMAKE_ARGS="-S ${SOURCE_DIR} -B ${BUILD_DIR}"
 
 add_cmake_option() {
     CMAKE_ARGS="${CMAKE_ARGS} -D${1}=${2}"
@@ -26,10 +26,9 @@ add_cmake_option() {
 
 add_cmake_option CMAKE_BUILD_TYPE RelWithDebInfo
 add_cmake_option CMAKE_INSTALL_PREFIX /
-add_cmake_option ENABLE_ACLK On
-add_cmake_option ENABLE_CLOUD On
+add_cmake_option ENABLE_DASHBOARD on
 add_cmake_option ENABLE_DBENGINE On
-add_cmake_option ENABLE_H2O On
+add_cmake_option ENABLE_H2O Off
 add_cmake_option ENABLE_ML On
 
 add_cmake_option ENABLE_PLUGIN_APPS On
@@ -37,8 +36,9 @@ add_cmake_option ENABLE_PLUGIN_CGROUP_NETWORK On
 add_cmake_option ENABLE_PLUGIN_DEBUGFS On
 add_cmake_option ENABLE_PLUGIN_FREEIPMI On
 add_cmake_option ENABLE_PLUGIN_GO On
+add_cmake_option ENABLE_PLUGIN_PYTHON On
+add_cmake_option ENABLE_PLUGIN_CHARTS On
 add_cmake_option ENABLE_PLUGIN_LOCAL_LISTENERS On
-add_cmake_option ENABLE_PLUGIN_LOGS_MANAGEMENT Off
 add_cmake_option ENABLE_PLUGIN_NFACCT On
 add_cmake_option ENABLE_PLUGIN_PERF On
 add_cmake_option ENABLE_PLUGIN_SLABINFO On
@@ -51,6 +51,8 @@ add_cmake_option ENABLE_BUNDLED_PROTOBUF Off
 add_cmake_option ENABLE_BUNDLED_JSONC Off
 add_cmake_option ENABLE_BUNDLED_YAML Off
 
+add_cmake_option ENABLE_LIBUNWIND On
+
 add_cmake_option BUILD_FOR_PACKAGING On
 
 case "${PKG_TYPE}" in
@@ -62,6 +64,10 @@ case "${PKG_TYPE}" in
                 ;;
             arm64)
                 add_cmake_option ENABLE_PLUGIN_XENSTAT On
+                add_cmake_option ENABLE_PLUGIN_EBPF Off
+                ;;
+            armhf)
+                add_cmake_option ENABLE_PLUGIN_XENSTAT Off
                 add_cmake_option ENABLE_PLUGIN_EBPF Off
                 ;;
             *)
@@ -89,8 +95,8 @@ else
 fi
 
 # shellcheck disable=SC2086
-cmake ${CMAKE_ARGS}
-cmake --build "${BUILD_DIR}" --parallel "$(nproc)"
+cmake ${CMAKE_ARGS} -G Ninja
+cmake --build "${BUILD_DIR}" --parallel "$(nproc)" -- -k 1
 
 if [ "${ENABLE_SENTRY}" = "true" ] && [ "${UPLOAD_SENTRY}" = "true" ]; then
     sentry-cli debug-files upload -o netdata-inc -p netdata-agent --force-foreground --log-level=debug --wait --include-sources build/netdata

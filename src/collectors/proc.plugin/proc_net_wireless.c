@@ -208,17 +208,17 @@ int do_proc_net_wireless(int update_every, usec_t dt)
     UNUSED(dt);
     static procfile *ff = NULL;
     static int do_status, do_quality = -1, do_discarded_packets, do_beacon;
-    static char *proc_net_wireless_filename = NULL;
+    static const char *proc_net_wireless_filename = NULL;
 
     if (unlikely(do_quality == -1)) {
         char filename[FILENAME_MAX + 1];
         snprintfz(filename, FILENAME_MAX, "%s%s", netdata_configured_host_prefix, "/proc/net/wireless");
 
-        proc_net_wireless_filename = config_get(CONFIG_SECTION_PLUGIN_PROC_NETWIRELESS,"filename to monitor", filename);
-        do_status = config_get_boolean_ondemand(CONFIG_SECTION_PLUGIN_PROC_NETWIRELESS, "status for all interfaces", CONFIG_BOOLEAN_AUTO);
-        do_quality = config_get_boolean_ondemand(CONFIG_SECTION_PLUGIN_PROC_NETWIRELESS, "quality for all interfaces", CONFIG_BOOLEAN_AUTO);
-        do_discarded_packets = config_get_boolean_ondemand(CONFIG_SECTION_PLUGIN_PROC_NETWIRELESS, "discarded packets for all interfaces", CONFIG_BOOLEAN_AUTO);
-        do_beacon = config_get_boolean_ondemand(CONFIG_SECTION_PLUGIN_PROC_NETWIRELESS, "missed beacon for all interface", CONFIG_BOOLEAN_AUTO);
+        proc_net_wireless_filename = inicfg_get(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_NETWIRELESS,"filename to monitor", filename);
+        do_status = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_NETWIRELESS, "status for all interfaces", CONFIG_BOOLEAN_AUTO);
+        do_quality = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_NETWIRELESS, "quality for all interfaces", CONFIG_BOOLEAN_AUTO);
+        do_discarded_packets = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_NETWIRELESS, "discarded packets for all interfaces", CONFIG_BOOLEAN_AUTO);
+        do_beacon = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_NETWIRELESS, "missed beacon for all interface", CONFIG_BOOLEAN_AUTO);
 	}
 
     if (unlikely(!ff)) {
@@ -264,8 +264,6 @@ int do_proc_net_wireless(int update_every, usec_t dt)
                     update_every,
                     RRDSET_TYPE_LINE);
 
-                rrdset_flag_set(wireless_dev->st_status, RRDSET_FLAG_DETAIL);
-
                 wireless_dev->rd_status = rrddim_add(wireless_dev->st_status, "status", NULL, 1, 1, RRD_ALGORITHM_ABSOLUTE);
 
                 add_labels_to_wireless(wireless_dev, wireless_dev->st_status);
@@ -295,7 +293,6 @@ int do_proc_net_wireless(int update_every, usec_t dt)
                     NETDATA_CHART_PRIO_WIRELESS_IFACE + 1,
                     update_every,
                     RRDSET_TYPE_LINE);
-                rrdset_flag_set(wireless_dev->st_link, RRDSET_FLAG_DETAIL);
 
                 wireless_dev->rd_link = rrddim_add(wireless_dev->st_link, "link_quality", NULL, 1, 1, RRD_ALGORITHM_ABSOLUTE);
 
@@ -316,7 +313,6 @@ int do_proc_net_wireless(int update_every, usec_t dt)
                     NETDATA_CHART_PRIO_WIRELESS_IFACE + 2,
                     update_every,
                     RRDSET_TYPE_LINE);
-                rrdset_flag_set(wireless_dev->st_level, RRDSET_FLAG_DETAIL);
 
                 wireless_dev->rd_level = rrddim_add(wireless_dev->st_level, "signal_level", NULL, 1, 1, RRD_ALGORITHM_ABSOLUTE);
 
@@ -337,7 +333,6 @@ int do_proc_net_wireless(int update_every, usec_t dt)
                     NETDATA_CHART_PRIO_WIRELESS_IFACE + 3,
                     update_every,
                     RRDSET_TYPE_LINE);
-                rrdset_flag_set(wireless_dev->st_noise, RRDSET_FLAG_DETAIL);
 
                 wireless_dev->rd_noise = rrddim_add(wireless_dev->st_noise, "noise_level", NULL, 1, 1, RRD_ALGORITHM_ABSOLUTE);
 
@@ -376,8 +371,6 @@ int do_proc_net_wireless(int update_every, usec_t dt)
                     update_every,
                     RRDSET_TYPE_LINE);
 
-                rrdset_flag_set(wireless_dev->st_discarded_packets, RRDSET_FLAG_DETAIL);
-
                 wireless_dev->rd_nwid = rrddim_add(wireless_dev->st_discarded_packets, "nwid", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
                 wireless_dev->rd_crypt = rrddim_add(wireless_dev->st_discarded_packets, "crypt", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
                 wireless_dev->rd_frag = rrddim_add(wireless_dev->st_discarded_packets, "frag", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
@@ -413,8 +406,6 @@ int do_proc_net_wireless(int update_every, usec_t dt)
                     NETDATA_CHART_PRIO_WIRELESS_IFACE + 5,
                     update_every,
                     RRDSET_TYPE_LINE);
-
-                rrdset_flag_set(wireless_dev->st_missed_beacon, RRDSET_FLAG_DETAIL);
 
                 wireless_dev->rd_missed_beacon = rrddim_add(wireless_dev->st_missed_beacon, "missed_beacons", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
 

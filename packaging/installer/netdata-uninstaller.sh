@@ -1,15 +1,11 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 #
 # This is the netdata uninstaller script
 #
 # Variables needed by script and taken from '.environment' file:
 #  - NETDATA_PREFIX
 #  - NETDATA_ADDED_TO_GROUPS
-#
-# Copyright: SPDX-License-Identifier: GPL-3.0-or-later
-#
-# Author: Paweł Krupa <paulfantom@gmail.com>
-# Author: Pavlos Emm. Katsoulakis <paul@netdata.cloud>
 #
 # Next unused error code: R0005
 
@@ -467,16 +463,23 @@ issystemd() {
   ns=''
   systemctl=''
 
-  # if the directory /lib/systemd/system OR /usr/lib/systemd/system (SLES 12.x) does not exit, it is not systemd
-  if [ ! -d /lib/systemd/system ] && [ ! -d /usr/lib/systemd/system ]; then
-    return 1
-  fi
-
   # if there is no systemctl command, it is not systemd
   systemctl=$(command -v systemctl 2> /dev/null)
   if [ -z "${systemctl}" ] || [ ! -x "${systemctl}" ]; then
     return 1
   fi
+
+  # Check the output of systemctl is-system-running.
+  # If this reports 'offline', it’s not systemd. If it reports 'unknown'
+  # or nothing at all (which indicates the command is not supported), it
+  # may or may not be systemd, so continue to other checks. If it reports
+  # anything else, it is systemd.
+  case "$(systemctl is-system-running)" in
+    offline) return 1 ;;
+    unknown) : ;;
+    "") : ;;
+    *) return 0 ;;
+  esac
 
   # if pid 1 is systemd, it is systemd
   [ "$(basename "$(readlink /proc/1/exe)" 2> /dev/null)" = "systemd" ] && return 0
@@ -728,26 +731,44 @@ if [ "$(uname -s)" = "Darwin" ]; then
 fi
 
 #### REMOVE NETDATA FILES
-rm_file /etc/logrotate.d/netdata
-rm_file /usr/lib/systemd/journald@netdata.conf.d/netdata.conf
-rm_file /etc/systemd/system/netdata.service
-rm_file /lib/systemd/system/netdata.service
-rm_file /usr/lib/systemd/system/netdata.service
-rm_file /etc/systemd/system/netdata-updater.service
-rm_file /lib/systemd/system/netdata-updater.service
-rm_file /usr/lib/systemd/system/netdata-updater.service
-rm_file /etc/systemd/system/netdata-updater.timer
-rm_file /lib/systemd/system/netdata-updater.timer
-rm_file /usr/lib/systemd/system/netdata-updater.timer
-rm_file /usr/lib/systemd/system-preset/50-netdata.preset
-rm_file /lib/systemd/system-preset/50-netdata.preset
-rm_file /etc/init.d/netdata
-rm_file /etc/periodic/daily/netdata-updater
-rm_file /etc/cron.daily/netdata-updater
-rm_file /etc/cron.d/netdata-updater
-rm_file /etc/cron.d/netdata-updater-daily
-rm_file /Library/LaunchDaemons/com.github.netdata.plist
 
+# Handle updater files first so that it doesn’t try to run while we
+# are uninstalling things.
+if [ -x "${NETDATA_PREFIX}/usr/libexec/netdata-updater.sh" ]; then
+  "${NETDATA_PREFIX}/usr/libexec/netdata-updater.sh" --disable-auto-updates
+else
+  rm_file /etc/periodic/daily/netdata-updater
+  rm_file /etc/cron.daily/netdata-updater
+  rm_file /etc/cron.d/netdata-updater
+  rm_file /etc/cron.d/netdata-updater-daily
+fi
+
+if issystemd; then
+  for unit in netdata.service netdata-updater.timer; do
+    systemctl disable "${unit}"
+    systemctl stop "${unit}"
+  done
+
+  for unit in netdata.service netdata-updater.service netdata-updater.timer; do
+    unit_path="$(systemctl show -p FragmentPath "${unit}" | cut -f 2- -d '=')"
+    override_paths="$(systemctl show -p DropInPaths "${unit}" | cut -f 2- -d '=')"
+    for path in "${unit_path}" ${override_paths} ; do
+      rm_file "${path}"
+    done
+  done
+
+  rm_file /usr/lib/systemd/journald@netdata.conf.d/netdata.conf
+  rm_file /lib/systemd/journald@netdata.conf.d/netdata.conf
+  rm_dir /usr/lib/systemd/journald@netdata.conf.d/
+  rm_file /usr/lib/systemd/system-preset/50-netdata.preset
+  rm_file /lib/systemd/system-preset/50-netdata.preset
+
+  systemctl daemon-reload
+fi
+
+rm_file /etc/logrotate.d/netdata
+rm_file /etc/init.d/netdata
+rm_file /Library/LaunchDaemons/com.github.netdata.plist
 
 if [ -n "${NETDATA_PREFIX}" ] && [ -d "${NETDATA_PREFIX}" ] && [ "netdata" = "$(basename "$NETDATA_PREFIX")" ] ; then
   rm_dir "${NETDATA_PREFIX}"
@@ -765,7 +786,6 @@ else
   rm_dir "${NETDATA_PREFIX}/var/cache/netdata"
   rm_dir "${NETDATA_PREFIX}/var/log/netdata"
   rm_dir "${NETDATA_PREFIX}/etc/netdata"
-  rm_dir /usr/lib/systemd/journald@netdata.conf.d/
 fi
 
 if [ -n "${tmpdir}" ]; then

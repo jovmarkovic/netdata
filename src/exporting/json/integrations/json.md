@@ -13,7 +13,7 @@ endmeta-->
 <img src="https://netdata.cloud/img/json.svg" width="150"/>
 
 
-Use the JSON connector for the exporting engine to archive your agent's metrics to JSON document databases for long-term storage,
+Use the JSON connector for the exporting engine to archive your Agent's metrics to JSON document databases for long-term storage,
 further analysis, or correlation with data from other sources
 
 
@@ -36,8 +36,8 @@ further analysis, or correlation with data from other sources
 The configuration file name for this integration is `exporting.conf`.
 
 
-You can edit the configuration file using the `edit-config` script from the
-Netdata [config directory](/docs/netdata-agent/configuration/README.md#the-netdata-config-directory).
+You can edit the configuration file using the [`edit-config`](https://github.com/netdata/netdata/blob/master/docs/netdata-agent/configuration/README.md#edit-a-configuration-file-using-edit-config) script from the
+Netdata [config directory](https://github.com/netdata/netdata/blob/master/docs/netdata-agent/configuration/README.md#the-netdata-config-directory).
 
 ```bash
 cd /etc/netdata 2>/dev/null || cd /opt/netdata/etc/netdata

@@ -78,18 +78,21 @@ SIMPLE_PATTERN *simple_pattern_create(const char *list, const char *separators, 
 
     if(unlikely(!list || !*list)) return root;
 
-    char isseparator[256] = {
-            [' '] = 1       // space
-            , ['\t'] = 1    // tab
-            , ['\r'] = 1    // carriage return
-            , ['\n'] = 1    // new line
-            , ['\f'] = 1    // form feed
-            , ['\v'] = 1    // vertical tab
+    bool isseparator[256] = {
+              [' ']  = true    // space
+            , ['\t'] = true    // tab
+            , ['\r'] = true    // carriage return
+            , ['\n'] = true    // new line
+            , ['\f'] = true    // form feed
+            , ['\v'] = true    // vertical tab
     };
 
-    if (unlikely(separators && *separators)) {
-        memset(&isseparator[0], 0, sizeof(isseparator));
-        while(*separators) isseparator[(unsigned char)*separators++] = 1;
+    if (unlikely(separators == SIMPLE_PATTERN_NO_SEPARATORS))
+        memset(isseparator, false, sizeof(isseparator));
+
+    else if (unlikely(separators && *separators)) {
+        memset(isseparator, false, sizeof(isseparator));
+        while(*separators) isseparator[(unsigned char)*separators++] = true;
     }
 
     char *buf = mallocz(strlen(list) + 1);
@@ -165,7 +168,8 @@ SIMPLE_PATTERN *simple_pattern_create(const char *list, const char *separators, 
     return (SIMPLE_PATTERN *)root;
 }
 
-static inline char *add_wildcarded(const char *matched, size_t matched_size, char *wildcarded, size_t *wildcarded_size) {
+ALWAYS_INLINE
+static char *add_wildcarded(const char *matched, size_t matched_size, char *wildcarded, size_t *wildcarded_size) {
     //if(matched_size) {
     //    char buf[matched_size + 1];
     //    strncpyz(buf, matched, matched_size);
@@ -186,28 +190,32 @@ static inline char *add_wildcarded(const char *matched, size_t matched_size, cha
     return wildcarded;
 }
 
-static inline int sp_strcmp(const char *s1, const char *s2, bool case_sensitive) {
+ALWAYS_INLINE
+static int sp_strcmp(const char *s1, const char *s2, bool case_sensitive) {
     if(case_sensitive)
         return strcmp(s1, s2);
 
     return strcasecmp(s1, s2);
 }
 
-static inline int sp_strncmp(const char *s1, const char *s2, size_t n, bool case_sensitive) {
+ALWAYS_INLINE
+static int sp_strncmp(const char *s1, const char *s2, size_t n, bool case_sensitive) {
     if(case_sensitive)
         return strncmp(s1, s2, n);
 
     return strncasecmp(s1, s2, n);
 }
 
-static inline char *sp_strstr(const char *haystack, const char *needle, bool case_sensitive) {
+ALWAYS_INLINE
+static char *sp_strstr(const char *haystack, const char *needle, bool case_sensitive) {
     if(case_sensitive)
         return strstr(haystack, needle);
 
     return strcasestr(haystack, needle);
 }
 
-static inline bool match_pattern(struct simple_pattern *m, const char *str, size_t len, char *wildcarded, size_t *wildcarded_size) {
+ALWAYS_INLINE
+static bool match_pattern(struct simple_pattern *m, const char *str, size_t len, char *wildcarded, size_t *wildcarded_size) {
     char *s;
 
     bool loop = true;
@@ -273,7 +281,8 @@ static inline bool match_pattern(struct simple_pattern *m, const char *str, size
     return false;
 }
 
-static inline SIMPLE_PATTERN_RESULT simple_pattern_matches_extract_with_length(SIMPLE_PATTERN *list, const char *str, size_t len, char *wildcarded, size_t wildcarded_size) {
+ALWAYS_INLINE
+static SIMPLE_PATTERN_RESULT simple_pattern_matches_extract_with_length(SIMPLE_PATTERN *list, const char *str, size_t len, char *wildcarded, size_t wildcarded_size) {
     struct simple_pattern *m, *root = (struct simple_pattern *)list;
 
     for(m = root; m ; m = m->next) {

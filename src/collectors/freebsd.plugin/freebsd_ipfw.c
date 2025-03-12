@@ -22,9 +22,9 @@ int do_ipfw(int update_every, usec_t dt) {
     static int do_static = -1, do_dynamic = -1, do_mem = -1;
 
     if (unlikely(do_static == -1)) {
-        do_static  = config_get_boolean("plugin:freebsd:ipfw", "counters for static rules", 1);
-        do_dynamic = config_get_boolean("plugin:freebsd:ipfw", "number of dynamic rules", 1);
-        do_mem     = config_get_boolean("plugin:freebsd:ipfw", "allocated memory", 1);
+        do_static  = inicfg_get_boolean(&netdata_config, "plugin:freebsd:ipfw", "counters for static rules", 1);
+        do_dynamic = inicfg_get_boolean(&netdata_config, "plugin:freebsd:ipfw", "number of dynamic rules", 1);
+        do_mem     = inicfg_get_boolean(&netdata_config, "plugin:freebsd:ipfw", "allocated memory", 1);
     }
 
     // variables for getting ipfw configuration
@@ -168,7 +168,6 @@ int do_ipfw(int update_every, usec_t dt) {
                                                  update_every,
                                                  RRDSET_TYPE_STACKED
                 );
-                rrdset_flag_set(st_mem, RRDSET_FLAG_DETAIL);
 
                 rd_dyn_mem = rrddim_add(st_mem, "dynamic", NULL, 1, 1, RRD_ALGORITHM_ABSOLUTE);
                 rd_stat_mem = rrddim_add(st_mem, "static", NULL, 1, 1, RRD_ALGORITHM_ABSOLUTE);

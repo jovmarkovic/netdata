@@ -920,14 +920,13 @@ static void xenstat_send_domain_metrics() {
 }
 
 int main(int argc, char **argv) {
-    clocks_init();
-
     // ------------------------------------------------------------------------
     // initialization of netdata plugin
 
     program_name = PLUGIN_XENSTAT_NAME;
 
     nd_log_initialize_for_external_plugins(PLUGIN_XENSTAT_NAME);
+    netdata_threads_init_for_external_plugins(0);
 
     // ------------------------------------------------------------------------
     // parse command line parameters
@@ -953,9 +952,8 @@ int main(int argc, char **argv) {
             fprintf(stderr,
                     "\n"
                     " netdata xenstat.plugin %s\n"
-                    " Copyright (C) 2019 Netdata Inc.\n"
+                    " Copyright 2018-2025 Netdata Inc.\n"
                     " Released under GNU General Public License v3 or later.\n"
-                    " All rights reserved.\n"
                     "\n"
                     " This program is a data collector plugin for netdata.\n"
                     "\n"
@@ -1022,14 +1020,13 @@ int main(int argc, char **argv) {
     time_t started_t = now_monotonic_sec();
 
     size_t iteration;
-    usec_t step = netdata_update_every * USEC_PER_SEC;
 
     heartbeat_t hb;
-    heartbeat_init(&hb);
+    heartbeat_init(&hb, netdata_update_every * USEC_PER_SEC);
     for(iteration = 0; 1; iteration++) {
-        usec_t dt = heartbeat_next(&hb, step);
+        usec_t dt = heartbeat_next(&hb);
 
-        if(unlikely(netdata_exit)) break;
+        if(unlikely(exit_initiated)) break;
 
         if(unlikely(debug && iteration))
             fprintf(stderr, "xenstat.plugin: iteration %zu, dt %lu usec\n", iteration, dt);

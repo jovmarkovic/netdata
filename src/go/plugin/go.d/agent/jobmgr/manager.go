@@ -8,16 +8,18 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/netdata/netdata/go/plugins/logger"
+	"github.com/netdata/netdata/go/plugins/pkg/netdataapi"
+	"github.com/netdata/netdata/go/plugins/pkg/safewriter"
+	"github.com/netdata/netdata/go/plugins/pkg/ticker"
 	"github.com/netdata/netdata/go/plugins/plugin/go.d/agent/confgroup"
 	"github.com/netdata/netdata/go/plugins/plugin/go.d/agent/functions"
 	"github.com/netdata/netdata/go/plugins/plugin/go.d/agent/module"
-	"github.com/netdata/netdata/go/plugins/plugin/go.d/agent/netdataapi"
-	"github.com/netdata/netdata/go/plugins/plugin/go.d/agent/safewriter"
-	"github.com/netdata/netdata/go/plugins/plugin/go.d/agent/ticker"
+	"github.com/netdata/netdata/go/plugins/plugin/go.d/agent/vnodes"
 
 	"github.com/mattn/go-isatty"
 	"gopkg.in/yaml.v2"
@@ -30,12 +32,10 @@ func New() *Manager {
 		Logger: logger.New().With(
 			slog.String("component", "job manager"),
 		),
-		Out:             io.Discard,
-		FileLock:        noop{},
-		FileStatus:      noop{},
-		FileStatusStore: noop{},
-		Vnodes:          noop{},
-		FnReg:           noop{},
+		Out:   io.Discard,
+		FnReg: noop{},
+
+		Vnodes: make(map[string]*vnodes.VirtualNode),
 
 		discoveredConfigs: newDiscoveredConfigsCache(),
 		seenConfigs:       newSeenConfigCache(),
@@ -60,12 +60,11 @@ type Manager struct {
 	Out            io.Writer
 	Modules        module.Registry
 	ConfigDefaults confgroup.Registry
+	VarLibDir      string
+	FnReg          FunctionRegistry
+	Vnodes         map[string]*vnodes.VirtualNode
 
-	FileLock        FileLocker
-	FileStatus      FileStatus
-	FileStatusStore FileStatusStore
-	Vnodes          Vnodes
-	FnReg           FunctionRegistry
+	fileStatus *fileStatus
 
 	discoveredConfigs *discoveredConfigs
 	seenConfigs       *seenConfigs
@@ -90,11 +89,22 @@ func (m *Manager) Run(ctx context.Context, in chan []*confgroup.Group) {
 
 	m.FnReg.Register("config", m.dyncfgConfig)
 
-	for name := range m.Modules {
-		m.dyncfgModuleCreate(name)
+	m.dyncfgVnodeModuleCreate()
+
+	for _, cfg := range m.Vnodes {
+		m.dyncfgVnodeJobCreate(cfg, dyncfgRunning)
 	}
 
+	for name := range m.Modules {
+		m.dyncfgCollectorModuleCreate(name)
+	}
+
+	m.loadFileStatus()
+
 	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() { defer wg.Done(); m.runFileStatusPersistence() }()
 
 	wg.Add(1)
 	go func() { defer wg.Done(); m.runProcessConfGroups(in) }()
@@ -134,7 +144,7 @@ func (m *Manager) run() {
 			case <-m.ctx.Done():
 				return
 			case fn := <-m.dyncfgCh:
-				m.dyncfgConfigExec(fn)
+				m.dyncfgCollectorSeqExec(fn)
 			}
 		} else {
 			select {
@@ -145,7 +155,14 @@ func (m *Manager) run() {
 			case cfg := <-m.rmCh:
 				m.removeConfig(cfg)
 			case fn := <-m.dyncfgCh:
-				m.dyncfgConfigExec(fn)
+				switch id := fn.Args[0]; true {
+				case strings.HasPrefix(id, dyncfgCollectorIDPrefix):
+					m.dyncfgCollectorSeqExec(fn)
+				case strings.HasPrefix(id, dyncfgVnodeID):
+					m.dyncfgVnodeSeqExec(fn)
+				default:
+					m.dyncfgRespf(fn, 503, "unknown function '%s' (%s).", fn.Name, id)
+				}
 			}
 		}
 	}
@@ -177,15 +194,14 @@ func (m *Manager) addConfig(cfg confgroup.Config) {
 		}
 		if ecfg.status == dyncfgRunning {
 			m.stopRunningJob(ecfg.cfg.FullName())
-			m.FileLock.Unlock(ecfg.cfg.FullName())
-			m.FileStatus.Remove(ecfg.cfg)
+			m.fileStatus.remove(ecfg.cfg)
 		}
 		scfg.status = dyncfgAccepted
 		m.exposedConfigs.add(scfg) // replace existing exposed
 		ecfg = scfg
 	}
 
-	m.dyncfgJobCreate(ecfg.cfg, ecfg.status)
+	m.dyncfgCollectorJobCreate(ecfg.cfg, ecfg.status)
 
 	if isTerminal || m.PluginName == "nodyncfg" { // FIXME: quick fix of TestAgent_Run (agent_test.go)
 		m.dyncfgConfigEnable(functions.Function{Args: []string{dyncfgJobID(ecfg.cfg), "enable"}})
@@ -210,8 +226,7 @@ func (m *Manager) removeConfig(cfg confgroup.Config) {
 
 	m.exposedConfigs.remove(cfg)
 	m.stopRunningJob(cfg.FullName())
-	m.FileLock.Unlock(cfg.FullName())
-	m.FileStatus.Remove(cfg)
+	m.fileStatus.remove(cfg)
 
 	if !isStock(cfg) || ecfg.status == dyncfgRunning {
 		m.dyncfgJobRemove(cfg)
@@ -273,21 +288,14 @@ func (m *Manager) createCollectorJob(cfg confgroup.Config) (*module.Job, error) 
 		return nil, fmt.Errorf("can not find %s module", cfg.Module())
 	}
 
-	var vnode struct {
-		guid     string
-		hostname string
-		labels   map[string]string
-	}
+	var vnode *vnodes.VirtualNode
 
 	if cfg.Vnode() != "" {
-		n, ok := m.Vnodes.Lookup(cfg.Vnode())
-		if !ok {
+		n, ok := m.Vnodes[cfg.Vnode()]
+		if !ok || n == nil {
 			return nil, fmt.Errorf("vnode '%s' is not found", cfg.Vnode())
 		}
-
-		vnode.guid = n.GUID
-		vnode.hostname = n.Hostname
-		vnode.labels = n.Labels
+		vnode = n
 	}
 
 	m.Debugf("creating %s[%s] job, config: %v", cfg.Module(), cfg.Name(), cfg)
@@ -310,9 +318,9 @@ func (m *Manager) createCollectorJob(cfg confgroup.Config) (*module.Job, error) 
 		IsStock:         cfg.SourceType() == "stock",
 		Module:          mod,
 		Out:             m.Out,
-		VnodeGUID:       vnode.guid,
-		VnodeHostname:   vnode.hostname,
-		VnodeLabels:     vnode.labels,
+	}
+	if vnode != nil {
+		jobCfg.Vnode = *vnode.Copy()
 	}
 
 	job := module.NewJob(jobCfg)

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include "../../daemon/common.h"
+#include "database/rrd.h"
 
 #ifdef ENABLE_DBENGINE
 
@@ -104,17 +104,17 @@ static RRDHOST *dbengine_rrdhost_find_or_create(char *name) {
         netdata_configured_utc_offset,
         program_name,
         NETDATA_VERSION,
-        default_rrd_update_every,
+        nd_profile.update_every,
         default_rrd_history_entries,
-        RRD_MEMORY_MODE_DBENGINE,
+        RRD_DB_MODE_DBENGINE,
         health_plugin_enabled(),
-        default_rrdpush_enabled,
-        default_rrdpush_destination,
-        default_rrdpush_api_key,
-        default_rrdpush_send_charts_matching,
-        default_rrdpush_enable_replication,
-        default_rrdpush_seconds_to_replicate,
-        default_rrdpush_replication_step,
+        stream_send.enabled,
+        stream_send.parents.destination,
+        stream_send.api_key,
+        stream_send.send_charts_matching,
+        stream_receive.replication.enabled,
+        stream_receive.replication.period,
+        stream_receive.replication.step,
         NULL,
         0
         );
@@ -362,7 +362,7 @@ int test_dbengine(void) {
     nd_log_limits_unlimited();
     fprintf(stderr, "\nRunning DB-engine test\n");
 
-    default_rrd_memory_mode = RRD_MEMORY_MODE_DBENGINE;
+    default_rrd_memory_mode = RRD_DB_MODE_DBENGINE;
     fprintf(stderr, "Initializing localhost with hostname 'unittest-dbengine'");
     RRDHOST *host = dbengine_rrdhost_find_or_create("unittest-dbengine");
     if(!host)
@@ -408,7 +408,7 @@ int test_dbengine(void) {
     }
 
     rrd_wrlock();
-    rrdeng_prepare_exit((struct rrdengine_instance *)host->db[0].si);
+    rrdeng_quiesce((struct rrdengine_instance *)host->db[0].si, false);
     rrdeng_exit((struct rrdengine_instance *)host->db[0].si);
     rrdeng_enq_cmd(NULL, RRDENG_OPCODE_SHUTDOWN_EVLOOP, NULL, NULL, STORAGE_PRIORITY_BEST_EFFORT, NULL, NULL);
     rrd_wrunlock();

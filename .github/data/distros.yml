@@ -6,7 +6,10 @@ platform_map:  # map packaging architectures to docker platforms
   arm64: linux/arm64/v8
   armhf: linux/arm/v7
   armhfp: linux/arm/v7
-  i386: linux/i386
+  armv6l: linux/arm/v6
+  armv7l: linux/arm/v7
+  i386: linux/386
+  ppc64le: linux/ppc64le
   x86_64: linux/amd64
 arch_order:  # sort order for per-architecture jobs in CI
   - amd64
@@ -14,8 +17,42 @@ arch_order:  # sort order for per-architecture jobs in CI
   - i386
   - armhf
   - armhfp
+  - armv6l
+  - armv7l
   - arm64
   - aarch64
+  - ppc64le
+arch_data:  # Mapping of per-architecture matrix behavior.
+  amd64: &amd64
+    qemu: false
+    runner: &x86-runner ubuntu-22.04
+  x86_64: *amd64
+  i386: *amd64
+  armhf: &arm
+    qemu: false
+    runner: &arm-runner ubuntu-22.04-arm
+  armhfp: *arm
+  armv6l: *arm
+  armv7l: *arm
+  arm64: &arm64
+    qemu: false
+    runner: *arm-runner
+  aarch64: *arm64
+  ppc64le:
+    qemu: true
+    runner: *x86-runner
+static_arches:  # Static build architectures
+  - x86_64
+  - armv6l
+  - armv7l
+  - aarch64
+  - ppc64le
+docker_arches:  # Docker build archtiectures
+  - amd64
+  - i386
+  - armv7l
+  - arm64
+  - ppc64le
 default_sentry: &default_sentry # Default configuration for Sentry usage
   amd64: false
   x86_64: false
@@ -42,21 +79,6 @@ include:
   - <<: *alpine
     version: "3.20"
     support_type: Core
-    notes: ''
-    eol_check: true
-  - <<: *alpine
-    version: "3.19"
-    support_type: Core
-    notes: ''
-    eol_check: true
-  - <<: *alpine
-    version: "3.18"
-    support_type: Intermediate
-    notes: ''
-    eol_check: true
-  - <<: *alpine
-    version: "3.17"
-    support_type: Intermediate
     notes: ''
     eol_check: true
 
@@ -174,7 +196,7 @@ include:
 
   - &fedora
     distro: fedora
-    version: "40"
+    version: "41"
     support_type: Core
     notes: ''
     eol_check: true
@@ -183,7 +205,7 @@ include:
       dnf remove -y json-c-devel
     packages: &fedora_packages
       type: rpm
-      repo_distro: fedora/40
+      repo_distro: fedora/41
       builder_rev: *def_builder_rev
       arches:
         - x86_64
@@ -191,10 +213,10 @@ include:
     test:
       ebpf-core: true
   - <<: *fedora
-    version: "39"
+    version: "40"
     packages:
       <<: *fedora_packages
-      repo_distro: fedora/39
+      repo_distro: fedora/40
     test:
       ebpf-core: true
 
@@ -217,12 +239,6 @@ include:
         - aarch64
     test:
       ebpf-core: true
-  - <<: *opensuse
-    version: "15.5"
-    base_image: opensuse/leap:15.5
-    packages:
-      <<: *opensuse_packages
-      repo_distro: opensuse/15.5
 
   - &oracle
     distro: oraclelinux
@@ -304,6 +320,11 @@ include:
     test:
       ebpf-core: true
   - <<: *ubuntu
+    version: "24.10"
+    packages:
+      <<: *ubuntu_packages
+      repo_distro: ubuntu/oracular
+  - <<: *ubuntu
     version: "22.04"
     packages:
       <<: *ubuntu_packages
@@ -329,11 +350,24 @@ legacy: # Info for platforms we used to support and still need to handle package
     packages:
       <<: *fedora_packages
       repo_distro: fedora/38
+  - <<: *fedora
+    version: "39"
+    packages:
+      <<: *fedora_packages
+      repo_distro: fedora/39
+    test:
+      ebpf-core: true
   - <<: *opensuse
     version: "15.4"
     packages:
       <<: *opensuse_packages
       repo_distro: opensuse/15.4
+  - <<: *opensuse
+    version: "15.5"
+    base_image: opensuse/leap:15.5
+    packages:
+      <<: *opensuse_packages
+      repo_distro: opensuse/15.5
   - <<: *centos_stream
     version: '8'
     base_image: 'quay.io/centos/centos:stream8'

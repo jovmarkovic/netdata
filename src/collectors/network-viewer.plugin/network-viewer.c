@@ -2,6 +2,7 @@
 
 #include "collectors/all.h"
 #include "libnetdata/libnetdata.h"
+
 #include "libnetdata/required_dummies.h"
 
 static SPAWN_SERVER *spawn_srv = NULL;
@@ -22,19 +23,19 @@ static SPAWN_SERVER *spawn_srv = NULL;
         } aggregated_key;                       \
     } network_viewer;
 
-#include "libnetdata/maps/local-sockets.h"
-#include "libnetdata/maps/system-users.h"
+#include "libnetdata/local-sockets/local-sockets.h"
+#include "libnetdata/os/system-maps/system-services.h"
 
 #define NETWORK_CONNECTIONS_VIEWER_FUNCTION "network-connections"
 #define NETWORK_CONNECTIONS_VIEWER_HELP "Network connections explorer"
 
-#define SIMPLE_HASHTABLE_VALUE_TYPE LOCAL_SOCKET
+#define SIMPLE_HASHTABLE_VALUE_TYPE LOCAL_SOCKET *
 #define SIMPLE_HASHTABLE_NAME _AGGREGATED_SOCKETS
-#include "libnetdata/simple_hashtable.h"
+#include "libnetdata/simple_hashtable/simple_hashtable.h"
 
 netdata_mutex_t stdout_mutex = NETDATA_MUTEX_INITIALIZER;
 static bool plugin_should_exit = false;
-static USERNAMES_CACHE *uc;
+static SERVICENAMES_CACHE *sc;
 
 ENUM_STR_MAP_DEFINE(SOCKET_DIRECTION) = {
     { .id = SOCKET_DIRECTION_LISTEN, .name = "listen" },
@@ -77,7 +78,7 @@ struct sockets_stats {
     } max;
 };
 
-static void local_socket_to_json_array(struct sockets_stats *st, LOCAL_SOCKET *n, uint64_t proc_self_net_ns_inode, bool aggregated) {
+static void local_socket_to_json_array(struct sockets_stats *st, const LOCAL_SOCKET *n, uint64_t proc_self_net_ns_inode, bool aggregated) {
     if(n->direction == SOCKET_DIRECTION_NONE)
         return;
 
@@ -148,10 +149,48 @@ static void local_socket_to_json_array(struct sockets_stats *st, LOCAL_SOCKET *n
         }
         else {
             // buffer_json_add_array_item_uint64(wb, n->uid);
-            STRING *u = system_usernames_cache_lookup_uid(uc, n->uid);
-            buffer_json_add_array_item_string(wb, string2str(u));
-            string_freez(u);
+            CACHED_USERNAME cu = cached_username_get_by_uid(n->uid);
+            buffer_json_add_array_item_string(wb, string2str(cu.username));
+            cached_username_release(cu);
         }
+
+        const struct socket_endpoint *server_endpoint;
+        const char *server_address;
+        const char *client_address_space;
+        const char *server_address_space;
+        switch (n->direction) {
+            case SOCKET_DIRECTION_LISTEN:
+            case SOCKET_DIRECTION_INBOUND:
+            case SOCKET_DIRECTION_LOCAL_INBOUND:
+                server_address = local_address;
+                server_address_space = n->network_viewer.aggregated_key.local_address_space;
+                client_address_space = n->network_viewer.aggregated_key.remote_address_space;
+                server_endpoint = &n->local;
+                break;
+
+            case SOCKET_DIRECTION_OUTBOUND:
+            case SOCKET_DIRECTION_LOCAL_OUTBOUND:
+                server_address = remote_address;
+                server_address_space = n->network_viewer.aggregated_key.remote_address_space;
+                client_address_space = n->network_viewer.aggregated_key.local_address_space;
+                server_endpoint = &n->remote;
+                break;
+
+            default:
+            case SOCKET_DIRECTION_NONE:
+                server_address = NULL;
+                client_address_space = NULL;
+                server_address_space = NULL;
+                server_endpoint = NULL;
+                break;
+        }
+
+        if(server_endpoint) {
+            STRING *serv = system_servicenames_cache_lookup(sc, server_endpoint->port, server_endpoint->protocol);
+            buffer_json_add_array_item_string(wb, string2str(serv));
+        }
+        else
+            buffer_json_add_array_item_string(wb, "[unknown]");
 
         if(!aggregated) {
             buffer_json_add_array_item_string(wb, local_address);
@@ -164,32 +203,6 @@ static void local_socket_to_json_array(struct sockets_stats *st, LOCAL_SOCKET *n
             buffer_json_add_array_item_uint64(wb, n->remote.port);
         }
         buffer_json_add_array_item_string(wb, n->network_viewer.aggregated_key.remote_address_space);
-
-        const char *server_address;
-        const char *client_address_space;
-        const char *server_address_space;
-        switch (n->direction) {
-            case SOCKET_DIRECTION_LISTEN:
-            case SOCKET_DIRECTION_INBOUND:
-            case SOCKET_DIRECTION_LOCAL_INBOUND:
-                server_address = local_address;
-                server_address_space = n->network_viewer.aggregated_key.local_address_space;
-                client_address_space = n->network_viewer.aggregated_key.remote_address_space;
-                break;
-
-            case SOCKET_DIRECTION_OUTBOUND:
-            case SOCKET_DIRECTION_LOCAL_OUTBOUND:
-                server_address = remote_address;
-                server_address_space = n->network_viewer.aggregated_key.remote_address_space;
-                client_address_space = n->network_viewer.aggregated_key.local_address_space;
-                break;
-
-            case SOCKET_DIRECTION_NONE:
-                server_address = NULL;
-                client_address_space = NULL;
-                server_address_space = NULL;
-                break;
-        }
 
         if(aggregated) {
             buffer_json_add_array_item_string(wb, server_address);
@@ -226,7 +239,9 @@ static void local_socket_to_json_array(struct sockets_stats *st, LOCAL_SOCKET *n
     buffer_json_array_close(wb);
 }
 
-static void populate_aggregated_key(LOCAL_SOCKET *n) {
+static void populate_aggregated_key(const LOCAL_SOCKET *nn) {
+    LOCAL_SOCKET *n = (LOCAL_SOCKET *)nn;
+
     n->network_viewer.count = 1;
 
     n->network_viewer.aggregated_key.pid = n->pid;
@@ -255,7 +270,7 @@ static void populate_aggregated_key(LOCAL_SOCKET *n) {
     n->network_viewer.aggregated_key.remote_address_space = local_sockets_address_space(&n->remote);
 }
 
-static void local_sockets_cb_to_json(LS_STATE *ls, LOCAL_SOCKET *n, void *data) {
+static void local_sockets_cb_to_json(LS_STATE *ls, const LOCAL_SOCKET *n, void *data) {
     struct sockets_stats *st = data;
     populate_aggregated_key(n);
     local_socket_to_json_array(st, n, ls->proc_self_net_ns_inode, false);
@@ -266,12 +281,12 @@ static void local_sockets_cb_to_json(LS_STATE *ls, LOCAL_SOCKET *n, void *data) 
 #define SUM_THEM_ALL(a, b) (a) += (b)
 #define OR_THEM_ALL(a, b) (a) |= (b)
 
-static void local_sockets_cb_to_aggregation(LS_STATE *ls __maybe_unused, LOCAL_SOCKET *n, void *data) {
+static void local_sockets_cb_to_aggregation(LS_STATE *ls __maybe_unused, const LOCAL_SOCKET *n, void *data) {
     SIMPLE_HASHTABLE_AGGREGATED_SOCKETS *ht = data;
 
     populate_aggregated_key(n);
     XXH64_hash_t hash = XXH3_64bits(&n->network_viewer.aggregated_key, sizeof(n->network_viewer.aggregated_key));
-    SIMPLE_HASHTABLE_SLOT_AGGREGATED_SOCKETS *sl = simple_hashtable_get_slot_AGGREGATED_SOCKETS(ht, hash, n, true);
+    SIMPLE_HASHTABLE_SLOT_AGGREGATED_SOCKETS *sl = simple_hashtable_get_slot_AGGREGATED_SOCKETS(ht, hash, (LOCAL_SOCKET *)n, true);
     LOCAL_SOCKET *t = SIMPLE_HASHTABLE_SLOT_DATA(sl);
     if(t) {
         t->network_viewer.count++;
@@ -450,7 +465,7 @@ void network_viewer_function(const char *transaction, char *function __maybe_unu
     char function_copy[strlen(function) + 1];
     memcpy(function_copy, function, sizeof(function_copy));
     char *words[1024];
-    size_t num_words = quoted_strings_splitter_pluginsd(function_copy, words, 1024);
+    size_t num_words = quoted_strings_splitter_whitespace(function_copy, words, 1024);
     for(size_t i = 1; i < num_words ;i++) {
         char *param = get_word(words, num_words, i);
         if(strcmp(param, "sockets:aggregated") == 0) {
@@ -497,7 +512,9 @@ void network_viewer_function(const char *transaction, char *function __maybe_unu
                 .max_errors = 10,
                 .max_concurrent_namespaces = 5,
             },
+#if defined(LOCAL_SOCKETS_USE_SETNS)
             .spawn_server = spawn_srv,
+#endif
             .stats = { 0 },
             .sockets_hashtable = { 0 },
             .local_ips_hashtable = { 0 },
@@ -612,6 +629,14 @@ void network_viewer_function(const char *transaction, char *function __maybe_unu
 
             // Username
             buffer_rrdf_table_add_field(wb, field_id++, "User", "Username",
+                                        RRDF_FIELD_TYPE_STRING, RRDF_FIELD_VISUAL_VALUE, RRDF_FIELD_TRANSFORM_NONE,
+                                        0, NULL, NAN, RRDF_FIELD_SORT_ASCENDING, NULL,
+                                        RRDF_FIELD_SUMMARY_COUNT, RRDF_FIELD_FILTER_MULTISELECT,
+                                        RRDF_FIELD_OPTS_VISIBLE,
+                                        NULL);
+
+            // Portname
+            buffer_rrdf_table_add_field(wb, field_id++, "Portname", "Server Port Name",
                                         RRDF_FIELD_TYPE_STRING, RRDF_FIELD_VISUAL_VALUE, RRDF_FIELD_TRANSFORM_NONE,
                                         0, NULL, NAN, RRDF_FIELD_SORT_ASCENDING, NULL,
                                         RRDF_FIELD_SUMMARY_COUNT, RRDF_FIELD_FILTER_MULTISELECT,
@@ -923,7 +948,10 @@ close_and_send:
     buffer_json_finalize(wb);
 
     netdata_mutex_lock(&stdout_mutex);
-    pluginsd_function_result_to_stdout(transaction, HTTP_RESP_OK, "application/json", now_s + 1, wb);
+    wb->response_code = HTTP_RESP_OK;
+    wb->content_type = CT_APPLICATION_JSON;
+    wb->expires = now_s + 1;
+    pluginsd_function_result_to_stdout(transaction, wb);
     netdata_mutex_unlock(&stdout_mutex);
 }
 
@@ -931,20 +959,24 @@ close_and_send:
 // main
 
 int main(int argc __maybe_unused, char **argv __maybe_unused) {
-    clocks_init();
     nd_thread_tag_set("NETWORK-VIEWER");
     nd_log_initialize_for_external_plugins("network-viewer.plugin");
+    netdata_threads_init_for_external_plugins(0);
 
     netdata_configured_host_prefix = getenv("NETDATA_HOST_PREFIX");
     if(verify_netdata_host_prefix(true) == -1) exit(1);
 
-    uc = system_usernames_cache_init();
-
-    spawn_srv = spawn_server_create("setns", local_sockets_spawn_server_callback, argc, (const char **)argv);
+#if defined(LOCAL_SOCKETS_USE_SETNS)
+    spawn_srv = spawn_server_create(SPAWN_SERVER_OPTION_CALLBACK, "setns", local_sockets_spawn_server_callback, argc, (const char **)argv);
     if(spawn_srv == NULL) {
         fprintf(stderr, "Cannot create spawn server.\n");
         exit(1);
     }
+#endif
+
+    cached_usernames_init();
+    update_cached_host_users();
+    sc = system_servicenames_cache_init();
 
     // ----------------------------------------------------------------------------------------------------------------
 
@@ -985,15 +1017,14 @@ int main(int argc __maybe_unused, char **argv __maybe_unused) {
 
     // ----------------------------------------------------------------------------------------------------------------
 
-    usec_t step_ut = 100 * USEC_PER_MS;
     usec_t send_newline_ut = 0;
     bool tty = isatty(fileno(stdout)) == 1;
 
     heartbeat_t hb;
-    heartbeat_init(&hb);
+    heartbeat_init(&hb, USEC_PER_SEC);
     while(!plugin_should_exit) {
 
-        usec_t dt_ut = heartbeat_next(&hb, step_ut);
+        usec_t dt_ut = heartbeat_next(&hb);
         send_newline_ut += dt_ut;
 
         if(!tty && send_newline_ut > USEC_PER_SEC) {

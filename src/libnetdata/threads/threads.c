@@ -50,21 +50,30 @@ static struct {
         ND_THREAD *list;
     } running;
 
-    pthread_attr_t *attr;
+    pthread_attr_t attr;
 } threads_globals = {
     .exited = {
-        .spinlock = NETDATA_SPINLOCK_INITIALIZER,
+        .spinlock = SPINLOCK_INITIALIZER,
         .list = NULL,
     },
     .running = {
-        .spinlock = NETDATA_SPINLOCK_INITIALIZER,
+        .spinlock = SPINLOCK_INITIALIZER,
         .list = NULL,
     },
-    .attr = NULL,
 };
 
 static __thread ND_THREAD *_nd_thread_info = NULL;
 static __thread char _nd_thread_os_name[ND_THREAD_TAG_MAX + 1] = "";
+static __thread bool _nd_thread_can_run_sql = true;
+
+void nd_thread_can_run_sql(bool run_sql) {
+    _nd_thread_can_run_sql = run_sql;
+}
+
+bool nd_thread_runs_sql(void) {
+    return _nd_thread_can_run_sql;
+}
+
 
 // --------------------------------------------------------------------------------------------------------------------
 // O/S abstraction
@@ -119,6 +128,13 @@ static inline const char *nd_thread_get_name(bool recheck) {
 
 const char *nd_thread_tag(void) {
     return nd_thread_get_name(false);
+}
+
+const char *nd_thread_tag_async_safe(void) {
+    if(nd_thread_has_tag())
+        return _nd_thread_info->tag;
+
+    return _nd_thread_os_name;
 }
 
 void nd_thread_tag_set(const char *tag) {
@@ -186,20 +202,15 @@ void nd_thread_rwspinlock_write_unlocked(void) { if(_nd_thread_info) _nd_thread_
 // early initialization
 
 size_t netdata_threads_init(void) {
-    int i;
+    memset(&threads_globals.attr, 0, sizeof(threads_globals.attr));
 
-    if(!threads_globals.attr) {
-        threads_globals.attr = callocz(1, sizeof(pthread_attr_t));
-        i = pthread_attr_init(threads_globals.attr);
-        if (i != 0)
-            fatal("pthread_attr_init() failed with code %d.", i);
-    }
+    if(pthread_attr_init(&threads_globals.attr) != 0)
+        fatal("pthread_attr_init() failed.");
 
     // get the required stack size of the threads of netdata
     size_t stacksize = 0;
-    i = pthread_attr_getstacksize(threads_globals.attr, &stacksize);
-    if(i != 0)
-        fatal("pthread_attr_getstacksize() failed with code %d.", i);
+    if(pthread_attr_getstacksize(&threads_globals.attr, &stacksize) != 0)
+        fatal("pthread_attr_getstacksize() failed with code.");
 
     return stacksize;
 }
@@ -207,12 +218,12 @@ size_t netdata_threads_init(void) {
 // ----------------------------------------------------------------------------
 // late initialization
 
-void netdata_threads_init_after_fork(size_t stacksize) {
+void netdata_threads_set_stack_size(size_t stacksize) {
     int i;
 
     // set pthread stack size
-    if(threads_globals.attr && stacksize > (size_t)PTHREAD_STACK_MIN) {
-        i = pthread_attr_setstacksize(threads_globals.attr, stacksize);
+    if(stacksize > (size_t)PTHREAD_STACK_MIN) {
+        i = pthread_attr_setstacksize(&threads_globals.attr, stacksize);
         if(i != 0)
             nd_log(NDLS_DAEMON, NDLP_WARNING, "pthread_attr_setstacksize() to %zu bytes, failed with code %d.", stacksize, i);
         else
@@ -230,7 +241,7 @@ void netdata_threads_init_for_external_plugins(size_t stacksize) {
     if(default_stacksize < 1 * 1024 * 1024)
         default_stacksize = 1 * 1024 * 1024;
 
-    netdata_threads_init_after_fork(stacksize ? stacksize : default_stacksize);
+    netdata_threads_set_stack_size(stacksize ? stacksize : default_stacksize);
 }
 
 // ----------------------------------------------------------------------------
@@ -371,7 +382,7 @@ ND_THREAD *nd_thread_create(const char *tag, NETDATA_THREAD_OPTIONS options, voi
     DOUBLE_LINKED_LIST_APPEND_ITEM_UNSAFE(threads_globals.running.list, nti, prev, next);
     spinlock_unlock(&threads_globals.running.spinlock);
 
-    int ret = pthread_create(&nti->thread, threads_globals.attr, nd_thread_starting_point, nti);
+    int ret = pthread_create(&nti->thread, &threads_globals.attr, nd_thread_starting_point, nti);
     if(ret != 0) {
         nd_log(NDLS_DAEMON, NDLP_ERR,
                "failed to create new thread for %s. pthread_create() failed with code %d",
@@ -410,6 +421,7 @@ void nd_thread_signal_cancel(ND_THREAD *nti) {
     spinlock_unlock(&nti->canceller.spinlock);
 }
 
+ALWAYS_INLINE
 bool nd_thread_signaled_to_cancel(void) {
     if(!_nd_thread_info) return false;
     return __atomic_load_n(&_nd_thread_info->cancel_atomic, __ATOMIC_RELAXED);

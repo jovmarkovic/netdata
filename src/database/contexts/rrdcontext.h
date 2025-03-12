@@ -582,7 +582,7 @@ static inline const char *query_metric_name(QUERY_TARGET *qt, QUERY_METRIC *qm) 
     return rrdmetric_acquired_name(qd->rma);
 }
 
-struct storage_engine *query_metric_storage_engine(QUERY_TARGET *qt, QUERY_METRIC *qm, size_t tier);
+struct storage *query_metric_storage_engine(QUERY_TARGET *qt, QUERY_METRIC *qm, size_t tier);
 
 STRING *query_instance_id_fqdn(QUERY_INSTANCE *qi, size_t version);
 STRING *query_instance_name_fqdn(QUERY_INSTANCE *qi, size_t version);
@@ -623,10 +623,10 @@ struct api_v2_contexts_request {
     char *contexts;
     char *q;
 
-    CONTEXTS_V2_OPTIONS options;
+    CONTEXTS_OPTIONS options;
 
     struct {
-        CONTEXTS_V2_ALERT_STATUS status;
+        CONTEXTS_ALERT_STATUS status;
         char *alert;
         char *transition;
         uint32_t last;
@@ -648,13 +648,14 @@ typedef enum __attribute__ ((__packed__)) {
     CONTEXTS_V2_NODES               = (1 << 2),
     CONTEXTS_V2_NODES_INFO          = (1 << 3),
     CONTEXTS_V2_NODE_INSTANCES      = (1 << 4),
-    CONTEXTS_V2_CONTEXTS            = (1 << 5),
-    CONTEXTS_V2_AGENTS              = (1 << 6),
-    CONTEXTS_V2_AGENTS_INFO         = (1 << 7),
-    CONTEXTS_V2_VERSIONS            = (1 << 8),
-    CONTEXTS_V2_FUNCTIONS           = (1 << 9),
-    CONTEXTS_V2_ALERTS              = (1 << 10),
-    CONTEXTS_V2_ALERT_TRANSITIONS   = (1 << 11),
+    CONTEXTS_V2_NODES_STREAM_PATH   = (1 << 5),
+    CONTEXTS_V2_CONTEXTS            = (1 << 6),
+    CONTEXTS_V2_AGENTS              = (1 << 7),
+    CONTEXTS_V2_AGENTS_INFO         = (1 << 8),
+    CONTEXTS_V2_VERSIONS            = (1 << 9),
+    CONTEXTS_V2_FUNCTIONS           = (1 << 10),
+    CONTEXTS_V2_ALERTS              = (1 << 11),
+    CONTEXTS_V2_ALERT_TRANSITIONS   = (1 << 12),
 } CONTEXTS_V2_MODE;
 
 int rrdcontext_to_json_v2(BUFFER *wb, struct api_v2_contexts_request *req, CONTEXTS_V2_MODE mode);

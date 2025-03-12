@@ -77,12 +77,6 @@ area/collectors:
               - src/collectors/**
               - src/go/**
 
-collectors/plugins.d:
-  - any:
-      - changed-files:
-          - any-glob-to-any-file:
-              - src/collectors/plugins.d/**
-
 collectors/apps:
   - any:
       - changed-files:
@@ -290,8 +284,8 @@ area/web:
           - any-glob-to-any-file:
               - src/web/**
 
-area/logs-management:
+area/plugins.d:
   - any:
       - changed-files:
           - any-glob-to-any-file:
-              - src/logsmanagement/**
+              - src/plugins.d/**

@@ -10,14 +10,14 @@ static struct {
     const char *options;
 } content_types[] = {
     // primary - preferred during id-to-string conversions
-    { .format = "text/html",                    CT_TEXT_HTML, true },
+    { .format = "application/json",             CT_APPLICATION_JSON, true },
     { .format = "text/plain",                   CT_TEXT_PLAIN, true },
+    { .format = "text/html",                    CT_TEXT_HTML, true },
     { .format = "text/css",                     CT_TEXT_CSS, true },
     { .format = "text/yaml",                    CT_TEXT_YAML, true },
     { .format = "application/yaml",             CT_APPLICATION_YAML, true },
     { .format = "text/xml",                     CT_TEXT_XML, true },
     { .format = "text/xsl",                     CT_TEXT_XSL, true },
-    { .format = "application/json",             CT_APPLICATION_JSON, true },
     { .format = "application/xml",              CT_APPLICATION_XML, true },
     { .format = "application/javascript",       CT_APPLICATION_X_JAVASCRIPT, true },
     { .format = "application/octet-stream",     CT_APPLICATION_OCTET_STREAM, false },
@@ -42,16 +42,16 @@ static struct {
 
     // secondary - overlapping with primary
 
-    { .format = "text/plain",                   CT_PROMETHEUS, false, "version=0.0.4" },
-    { .format = "prometheus",                   CT_PROMETHEUS },
-    { .format = "text",                         CT_TEXT_PLAIN },
-    { .format = "txt",                          CT_TEXT_PLAIN },
-    { .format = "json",                         CT_APPLICATION_JSON },
-    { .format = "html",                         CT_TEXT_HTML },
-    { .format = "xml",                          CT_APPLICATION_XML },
+    { .format = "text/plain",                   CT_PROMETHEUS, true, "version=0.0.4" },
+    { .format = "prometheus",                   CT_PROMETHEUS, true },
+    { .format = "text",                         CT_TEXT_PLAIN, true },
+    { .format = "txt",                          CT_TEXT_PLAIN, true },
+    { .format = "json",                         CT_APPLICATION_JSON, true },
+    { .format = "html",                         CT_TEXT_HTML, true },
+    { .format = "xml",                          CT_APPLICATION_XML, true },
 
     // terminator
-    { .format = NULL,                           CT_TEXT_PLAIN },
+    { .format = NULL,                           CT_TEXT_PLAIN, true },
 };
 
 HTTP_CONTENT_TYPE content_type_string2id(const char *format) {

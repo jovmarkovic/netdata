@@ -2,45 +2,41 @@
   id: deploy-linux-generic
   meta: &linux_meta
     name: Linux
-    link: ''
+    link: ""
     categories:
       - deploy.operating-systems
-    icon_filename: 'linux.svg'
+    icon_filename: "linux.svg"
   keywords:
     - linux
   most_popular: true
-  install_description: 'Run the following command on your node to install and claim Netdata:'
+  install_description: "Run the following command on your node to install and connnect Netdata to your Space:"
   methods:
     - &ks_wget
       method: wget
       commands:
         - channel: nightly
           command: >
-            wget -O /tmp/netdata-kickstart.sh https://get.netdata.cloud/kickstart.sh && sh /tmp/netdata-kickstart.sh
-            --nightly-channel{% if $showClaimingOptions %} --claim-token {% claim_token %} --claim-rooms {% $claim_rooms %} --claim-url {% claim_url %}{% /if %}
+            wget -O /tmp/netdata-kickstart.sh https://get.netdata.cloud/kickstart.sh && sh /tmp/netdata-kickstart.sh --nightly-channel{% if $showClaimingOptions %} --claim-token {% claim_token %} --claim-rooms {% $claim_rooms %} --claim-url {% claim_url %}{% /if %}
         - channel: stable
           command: >
-            wget -O /tmp/netdata-kickstart.sh https://get.netdata.cloud/kickstart.sh && sh /tmp/netdata-kickstart.sh
-            --stable-channel{% if $showClaimingOptions %} --claim-token {% claim_token %} --claim-rooms {% $claim_rooms %} --claim-url {% claim_url %}{% /if %}
+            wget -O /tmp/netdata-kickstart.sh https://get.netdata.cloud/kickstart.sh && sh /tmp/netdata-kickstart.sh --stable-channel{% if $showClaimingOptions %} --claim-token {% claim_token %} --claim-rooms {% $claim_rooms %} --claim-url {% claim_url %}{% /if %}
     - &ks_curl
       method: curl
       commands:
         - channel: nightly
           command: >
-            curl https://get.netdata.cloud/kickstart.sh > /tmp/netdata-kickstart.sh && sh /tmp/netdata-kickstart.sh
-            --nightly-channel{% if $showClaimingOptions %} --claim-token {% claim_token %} --claim-rooms {% $claim_rooms %} --claim-url {% claim_url %}{% /if %}
+            curl https://get.netdata.cloud/kickstart.sh > /tmp/netdata-kickstart.sh && sh /tmp/netdata-kickstart.sh --nightly-channel{% if $showClaimingOptions %} --claim-token {% claim_token %} --claim-rooms {% $claim_rooms %} --claim-url {% claim_url %}{% /if %}
         - channel: stable
           command: >
-            curl https://get.netdata.cloud/kickstart.sh > /tmp/netdata-kickstart.sh && sh /tmp/netdata-kickstart.sh
-            --stable-channel{% if $showClaimingOptions %} --claim-token {% claim_token %} --claim-rooms {% $claim_rooms %} --claim-url {% claim_url %}{% /if %}
+            curl https://get.netdata.cloud/kickstart.sh > /tmp/netdata-kickstart.sh && sh /tmp/netdata-kickstart.sh --stable-channel{% if $showClaimingOptions %} --claim-token {% claim_token %} --claim-rooms {% $claim_rooms %} --claim-url {% claim_url %}{% /if %}
   additional_info: &ref_containers >
     Did you know you can also deploy Netdata on your OS using {% goToCategory navigateToSettings=$navigateToSettings categoryId="deploy.docker-kubernetes" %}Kubernetes{% /goToCategory %} or {% goToCategory categoryId="deploy.docker-kubernetes" %}Docker{% /goToCategory %}?
   clean_additional_info: &ref_clean_containers >
     Did you know you can also deploy Netdata on your OS using Kubernetes or Docker?
   related_resources: {}
   platform_info:
-    group: ''
-    distro: ''
+    group: ""
+    distro: ""
   quick_start: 1
 - <<: *linux
   id: deploy-ubuntu
@@ -48,11 +44,11 @@
     <<: *linux_meta
     name: Ubuntu
     link: https://ubuntu.com/
-    icon_filename: 'ubuntu.svg'
+    icon_filename: "ubuntu.svg"
   most_popular: false
   platform_info:
-    group: 'include'
-    distro: 'ubuntu'
+    group: "include"
+    distro: "ubuntu"
   quick_start: -1
 - <<: *linux
   id: deploy-debian
@@ -60,11 +56,11 @@
     <<: *linux_meta
     name: Debian
     link: https://www.debian.org/
-    icon_filename: 'debian.svg'
+    icon_filename: "debian.svg"
   most_popular: false
   platform_info:
-    group: 'include'
-    distro: 'debian'
+    group: "include"
+    distro: "debian"
   quick_start: -1
 - <<: *linux
   id: deploy-fedora
@@ -72,11 +68,11 @@
     <<: *linux_meta
     name: Fedora
     link: https://www.fedoraproject.org/
-    icon_filename: 'fedora.png'
+    icon_filename: "fedora.png"
   most_popular: false
   platform_info:
-    group: 'include'
-    distro: 'fedora'
+    group: "include"
+    distro: "fedora"
   quick_start: -1
 - <<: *linux
   id: deploy-rhel
@@ -84,11 +80,11 @@
     <<: *linux_meta
     name: Red Hat Enterprise Linux
     link: https://www.redhat.com/en/technologies/linux-platforms/enterprise-linux
-    icon_filename: 'rhel.png'
+    icon_filename: "rhel.png"
   most_popular: false
   platform_info:
-    group: 'no_include'
-    distro: 'rhel'
+    group: "no_include"
+    distro: "rhel"
   quick_start: -1
 - <<: *linux
   id: deploy-rockylinux
@@ -96,11 +92,11 @@
     <<: *linux_meta
     name: Rocky Linux
     link: https://rockylinux.org/
-    icon_filename: 'rocky.svg'
+    icon_filename: "rocky.svg"
   most_popular: false
   platform_info:
-    group: 'include'
-    distro: 'rockylinux'
+    group: "include"
+    distro: "rockylinux"
   quick_start: -1
 - <<: *linux
   id: deploy-alpinelinux
@@ -108,11 +104,11 @@
     <<: *linux_meta
     name: Alpine Linux
     link: https://www.alpinelinux.org/
-    icon_filename: 'alpine.svg'
+    icon_filename: "alpine.svg"
   most_popular: false
   platform_info:
-    group: 'include'
-    distro: 'alpinelinux'
+    group: "include"
+    distro: "alpinelinux"
   quick_start: -1
 - <<: *linux
   id: deploy-amazonlinux
@@ -120,11 +116,11 @@
     <<: *linux_meta
     name: Amazon Linux
     link: https://aws.amazon.com/amazon-linux-2/
-    icon_filename: 'amazonlinux.png'
+    icon_filename: "amazonlinux.png"
   most_popular: false
   platform_info:
-    group: 'include'
-    distro: 'amazonlinux'
+    group: "include"
+    distro: "amazonlinux"
   quick_start: -1
 - <<: *linux
   id: deploy-archlinux
@@ -132,11 +128,11 @@
     <<: *linux_meta
     name: Arch Linux
     link: https://archlinux.org/
-    icon_filename: 'archlinux.png'
+    icon_filename: "archlinux.png"
   most_popular: false
   platform_info:
-    group: 'include'
-    distro: 'archlinux'
+    group: "include"
+    distro: "archlinux"
   quick_start: -1
 - <<: *linux
   id: deploy-centos
@@ -144,11 +140,11 @@
     <<: *linux_meta
     name: CentOS
     link: https://www.centos.org/
-    icon_filename: 'centos.svg'
+    icon_filename: "centos.svg"
   most_popular: false
   platform_info:
-    group: 'include'
-    distro: 'centos'
+    group: "include"
+    distro: "centos"
   quick_start: -1
 - <<: *linux
   id: deploy-centos-stream
@@ -156,11 +152,11 @@
     <<: *linux_meta
     name: CentOS Stream
     link: https://www.centos.org/centos-stream
-    icon_filename: 'centos.svg'
+    icon_filename: "centos.svg"
   most_popular: false
   platform_info:
-    group: 'include'
-    distro: 'centos-stream'
+    group: "include"
+    distro: "centos-stream"
   quick_start: -1
 - <<: *linux
   id: deploy-manjarolinux
@@ -168,11 +164,11 @@
     <<: *linux_meta
     name: Manjaro Linux
     link: https://manjaro.org/
-    icon_filename: 'manjaro.svg'
+    icon_filename: "manjaro.svg"
   most_popular: false
   platform_info:
-    group: 'include'
-    distro: 'archlinux'
+    group: "include"
+    distro: "archlinux"
   quick_start: -1
 - <<: *linux
   id: deploy-oraclelinux
@@ -180,11 +176,11 @@
     <<: *linux_meta
     name: Oracle Linux
     link: https://www.oracle.com/linux/
-    icon_filename: 'oraclelinux.svg'
+    icon_filename: "oraclelinux.svg"
   most_popular: false
   platform_info:
-    group: 'include'
-    distro: 'oraclelinux'
+    group: "include"
+    distro: "oraclelinux"
   quick_start: -1
 - <<: *linux
   id: deploy-opensuse
@@ -192,41 +188,41 @@
     <<: *linux_meta
     name: SUSE Linux
     link: https://www.suse.com/
-    icon_filename: 'openSUSE.svg'
+    icon_filename: "openSUSE.svg"
   most_popular: false
   platform_info:
-    group: 'include'
-    distro: 'opensuse'
+    group: "include"
+    distro: "opensuse"
   quick_start: -1
 - id: deploy-macos
   meta:
     name: macOS
-    link: ''
+    link: ""
     categories:
       - deploy.operating-systems
-    icon_filename: 'macos.svg'
+    icon_filename: "macos.svg"
   most_popular: true
   keywords:
     - macOS
     - mac
     - apple
-  install_description: 'Run the following command on your Intel based OSX, macOS servers to install and claim Netdata:'
+  install_description: "Run the following command on your Intel based OSX, macOS servers to install and claim Netdata:"
   methods:
     - *ks_curl
   additional_info: *ref_containers
   clean_additional_info: *ref_clean_containers
   related_resources: {}
   platform_info:
-    group: 'no_include'
-    distro: 'macos'
+    group: "no_include"
+    distro: "macos"
   quick_start: 5
 - id: deploy-docker
   meta:
     name: Docker
-    link: 'https://www.docker.com/'
+    link: "https://www.docker.com/"
     categories:
       - deploy.docker-kubernetes
-    icon_filename: 'docker.svg'
+    icon_filename: "docker.svg"
   most_popular: true
   keywords:
     - docker
@@ -258,6 +254,7 @@
             -v /etc/os-release:/host/etc/os-release:ro \
             -v /var/log:/host/var/log:ro \
             -v /var/run/docker.sock:/var/run/docker.sock:ro \
+            -v /run/dbus:/run/dbus:ro \
             --restart unless-stopped \
             --cap-add SYS_PTRACE \
             --cap-add SYS_ADMIN \
@@ -276,6 +273,7 @@
             -v netdataconfig:/etc/netdata \
             -v netdatalib:/var/lib/netdata \
             -v netdatacache:/var/cache/netdata \
+            -v /:/host/root:ro,rslave \
             -v /etc/passwd:/host/etc/passwd:ro \
             -v /etc/group:/host/etc/group:ro \
             -v /etc/localtime:/etc/localtime:ro \
@@ -284,6 +282,7 @@
             -v /etc/os-release:/host/etc/os-release:ro \
             -v /var/log:/host/var/log:ro \
             -v /var/run/docker.sock:/var/run/docker.sock:ro \
+            -v /run/dbus:/run/dbus:ro \
             --restart unless-stopped \
             --cap-add SYS_PTRACE \
             --cap-add SYS_ADMIN \
@@ -324,6 +323,7 @@
                   - /etc/os-release:/host/etc/os-release:ro
                   - /var/log:/host/var/log:ro
                   - /var/run/docker.sock:/var/run/docker.sock:ro
+                  - /run/dbus:/run/dbus:ro
             {% if $showClaimingOptions %}
                 environment:
                   - NETDATA_CLAIM_TOKEN={% claim_token %}
@@ -353,6 +353,7 @@
                   - netdataconfig:/etc/netdata
                   - netdatalib:/var/lib/netdata
                   - netdatacache:/var/cache/netdata
+                  - /:/host/root:ro,rslave
                   - /etc/passwd:/host/etc/passwd:ro
                   - /etc/group:/host/etc/group:ro
                   - /etc/localtime:/etc/localtime:ro
@@ -361,6 +362,7 @@
                   - /etc/os-release:/host/etc/os-release:ro
                   - /var/log:/host/var/log:ro
                   - /var/run/docker.sock:/var/run/docker.sock:ro
+                  - /run/dbus:/run/dbus:ro
             {% if $showClaimingOptions %}
                 environment:
                   - NETDATA_CLAIM_TOKEN={% claim_token %}
@@ -400,6 +402,7 @@
                   - /etc/hostname:/etc/hostname:ro
                   - /var/log:/host/var/log:ro
                   - /var/run/docker.sock:/var/run/docker.sock:ro
+                  - /run/dbus:/run/dbus:ro
             {% if $showClaimingOptions %}
                 environment:
                   - NETDATA_CLAIM_TOKEN={% claim_token %}
@@ -431,6 +434,7 @@
                   - netdataconfig:/etc/netdata
                   - netdatalib:/var/lib/netdata
                   - netdatacache:/var/cache/netdata
+                  - /:/host/root:ro,rslave
                   - /etc/passwd:/host/etc/passwd:ro
                   - /etc/group:/host/etc/group:ro
                   - /etc/localtime:/etc/localtime:ro
@@ -440,6 +444,7 @@
                   - /etc/hostname:/etc/hostname:ro
                   - /var/log:/host/var/log:ro
                   - /var/run/docker.sock:/var/run/docker.sock:ro
+                  - /run/dbus:/run/dbus:ro
             {% if $showClaimingOptions %}
                 environment:
                   - NETDATA_CLAIM_TOKEN={% claim_token %}
@@ -454,19 +459,19 @@
               netdataconfig:
               netdatalib:
               netdatacache:
-  additional_info: ''
+  additional_info: ""
   related_resources: {}
   platform_info:
-    group: 'no_include'
-    distro: 'docker'
+    group: "no_include"
+    distro: "docker"
   quick_start: 3
 - id: deploy-kubernetes
   meta:
     name: Kubernetes (Helm)
-    link: ''
+    link: ""
     categories:
       - deploy.docker-kubernetes
-    icon_filename: 'kubernetes.svg'
+    icon_filename: "kubernetes.svg"
   keywords:
     - kubernetes
     - container
@@ -542,44 +547,75 @@
                 token: {% claim_token %}
                 rooms: {% $claim_rooms %}
             {% /if %}
-  additional_info: ''
+  additional_info: ""
   related_resources: {}
   most_popular: true
   platform_info:
-    group: ''
-    distro: ''
+    group: ""
+    distro: ""
   quick_start: 4
 - id: deploy-windows
   meta:
     name: Windows
-    link: 'https://www.microsoft.com/en-us/windows'
+    link: "https://www.microsoft.com/en-us/windows"
     categories:
       - deploy.operating-systems
-    icon_filename: 'windows.svg'
+    icon_filename: "windows.svg"
   keywords:
     - windows
   install_description: |
-    1. Install [Windows Exporter](https://github.com/prometheus-community/windows_exporter) on every Windows host you want to monitor.
-    2. Install Netdata agent on Linux, FreeBSD or Mac.
-    3. Configure Netdata to collect data remotely from your Windows hosts by adding one job per host to windows.conf file. See the [configuration section](https://learn.netdata.cloud/docs/data-collection/monitor-anything/System%20Metrics/Windows-machines#configuration) for details.
-    4. Enable [virtual nodes](https://learn.netdata.cloud/docs/data-collection/windows-systems#virtual-nodes) configuration so the windows nodes are displayed as separate nodes.
+    Netdata offers a convenient Windows installer for easy setup. This executable provides two distinct installation modes, outlined below.
+
+    ## Graphical User Interface (GUI)
+
+    **Download the MSI Installer**:
+      - [Stable version](https://github.com/netdata/netdata/releases/latest/download/netdata-x64.msi)
+      - [Nightly version](https://github.com/netdata/netdata-nightlies/releases/latest/download/netdata-x64.msi)
+
+    Double-click the installer to start the installation process. As Netdata adds a service to your system, you'll need to provide administrator privileges.
+
+    Once installed, you can access your Netdata dashboard at `localhost:19999`.
+
+    ## Silent Mode (Command line)
+
+    If you prefer to install Netdata through the command line, you can do so by running the following command on Windows Powershell with administrator rights.
   methods:
-    - *ks_wget
-    - *ks_curl
-  additional_info: ''
+    - method: Silent Mode (Command line)
+      commands:
+        - channel: stable
+          command: >
+            $ProgressPreference = 'SilentlyContinue';
+            Invoke-WebRequest https://github.com/netdata/netdata/releases/latest/download/netdata-x64.msi -OutFile "netdata-x64.msi";
+            msiexec /qn /i netdata-x64.msi {% if $showClaimingOptions %}TOKEN={% claim_token %} ROOMS={% $claim_rooms %}{% /if %}
+        - channel: nightly
+          command: >
+            $ProgressPreference = 'SilentlyContinue';
+            Invoke-WebRequest https://github.com/netdata/netdata-nightlies/releases/latest/download/netdata-x64.msi -OutFile "netdata-x64.msi";
+            msiexec /qn /i netdata-x64.msi {% if $showClaimingOptions %}TOKEN={% claim_token %} ROOMS={% $claim_rooms %}{% /if %}
+  additional_info: |
+    ### Available CLI Options
+
+    | Option       | Description                                                                                      |
+    |--------------|--------------------------------------------------------------------------------------------------|
+    | `/qn`        | Enables silent mode installation.                                                                |
+    | `/i`         | Specifies the path to the MSI installer file.                                                    |
+    | `INSECURE=1` | Forces insecure connections, bypassing hostname verification (use only if absolutely necessary). |
+    | `TOKEN=`     | Sets the Claim Token for your Netdata Cloud Space.                                               |
+    | `ROOMS=`     | Comma-separated list of Room IDs where you want your node to appear.                             |
+    | `PROXY=`     | Sets the proxy server address if your network requires one.                                      |
   related_resources: {}
   most_popular: true
   platform_info:
-    group: ''
-    distro: ''
+    group: ""
+    distro: ""
   quick_start: 2
 - id: deploy-freebsd
   meta:
     name: FreeBSD
-    link: 'https://www.freebsd.org/'
+    link: "https://www.freebsd.org/"
     categories:
       - deploy.operating-systems
-    icon_filename: 'freebsd.svg'
+    icon_filename: "freebsd.svg"
   most_popular: true
   keywords:
     - freebsd
@@ -597,16 +633,14 @@
       commands:
         - channel: nightly
           command: >
-            fetch -o /tmp/netdata-kickstart.sh https://get.netdata.cloud/kickstart.sh && sh /tmp/netdata-kickstart.sh
-            --nightly-channel{% if $showClaimingOptions %} --claim-token {% claim_token %} --claim-rooms {% $claim_rooms %} --claim-url {% claim_url %}{% /if %}
+            fetch -o /tmp/netdata-kickstart.sh https://get.netdata.cloud/kickstart.sh && sh /tmp/netdata-kickstart.sh --nightly-channel{% if $showClaimingOptions %} --claim-token {% claim_token %} --claim-rooms {% $claim_rooms %} --claim-url {% claim_url %}{% /if %}
         - channel: stable
           command: >
-            fetch -o /tmp/netdata-kickstart.sh https://get.netdata.cloud/kickstart.sh && sh /tmp/netdata-kickstart.sh
-            --stable-channel{% if $showClaimingOptions %} --claim-token {% claim_token %} --claim-rooms {% $claim_rooms %} --claim-url {% claim_url %}{% /if %}
+            fetch -o /tmp/netdata-kickstart.sh https://get.netdata.cloud/kickstart.sh && sh /tmp/netdata-kickstart.sh --stable-channel{% if $showClaimingOptions %} --claim-token {% claim_token %} --claim-rooms {% $claim_rooms %} --claim-url {% claim_url %}{% /if %}
   additional_info: |
     Netdata can also be installed via [FreeBSD ports](https://www.freshports.org/net-mgmt/netdata).
   related_resources: {}
   platform_info:
-    group: 'no_include'
-    distro: 'freebsd'
+    group: "no_include"
+    distro: "freebsd"
   quick_start: 6

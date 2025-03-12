@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# shellcheck disable=SC1091,SC2230,SC2086
 #
 # Coverity scan script
 #
-# Copyright: SPDX-License-Identifier: GPL-3.0-or-later
-#
-# Author  : Costa Tsaousis (costa@netdata.cloud)
-# Author  : Pawel Krupa (paulfantom)
-# Author  : Pavlos Emm. Katsoulakis (paul@netdata.cloud)
-# shellcheck disable=SC1091,SC2230,SC2086
-
 # To run manually, save configuration to .coverity-scan.conf like this:
 #
 # the repository to report to coverity - devs can set here their own fork
@@ -26,9 +21,6 @@
 # when set, the script will print on screen the curl command that submits the build to coverity
 # this includes the token, so the default is not to print it.
 # COVERITY_SUBMIT_DEBUG=1
-#
-# Override the standard coverity build version we know is supported
-# COVERITY_BUILD_VERSION="cov-analysis-linux64-2019.03"
 #
 # All these variables can also be exported before running this script.
 #
@@ -160,30 +152,21 @@ scanit() {
 }
 
 installit() {
-  ORIGINAL_DIR="${PWD}"
   TMP_DIR="$(mktemp -d /tmp/netdata-coverity-scan-XXXXX)"
   progress "Downloading coverity in ${TMP_DIR}..."
-  cd "${TMP_DIR}"
+  (cd "${TMP_DIR}" && debugrun curl --remote-name --remote-header-name --show-error --location --data "token=${token}&project=${repo}" https://scan.coverity.com/download/linux64)
 
-  debugrun curl --remote-name --remote-header-name --show-error --location --data "token=${token}&project=${repo}" https://scan.coverity.com/download/linux64
+  COVERITY_ARCHIVE="$(find  "${TMP_DIR}" -maxdepth 1 -mindepth 1 -name 'cov-analysis-linux64-*.tar.gz')"
 
-  if [ -z "${COVERITY_BUILD_VERSION}" ]; then
-    COVERITY_ARCHIVE="$(find  "${TMP_DIR}" -maxdepth 0 -name 'cov-analysis-linux64-*.tar.gz' | cut -f 2 -d '/' | head -n 1)"
-  else
-    COVERITY_ARCHIVE="${TMP_DIR}/${COVERITY_BUILD_VERSION}.tar.gz"
-  fi
-
-  if [ -f "${COVERITY_ARCHIVE}" ]; then
+  if [ -n "${COVERITY_ARCHIVE}" ] && [ -f "${COVERITY_ARCHIVE}" ]; then
     progress "Installing coverity..."
-    cd "${INSTALL_DIR}"
-
-    run sudo tar -z -x -f "${COVERITY_ARCHIVE}" || exit 1
+    run sudo tar -z -x -f "${COVERITY_ARCHIVE}" -C "${INSTALL_DIR}"
     rm -f "${COVERITY_ARCHIVE}"
     COVERITY_PATH=$(find "${INSTALL_DIR}" -maxdepth 1 -name 'cov*linux*')
-    export PATH=${PATH}:${COVERITY_PATH}/bin/
-  elif find . -name "*.tar.gz" > /dev/null 2>&1; then
-    ls ./*.tar.gz
-    fatal "Downloaded coverity tool tarball does not appear to be the version we were expecting, exiting."
+    export PATH="${PATH}:${COVERITY_PATH}/bin/"
+  elif find "${TMP_DIR}" -name "*.tar.gz" > /dev/null 2>&1; then
+    ls "${TMP_DIR}"/*.tar.gz
+    fatal "Downloaded coverity tool tarball does not appear to be the file-name we were expecting, exiting."
   else
     fatal "Failed to download coverity tool tarball!"
   fi
@@ -195,7 +178,6 @@ installit() {
   fi
 
   progress "Coverity scan tools are installed."
-  cd "$ORIGINAL_DIR"
 
   # Clean temp directory
   [ -n "${TMP_DIR}" ] && rm -rf "${TMP_DIR}"

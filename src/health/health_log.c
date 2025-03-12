@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "health.h"
+#include "health-alert-entry.h"
 
 // ----------------------------------------------------------------------------
 
-inline void health_alarm_log_save(RRDHOST *host, ALARM_ENTRY *ae) {
-    sql_health_alarm_log_save(host, ae);
+inline void health_alarm_log_save(RRDHOST *host, ALARM_ENTRY *ae, bool async)
+{
+    if (async)
+        metadata_queue_ae_save(host, ae);
+    else
+        sql_health_alarm_log_save(host, ae);
 }
-
 
 void health_log_alert_transition_with_trace(RRDHOST *host, ALARM_ENTRY *ae, int line, const char *file, const char *function) {
     if(!host || !ae) return;
@@ -46,9 +50,12 @@ void health_log_alert_transition_with_trace(RRDHOST *host, ALARM_ENTRY *ae, int 
     errno_clear();
 
     ND_LOG_FIELD_PRIORITY priority = NDLP_INFO;
+    const char *emoji = "🌀";
+    const char *transitioned = (ae->old_status < ae->new_status) ? "raised" : "lowered";
 
     switch(ae->new_status) {
         case RRDCALC_STATUS_UNDEFINED:
+            emoji = "❓";
             if(ae->old_status >= RRDCALC_STATUS_CLEAR)
                 priority = NDLP_NOTICE;
             else
@@ -57,30 +64,57 @@ void health_log_alert_transition_with_trace(RRDHOST *host, ALARM_ENTRY *ae, int 
 
         default:
         case RRDCALC_STATUS_UNINITIALIZED:
+            emoji = "⏳";
+            priority = NDLP_DEBUG;
+            break;
+
         case RRDCALC_STATUS_REMOVED:
+            emoji = "🚫";
             priority = NDLP_DEBUG;
             break;
 
         case RRDCALC_STATUS_CLEAR:
-            priority = NDLP_INFO;
+            if(ae->old_status == RRDCALC_STATUS_UNINITIALIZED) {
+                emoji = "💚";
+                priority = NDLP_DEBUG;
+            }
+            else if(ae->old_status <= RRDCALC_STATUS_CLEAR) {
+                emoji = "✅";
+                priority = NDLP_INFO;
+            }
+            else {
+                emoji = "💚";
+                priority = NDLP_NOTICE;
+            }
             break;
 
         case RRDCALC_STATUS_WARNING:
-            if(ae->old_status < RRDCALC_STATUS_WARNING)
+            if(ae->old_status <= RRDCALC_STATUS_WARNING) {
+                emoji = "⚠️";
                 priority = NDLP_WARNING;
+            }
+            else {
+                emoji = "🔶";
+                priority = NDLP_INFO;
+            }
             break;
 
         case RRDCALC_STATUS_CRITICAL:
-            if(ae->old_status < RRDCALC_STATUS_CRITICAL)
-                priority = NDLP_CRIT;
+            emoji = "🔴";
+            priority = NDLP_CRIT;
             break;
     }
 
     netdata_logger(NDLS_HEALTH, priority, file, function, line,
-           "ALERT '%s' of instance '%s' on node '%s', transitioned from %s to %s",
-           string2str(ae->name), string2str(ae->chart), string2str(host->hostname),
-           rrdcalc_status2string(ae->old_status), rrdcalc_status2string(ae->new_status)
-           );
+                   "ALERT '%s' of '%s' on node '%s', %s from %s to %s.\n"
+                   "%s %s on %s.\n"
+                   "%s:%s:%s value got from %f %s, to %f %s.",
+                   string2str(ae->name), string2str(ae->chart), string2str(host->hostname),
+                   transitioned, rrdcalc_status2string(ae->old_status), rrdcalc_status2string(ae->new_status),
+                   emoji, string2str(ae->info), string2str(host->hostname),
+                   string2str(host->hostname), string2str(ae->chart), string2str(ae->name),
+                   ae->old_value, string2str(ae->units),
+                   ae->new_value, string2str(ae->units));
 }
 
 // ----------------------------------------------------------------------------
@@ -159,6 +193,7 @@ inline ALARM_ENTRY* health_create_alarm_entry(
     ae->flags |= flags;
 
     ae->last_repeat = 0;
+    ae->pending_save_count = 0;
 
     if(ae->old_status == RRDCALC_STATUS_WARNING || ae->old_status == RRDCALC_STATUS_CRITICAL)
         ae->non_clear_duration += ae->duration;
@@ -166,10 +201,8 @@ inline ALARM_ENTRY* health_create_alarm_entry(
     return ae;
 }
 
-inline void health_alarm_log_add_entry(
-        RRDHOST *host,
-        ALARM_ENTRY *ae
-) {
+inline void health_alarm_log_add_entry(RRDHOST *host, ALARM_ENTRY *ae, bool async)
+{
     netdata_log_debug(D_HEALTH, "Health adding alarm log entry with id: %u", ae->unique_id);
 
     __atomic_add_fetch(&host->health_transitions, 1, __ATOMIC_RELAXED);
@@ -195,7 +228,7 @@ inline void health_alarm_log_add_entry(
                    (t->old_status == RRDCALC_STATUS_WARNING || t->old_status == RRDCALC_STATUS_CRITICAL))
                     ae->non_clear_duration += t->non_clear_duration;
 
-                health_alarm_log_save(host, t);
+                health_alarm_log_save(host, t, async);
             }
 
             // no need to continue
@@ -204,24 +237,30 @@ inline void health_alarm_log_add_entry(
     }
     rw_spinlock_read_unlock(&host->health_log.spinlock);
 
-    health_alarm_log_save(host, ae);
+    health_alarm_log_save(host, ae, async);
 }
 
 inline void health_alarm_log_free_one_nochecks_nounlink(ALARM_ENTRY *ae) {
-    string_freez(ae->name);
-    string_freez(ae->chart);
-    string_freez(ae->chart_context);
-    string_freez(ae->classification);
-    string_freez(ae->component);
-    string_freez(ae->type);
-    string_freez(ae->exec);
-    string_freez(ae->recipient);
-    string_freez(ae->source);
-    string_freez(ae->units);
-    string_freez(ae->info);
-    string_freez(ae->old_value_string);
-    string_freez(ae->new_value_string);
-    freez(ae);
+    if(__atomic_load_n(&ae->pending_save_count, __ATOMIC_RELAXED))
+        metadata_queue_ae_deletion(ae);
+    else {
+        string_freez(ae->name);
+        string_freez(ae->chart);
+        string_freez(ae->chart_name);
+        string_freez(ae->chart_context);
+        string_freez(ae->classification);
+        string_freez(ae->component);
+        string_freez(ae->type);
+        string_freez(ae->exec);
+        string_freez(ae->recipient);
+        string_freez(ae->source);
+        string_freez(ae->units);
+        string_freez(ae->info);
+        string_freez(ae->old_value_string);
+        string_freez(ae->new_value_string);
+        string_freez(ae->summary);
+        freez(ae);
+    }
 }
 
 inline void health_alarm_log_free(RRDHOST *host) {

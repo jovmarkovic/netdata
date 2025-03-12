@@ -59,56 +59,56 @@ typedef enum __attribute__((packed)) dictionary_options {
     DICT_OPTION_ADD_IN_FRONT            = (1 << 4), // add dictionary items at the front of the linked list (default: at the end)
     DICT_OPTION_FIXED_SIZE              = (1 << 5), // the items of the dictionary have a fixed size
     DICT_OPTION_INDEX_JUDY              = (1 << 6), // the default, if no other indexing is set
-    DICT_OPTION_INDEX_HASHTABLE         = (1 << 7), // use SIMPLE_HASHTABLE for indexing
+//    DICT_OPTION_INDEX_HASHTABLE         = (1 << 7), // use SIMPLE_HASHTABLE for indexing
 } DICT_OPTIONS;
 
 struct dictionary_stats {
     const char *name;               // the name of the category
 
     struct {
-        size_t active;              // the number of active dictionaries
-        size_t deleted;             // the number of dictionaries queued for destruction
+        PAD64(size_t) active;              // the number of active dictionaries
+        PAD64(size_t) deleted;             // the number of dictionaries queued for destruction
     } dictionaries;
 
     struct {
-        long entries;               // active items in the dictionary
-        long pending_deletion;      // pending deletion items in the dictionary
-        long referenced;            // referenced items in the dictionary
+        PAD64(long) entries;               // active items in the dictionary
+        PAD64(long) pending_deletion;      // pending deletion items in the dictionary
+        PAD64(long) referenced;            // referenced items in the dictionary
     } items;
 
     struct {
-        size_t creations;           // dictionary creations
-        size_t destructions;        // dictionary destructions
-        size_t flushes;             // dictionary flushes
-        size_t traversals;          // dictionary foreach
-        size_t walkthroughs;        // dictionary walkthrough
-        size_t garbage_collections; // dictionary garbage collections
-        size_t searches;            // item searches
-        size_t inserts;             // item inserts
-        size_t resets;              // item resets
-        size_t deletes;             // item deletes
+        PAD64(size_t) creations;           // dictionary creations
+        PAD64(size_t) destructions;        // dictionary destructions
+        PAD64(size_t) flushes;             // dictionary flushes
+        PAD64(size_t) traversals;          // dictionary foreach
+        PAD64(size_t) walkthroughs;        // dictionary walkthrough
+        PAD64(size_t) garbage_collections; // dictionary garbage collections
+        PAD64(size_t) searches;            // item searches
+        PAD64(size_t) inserts;             // item inserts
+        PAD64(size_t) resets;              // item resets
+        PAD64(size_t) deletes;             // item deletes
     } ops;
 
     struct {
-        size_t inserts;             // number of times the insert callback is called
-        size_t conflicts;           // number of times the conflict callback is called
-        size_t reacts;              // number of times the react callback is called
-        size_t deletes;             // number of times the delete callback is called
+        PAD64(size_t) inserts;             // number of times the insert callback is called
+        PAD64(size_t) conflicts;           // number of times the conflict callback is called
+        PAD64(size_t) reacts;              // number of times the react callback is called
+        PAD64(size_t) deletes;             // number of times the delete callback is called
     } callbacks;
 
     // memory
     struct {
-        long index;                 // bytes of keys indexed (indication of the index size)
-        long values;                // bytes of caller structures
-        long dict;                  // bytes of the structures dictionary needs
+        PAD64(ssize_t) index;              // bytes of keys indexed (indication of the index size)
+        PAD64(ssize_t) values;             // bytes of caller structures
+        PAD64(ssize_t) dict;               // bytes of the structures dictionary needs
     } memory;
 
     // spin locks
     struct {
-        size_t use_spins;           // number of times a reference to item had to spin to acquire it or ignore it
-        size_t search_spins;        // number of times a successful search result had to be thrown away
-        size_t insert_spins;        // number of times an insertion to the hash table had to be repeated
-        size_t delete_spins;        // number of times a deletion had to spin to get a decision
+        PAD64(size_t) use_spins;           // number of times a reference to item had to spin to acquire it or ignore it
+        PAD64(size_t) search_spins;        // number of times a successful search result had to be thrown away
+        PAD64(size_t) insert_spins;        // number of times an insertion to the hash table had to be repeated
+        PAD64(size_t) delete_spins;        // number of times a deletion had to spin to get a decision
     } spin_locks;
 };
 
@@ -168,7 +168,7 @@ void dictionary_version_increment(DICTIONARY *dict);
 
 void dictionary_garbage_collect(DICTIONARY *dict);
 
-void cleanup_destroyed_dictionaries(void);
+bool cleanup_destroyed_dictionaries(void);
 
 // ----------------------------------------------------------------------------
 // Set an item in the dictionary
@@ -299,7 +299,8 @@ typedef DICTFE_CONST struct dictionary_foreach {
 
 #define dfe_start_rw(dict, value, mode)                                                             \
         do {                                                                                        \
-            DICTFE value ## _dfe = {};                                                              \
+            /* automatically cleanup DFE, to allow using return from within the loop */             \
+            DICTFE _cleanup_(dictionary_foreach_done) value ## _dfe = {};                           \
             (void)(value); /* needed to avoid warning when looping without using this */            \
             for((value) = dictionary_foreach_start_rw(&value ## _dfe, (dict), (mode));              \
                 (value ## _dfe.item) || (value) ;                                                   \
@@ -308,7 +309,6 @@ typedef DICTFE_CONST struct dictionary_foreach {
 
 #define dfe_done(value)                                                                             \
             }                                                                                       \
-            dictionary_foreach_done(&value ## _dfe);                                                \
         } while(0)
 
 #define dfe_unlock(value) dictionary_foreach_unlock(&value ## _dfe)

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "health_internals.h"
+#include "health-alert-entry.h"
 
 // the queue of executed alarm notifications that haven't been waited for yet
 static struct {
@@ -20,17 +21,27 @@ struct health_raised_summary {
 };
 
 void health_alarm_wait_for_execution(ALARM_ENTRY *ae) {
-    if (!(ae->flags & HEALTH_ENTRY_FLAG_EXEC_IN_PROGRESS))
-        return;
+    // this has to ALWAYS remove the given alarm entry from the queue
 
-    if(!ae->popen_instance) {
-        // nd_log(NDLS_DAEMON, NDLP_ERR, "attempted to wait for the execution of alert that has not spawn a notification");
-        return;
+    int code = 0;
+
+    if (!(ae->flags & HEALTH_ENTRY_FLAG_EXEC_IN_PROGRESS)) {
+        nd_log(NDLS_DAEMON, NDLP_ERR, "attempted to wait for the execution of alert that has not an execution in progress");
+        code = 128;
+        goto cleanup;
     }
 
-    ae->exec_code = spawn_popen_wait(ae->popen_instance);
+    if(!ae->popen_instance) {
+        nd_log(NDLS_DAEMON, NDLP_ERR, "attempted to wait for the execution of alert that has not spawn a notification");
+        code = 128;
+        goto cleanup;
+    }
 
+    code = spawn_popen_wait(ae->popen_instance);
     netdata_log_debug(D_HEALTH, "done executing command - returned with code %d", ae->exec_code);
+
+cleanup:
+    ae->exec_code = code;
     ae->flags &= ~HEALTH_ENTRY_FLAG_EXEC_IN_PROGRESS;
 
     if(ae->exec_code != 0)
@@ -411,8 +422,8 @@ void health_send_notification(RRDHOST *host, ALARM_ENTRY *ae, struct health_rais
            "[%s]: Sending notification for alarm '%s.%s' status %s.",
            rrdhost_hostname(host), ae_chart_id(ae), ae_name(ae), rrdcalc_status2string(ae->new_status));
 
-    const char *exec      = (ae->exec)      ? ae_exec(ae)      : string2str(host->health.health_default_exec);
-    const char *recipient = (ae->recipient) ? ae_recipient(ae) : string2str(host->health.health_default_recipient);
+    const char *exec      = (ae->exec)      ? ae_exec(ae)      : string2str(host->health.default_exec);
+    const char *recipient = (ae->recipient) ? ae_recipient(ae) : string2str(host->health.default_recipient);
 
     char *edit_command = ae->source ? health_edit_command_from_source(ae_source(ae)) : strdupz("UNKNOWN=0=UNKNOWN");
 
@@ -466,13 +477,18 @@ void health_send_notification(RRDHOST *host, ALARM_ENTRY *ae, struct health_rais
         ae->exec_run_timestamp = now_realtime_sec(); /* will be updated by real time after spawning */
 
         netdata_log_debug(D_HEALTH, "executing command '%s'", command_to_run);
-        ae->flags |= HEALTH_ENTRY_FLAG_EXEC_IN_PROGRESS;
         ae->popen_instance = spawn_popen_run(command_to_run);
-        enqueue_alarm_notify_in_progress(ae);
-        health_alarm_log_save(host, ae);
-    } else {
-        netdata_log_error("Failed to format command arguments");
+        if(ae->popen_instance) {
+            ae->flags |= HEALTH_ENTRY_FLAG_EXEC_IN_PROGRESS;
+            enqueue_alarm_notify_in_progress(ae);
+        }
+        else
+            netdata_log_error("Failed to execute alarm notification");
+
+        health_alarm_log_save(host, ae, false);
     }
+    else
+        netdata_log_error("Failed to format command arguments");
 
     buffer_free(warn_alarms);
     buffer_free(crit_alarms);
@@ -481,7 +497,7 @@ void health_send_notification(RRDHOST *host, ALARM_ENTRY *ae, struct health_rais
 
     return; //health_alarm_wait_for_execution
 done:
-    health_alarm_log_save(host, ae);
+    health_alarm_log_save(host, ae, false);
 }
 
 bool health_alarm_log_get_global_id_and_transition_id_for_rrdcalc(RRDCALC *rc, usec_t *global_id, nd_uuid_t *transitions_id) {

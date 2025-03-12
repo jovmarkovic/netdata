@@ -17,17 +17,7 @@ os_version() {
   fi
 }
 
-if [[ $(os_version) -gt 24 ]]; then
-  ulogd_pkg=
-else
-  ulogd_pkg=ulogd
-fi
-
 declare -a package_tree=(
-  autoconf
-  autoconf-archive
-  autogen
-  automake
   bison
   cmake
   curl
@@ -41,7 +31,6 @@ declare -a package_tree=(
   json-c-devel
   libatomic
   libmnl-devel
-  libtool
   libuuid-devel
   libuv-devel
   libyaml-devel
@@ -53,7 +42,6 @@ declare -a package_tree=(
   systemd-devel
   tar
   zlib-devel
-  "${ulogd_pkg}"
 )
 
 usage() {

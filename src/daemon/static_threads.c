@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "common.h"
+#include "web/api/queries/backfill.h"
+#include "daemon-systemd-watcher.h"
 
 void *aclk_main(void *ptr);
 void *analytics_main(void *ptr);
 void *cpuidlejitter_main(void *ptr);
-void *global_statistics_main(void *ptr);
-void *global_statistics_extended_main(void *ptr);
 void *health_main(void *ptr);
 void *pluginsd_main(void *ptr);
 void *service_main(void *ptr);
@@ -14,7 +14,7 @@ void *statsd_main(void *ptr);
 void *profile_main(void *ptr);
 void *replication_thread_main(void *ptr);
 
-extern bool global_statistics_enabled;
+extern bool pulse_enabled;
 
 const struct netdata_static_thread static_threads_common[] = {
     {
@@ -45,27 +45,48 @@ const struct netdata_static_thread static_threads_common[] = {
         .start_routine = analytics_main
     },
     {
-        .name = "STATS_GLOBAL",
+        .name = "PULSE",
         .config_section = CONFIG_SECTION_PLUGINS,
-        .config_name = "netdata monitoring",
+        .config_name = "netdata pulse",
         .env_name = "NETDATA_INTERNALS_MONITORING",
-        .global_variable = &global_statistics_enabled,
+        .global_variable = &pulse_enabled,
         .enabled = 1,
         .thread = NULL,
         .init_routine = NULL,
-        .start_routine = global_statistics_main
+        .start_routine = pulse_thread_main
     },
     {
-        .name = "STATS_GLOBAL_EXT",
-        .config_section = CONFIG_SECTION_PLUGINS,
-        .config_name = "netdata monitoring extended",
-        .env_name = "NETDATA_INTERNALS_EXTENDED_MONITORING",
-        .global_variable = &global_statistics_enabled,
-        .enabled = 0, // this is ignored - check main() for "netdata monitoring extended"
+        .name = "PULSE-SQLITE3",
+        .config_section = CONFIG_SECTION_PULSE,
+        .config_name = "extended",
+        .env_name = NULL,
+        .global_variable = &pulse_extended_enabled,
+        .enabled = 0, // the default value - it uses netdata.conf for users to enable it
         .thread = NULL,
         .init_routine = NULL,
-        .start_routine = global_statistics_extended_main
+        .start_routine = pulse_thread_sqlite3_main
     },
+    {
+        .name = "PULSE-WORKERS",
+        .config_section = CONFIG_SECTION_PULSE,
+        .config_name = "extended",
+        .env_name = NULL,
+        .global_variable = &pulse_extended_enabled,
+        .enabled = 0, // the default value - it uses netdata.conf for users to enable it
+        .thread = NULL,
+        .init_routine = NULL,
+        .start_routine = pulse_thread_workers_main
+    },
+    {
+        .name = "PULSE-MEMORY",
+        .config_section = CONFIG_SECTION_PULSE,
+        .config_name = "extended",
+        .env_name = NULL,
+        .global_variable = &pulse_extended_enabled,
+        .enabled = 0, // the default value - it uses netdata.conf for users to enable it
+        .thread = NULL,
+        .init_routine = NULL,
+        .start_routine = pulse_thread_memory_extended_main},
     {
         .name = "PLUGINSD",
         .config_section = NULL,
@@ -109,8 +130,7 @@ const struct netdata_static_thread static_threads_common[] = {
         .enabled = 0,
         .thread = NULL,
         .init_routine = NULL,
-        .start_routine = rrdpush_sender_thread
-    },
+        .start_routine = stream_sender_start_localhost},
     {
         .name = "WEB[1]",
         .config_section = NULL,
@@ -126,6 +146,7 @@ const struct netdata_static_thread static_threads_common[] = {
         .name = "h2o",
         .config_section = NULL,
         .config_name = NULL,
+        .enable_routine = httpd_is_enabled,
         .enabled = 0,
         .thread = NULL,
         .init_routine = NULL,
@@ -133,7 +154,6 @@ const struct netdata_static_thread static_threads_common[] = {
     },
 #endif
 
-#ifdef ENABLE_ACLK
     {
         .name = "ACLK_MAIN",
         .config_section = NULL,
@@ -143,7 +163,6 @@ const struct netdata_static_thread static_threads_common[] = {
         .init_routine = NULL,
         .start_routine = aclk_main
     },
-#endif
 
     {
         .name = "RRDCONTEXT",
@@ -172,6 +191,26 @@ const struct netdata_static_thread static_threads_common[] = {
         .thread = NULL,
         .init_routine = NULL,
         .start_routine = profile_main
+    },
+    {
+        .name = "BACKFILL",
+        .config_section = NULL,
+        .config_name = NULL,
+        .enable_routine = netdata_conf_is_parent,
+        .enabled = 0,
+        .thread = NULL,
+        .init_routine = NULL,
+        .start_routine = backfill_thread
+    },
+    {
+        .name = "SDBUSWATCHER",
+        .config_section = NULL,
+        .config_name = NULL,
+        .enable_routine = NULL,
+        .enabled = 1,
+        .thread = NULL,
+        .init_routine = NULL,
+        .start_routine = systemd_watcher_thread
     },
 
     // terminator

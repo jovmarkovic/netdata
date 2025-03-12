@@ -41,6 +41,9 @@ struct netdata_static_thread {
     // internal use, to maintain a pointer to the created thread
     ND_THREAD *thread;
 
+    // a function to call to check it should be enabled or not
+    bool (*enable_routine) (void);
+
     // an initialization function to run before spawning the thread
     void (*init_routine) (void);
 
@@ -60,13 +63,14 @@ struct netdata_static_thread {
 
 #define NETDATA_THREAD_TAG_MAX 100
 const char *nd_thread_tag(void);
+const char *nd_thread_tag_async_safe(void);
 int nd_thread_has_tag(void);
 
 #define THREAD_TAG_STREAM_RECEIVER "RCVR"
 #define THREAD_TAG_STREAM_SENDER "SNDR"
 
 size_t netdata_threads_init(void);
-void netdata_threads_init_after_fork(size_t stacksize);
+void netdata_threads_set_stack_size(size_t stacksize);
 void netdata_threads_init_for_external_plugins(size_t stacksize);
 
 ND_THREAD *nd_thread_create(const char *tag, NETDATA_THREAD_OPTIONS options, void *(*start_routine) (void *), void *arg);
@@ -110,5 +114,8 @@ void nd_thread_rwspinlock_write_unlocked(void);
 #define nd_thread_rwspinlock_write_locked() debug_dummy()
 #define nd_thread_rwspinlock_write_unlocked() debug_dummy()
 #endif
+
+void nd_thread_can_run_sql(bool exclude);
+bool nd_thread_runs_sql(void);
 
 #endif //NETDATA_THREADS_H

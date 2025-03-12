@@ -1,11 +1,10 @@
 # Anomaly Advisor tab
 
-The Anomaly Advisor tab lets you focus on potentially anomalous metrics and charts related to a particular highlighted window of interest. In addition to this tab, each chart in the [Metrics tab](/docs/dashboards-and-charts/metrics-tab-and-single-node-tabs.md) also has an [Anomaly Rate ribbon](/docs/dashboards-and-charts/netdata-charts.md#anomaly-rate-ribbon). 
+The Anomaly Advisor tab lets you focus on potentially anomalous metrics and charts related to a particular highlighted window of interest. In addition to this tab, each chart in the [Metrics tab](/docs/dashboards-and-charts/metrics-tab-and-single-node-tabs.md) also has an [Anomaly Rate ribbon](/docs/dashboards-and-charts/netdata-charts.md#anomaly-rate-ribbon).
 
+More details about configuration can be found in the [ML documentation](/src/ml/README.md).
 
-More details about configuration can be found in the [ML documentation](/src/ml/README.md#configuration).
-
-This tab uses our [Anomaly Rate ML feature](/src/ml/README.md#anomaly-rate---averageanomaly-bit) to score metrics in terms of anomalous behavior.
+This tab uses our [Anomaly Rate ML feature](/src/ml/README.md#anomaly-bit) to score metrics in terms of anomalous behavior.
 
 - The "Anomaly Rate" chart shows the percentage of anomalous metrics over time per node.
 
@@ -23,5 +22,5 @@ The right side of the page displays an anomaly index for the highlighted timelin
 
 ## Usage Tips
 
-- If you are interested in a subset of specific nodes then filtering to just those nodes before highlighting is recommended to get better results. When you highlight a timeframe, Netdata will ask the Agents for a ranking across all metrics, so if there is a subset of nodes there will be less "averaging" going on and you'll get a less noisy ranking.
-- Ideally try and highlight close to a spike or window of interest so that the resulting ranking can narrow-in more easily on the timeline you are interested in.
+- If you are interested in a subset of specific nodes, then filtering to just those nodes before highlighting is recommended to get better results. When you highlight a timeframe, Netdata will ask the Agents for a ranking across all metrics, so if there is a subset of nodes, there will be less "averaging" going on, and you'll get a less noisy ranking.
+- Ideally, try and highlight close to a spike or window of interest so that the resulting ranking can narrow-in more easily on the timeline you are interested in.

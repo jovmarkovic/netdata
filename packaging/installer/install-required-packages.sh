@@ -411,24 +411,34 @@ detect_package_manager_from_distribution() {
     centos* | clearos* | rocky* | almalinux*)
       package_installer=""
       tree="centos"
-      [[ -n "${yum}" ]] && package_installer="install_yum"
       [[ -n "${dnf}" ]] && package_installer="install_dnf"
+      [[ -n "${yum}" ]] && package_installer="install_yum"
       if [[ "${IGNORE_INSTALLED}" -eq 0 ]] && [[ -z "${package_installer}" ]]; then
         echo >&2 "command 'yum' or 'dnf' is required to install packages on a '${distribution} ${version}' system."
         exit 1
       fi
       ;;
 
-    fedora* | redhat* | red\ hat* | rhel*)
+    redhat* | red\ hat* | rhel*)
       package_installer=
       tree="rhel"
-      [[ -n "${yum}" ]] && package_installer="install_yum"
       [[ -n "${dnf}" ]] && package_installer="install_dnf"
+      [[ -n "${yum}" ]] && package_installer="install_yum"
       if [[ "${IGNORE_INSTALLED}" -eq 0 ]] && [[ -z "${package_installer}" ]]; then
         echo >&2 "command 'yum' or 'dnf' is required to install packages on a '${distribution} ${version}' system."
         exit 1
       fi
       ;;
+
+    fedora*)
+      package_installer="install_dnf"
+      tree="rhel"
+      if [[ "${IGNORE_INSTALLED}" -eq 0 ]] && [[ -z "${package_installer}" ]]; then
+        echo >&2 "command 'yum' or 'dnf' is required to install packages on a '${distribution} ${version}' system."
+        exit 1
+      fi
+      ;;
+
 
     ol*)
       package_installer=
@@ -627,77 +637,23 @@ declare -A pkg_distro_sdk=(
   ['default']="NOTREQUIRED"
 )
 
+# bison and flex are required by libsensors
+declare -A pkg_bison=(
+  ['default']="bison"
+)
+declare -A pkg_flex=(
+  ['default']="flex"
+)
+
 declare -A pkg_coreutils=(
   ['alpine']="coreutils"
   ['default']="NOTREQUIRED"
 )
 
-declare -A pkg_autoconf=(
-  ['gentoo']="sys-devel/autoconf"
-  ['clearlinux']="c-basic"
-  ['default']="autoconf"
-)
-
-# required to compile netdata with --enable-sse
-# https://github.com/firehol/netdata/pull/450
-declare -A pkg_autoconf_archive=(
-  ['gentoo']="sys-devel/autoconf-archive"
-  ['clearlinux']="c-basic"
-  ['alpine']="WARNING|"
-  ['default']="autoconf-archive"
-
-  # exceptions
-  ['centos-6']="WARNING|"
-  ['rhel-6']="WARNING|"
-  ['rhel-7']="WARNING|"
-)
-
-declare -A pkg_autogen=(
-  ['gentoo']="sys-devel/autogen"
-  ['clearlinux']="c-basic"
-  ['alpine']="WARNING|"
-  ['default']="autogen"
-
-  # exceptions
-  ['centos-6']="WARNING|"
-  ['rhel-6']="WARNING|"
-  ['centos-9']="NOTREQUIRED|"
-  ['rhel-9']="NOTREQUIRED|"
-)
-
-declare -A pkg_automake=(
-  ['gentoo']="sys-devel/automake"
-  ['clearlinux']="c-basic"
-  ['default']="automake"
-)
-
-# Required to build libwebsockets and libmosquitto on some systems.
 declare -A pkg_cmake=(
   ['gentoo']="dev-util/cmake"
   ['clearlinux']="c-basic"
   ['default']="cmake"
-)
-
-# bison and flex are required by Fluent-Bit
-declare -A pkg_bison=(
-  ['default']="bison"
-)
-
-declare -A pkg_flex=(
-  ['default']="flex"
-)
-
-# fts-dev is required by Fluent-Bit on Alpine
-declare -A pkg_fts_dev=(
-  ['default']="NOTREQUIRED"
-  ['alpine']="musl-fts-dev" 
-  ['alpine-3.16.9']="fts-dev"
-)
-
-# cmake3 is required by Fluent-Bit on CentOS 7
-declare -A pkg_cmake3=(
-  ['default']="NOTREQUIRED"
-  ['centos-7']="cmake3"
 )
 
 declare -A pkg_json_c_dev=(
@@ -754,7 +710,15 @@ declare -A pkg_libsystemd_dev=(
 )
 
 declare -A pkg_pcre2=(
+  ['alpine']="pcre2-dev"
+  ['arch']="pcre2"
+  ['centos']="pcre2-devel"
+  ['debian']="libpcre2-dev"
+  ['freebsd']="pcre2"
   ['macos']="pcre2"
+  ['rhel']="pcre2-devel"
+  ['suse']="pcre2-devel"
+  ['ubuntu']="libpcre2-dev"
   ['default']="NOTREQUIRED"
 )
 
@@ -772,13 +736,13 @@ declare -A pkg_curl=(
 )
 
 declare -A pkg_gzip=(
-  ['gentoo']="app-arch/gzip"
+  ['gentoo']="app-alternatives/gzip"
   ['macos']="NOTREQUIRED"
   ['default']="gzip"
 )
 
 declare -A pkg_tar=(
-  ['gentoo']="app-arch/tar"
+  ['gentoo']="app-alternatives/tar"
   ['clearlinux']="os-core-update"
   ['macos']="NOTREQUIRED"
   ['freebsd']="NOTREQUIRED"
@@ -885,6 +849,18 @@ declare -A pkg_libuuid_dev=(
   ['macos']="ossp-uuid"
   ['freebsd']="e2fsprogs-libuuid"
   ['default']=""
+)
+
+declare -A pkg_libcurl_dev=(
+  ['alpine']="curl-dev"
+  ['arch']="curl"
+  ['clearlinux']="devpkg-curl"
+  ['debian']="libcurl4-openssl-dev"
+  ['gentoo']="net-misc/curl"
+  ['ubuntu']="libcurl4-openssl-dev"
+  ['macos']="curl"
+  ['freebsd']="curl"
+  ['default']="libcurl-devel"
 )
 
 declare -A pkg_libmnl_dev=(
@@ -1249,14 +1225,12 @@ packages() {
     require_cmd gcc-multilib || suitable_package gcc
   require_cmd g++ || require_cmd clang++ || suitable_package gxx
 
-  require_cmd make || suitable_package make
-  require_cmd autoconf || suitable_package autoconf
-  suitable_package autoconf-archive
-  require_cmd autogen || suitable_package autogen
-  require_cmd automake || suitable_package automake
   require_cmd pkg-config || suitable_package pkg-config
   require_cmd cmake || suitable_package cmake
-  require_cmd cmake3 || suitable_package cmake3
+  require_cmd make || suitable_package make
+
+  require_cmd flex || suitable_package flex
+  require_cmd bison || suitable_package bison
 
   # -------------------------------------------------------------------------
   # debugging tools for development
@@ -1279,8 +1253,6 @@ packages() {
     require_cmd tar || suitable_package tar
     require_cmd curl || suitable_package curl
     require_cmd gzip || suitable_package gzip
-    require_cmd bison || suitable_package bison
-    require_cmd flex || suitable_package flex
   fi
 
   # -------------------------------------------------------------------------
@@ -1312,10 +1284,10 @@ packages() {
     suitable_package libuuid-dev
     suitable_package libmnl-dev
     suitable_package json-c-dev
-    suitable_package fts-dev
     suitable_package libyaml-dev
     suitable_package libsystemd-dev
     suitable_package pcre2
+    suitable_package libcurl-dev
   fi
 
   # -------------------------------------------------------------------------
@@ -1348,9 +1320,6 @@ packages() {
 
   if [ "${PACKAGES_NETDATA_PYTHON}" -ne 0 ]; then
     require_cmd python || suitable_package python
-
-    # suitable_package python-requests
-    # suitable_package python-pip
   fi
 
   # -------------------------------------------------------------------------
@@ -1358,9 +1327,6 @@ packages() {
 
   if [ "${PACKAGES_NETDATA_PYTHON3}" -ne 0 ]; then
     require_cmd python3 || suitable_package python3
-
-    # suitable_package python3-requests
-    # suitable_package python3-pip
   fi
 
   # -------------------------------------------------------------------------
@@ -1607,7 +1573,7 @@ install_yum() {
 
 validate_install_dnf() {
   echo >&2 " > Checking if package '${*}' is installed..."
-  dnf list installed "${*}" > /dev/null 2>&1 || echo "${*}"
+  dnf list --installed "${*}" > /dev/null 2>&1 || echo "${*}"
 }
 
 install_dnf() {

@@ -23,7 +23,7 @@ struct cgroup *discovered_cgroup_root = NULL;
 
 char cgroup_chart_id_prefix[] = "cgroup_";
 char services_chart_id_prefix[] = "systemd_";
-char *cgroups_rename_script = NULL;
+const char *cgroups_rename_script = NULL;
 
 // Shared memory with information from detected cgroups
 netdata_ebpf_cgroup_shm_t shm_cgroup_ebpf = {NULL, NULL};
@@ -157,15 +157,61 @@ static inline void substitute_dots_in_id(char *s) {
 // ----------------------------------------------------------------------------
 // parse k8s labels
 
-char *cgroup_parse_resolved_name_and_labels(RRDLABELS *labels, char *data) {
+#define CGROUP_NETDATA_CLOUD_LABEL_PREFIX "netdata.cloud/"
+#define CGROUP_RENAME_LABEL "cgroup.name="
+#define CGROUP_IGNORE_LABEL "ignore="
+
+static char *cgroup_parse_resolved_name_and_labels(struct cgroup *cg, char *data) {
+    if (!cg->chart_labels)
+        cg->chart_labels = rrdlabels_create();
+
+    rrdlabels_unmark_all(cg->chart_labels);
+
     // the first word, up to the first space is the name
     char *name = strsep_skip_consecutive_separators(&data, " ");
+
+    bool ignored = false;
 
     // the rest are key=value pairs separated by comma
     while(data) {
         char *pair = strsep_skip_consecutive_separators(&data, ",");
-        rrdlabels_add_pair(labels, pair, RRDLABEL_SRC_AUTO | RRDLABEL_SRC_K8S);
+
+        if(strncmp(pair, CGROUP_NETDATA_CLOUD_LABEL_PREFIX, sizeof(CGROUP_NETDATA_CLOUD_LABEL_PREFIX) - 1) == 0) {
+            // a netdata.cloud label
+            char *key = &pair[sizeof(CGROUP_NETDATA_CLOUD_LABEL_PREFIX) - 1];
+
+            if(strncmp(key, CGROUP_RENAME_LABEL, sizeof(CGROUP_RENAME_LABEL) - 1) == 0) {
+                char *n = &key[sizeof(CGROUP_RENAME_LABEL) - 1];
+                size_t len = strlen(n);
+                if(n[0] == '"' && n[len - 1] == '"') {
+                    n[len - 1] = '\0';
+                    n++;
+                }
+                if(*n) name = n;
+
+                // no need to add this label
+            }
+            else if(strncmp(key, CGROUP_IGNORE_LABEL, sizeof(CGROUP_IGNORE_LABEL) - 1) == 0) {
+                char *v = &key[sizeof(CGROUP_IGNORE_LABEL) - 1];
+                if(strcasecmp(v, "\"true\"") == 0 || strcasecmp(v, "\"yes\"") == 0)
+                    ignored = true;
+                else
+                    ignored = false;
+
+                // no need to add this label
+            }
+        }
+        else
+            // add the label as-is
+            rrdlabels_add_pair(cg->chart_labels, pair, RRDLABEL_SRC_AUTO | RRDLABEL_SRC_K8S);
     }
+
+    rrdlabels_remove_all_unmarked(cg->chart_labels);
+
+    if(ignored)
+        cg->options |= CGROUP_OPTIONS_DISABLED_EXCLUDED;
+    else
+        cg->options &= ~CGROUP_OPTIONS_DISABLED_EXCLUDED;
 
     return name;
 }
@@ -187,8 +233,8 @@ static inline void discovery_rename_cgroup(struct cgroup *cg) {
         return;
     }
 
-    char buffer[CGROUP_CHARTID_LINE_MAX + 1];
-    char *new_name = fgets(buffer, CGROUP_CHARTID_LINE_MAX, instance->child_stdout_fp);
+    char buffer[8192]; // we need some size for labels
+    char *new_name = fgets(buffer, sizeof(buffer), spawn_popen_stdout(instance));
     int exit_code = spawn_popen_wait(instance);
 
     switch (exit_code) {
@@ -212,12 +258,7 @@ static inline void discovery_rename_cgroup(struct cgroup *cg) {
     if (!(new_name = trim(new_name)))
         return;
 
-    if (!cg->chart_labels)
-        cg->chart_labels = rrdlabels_create();
-    // read the new labels and remove the obsolete ones
-    rrdlabels_unmark_all(cg->chart_labels);
-    char *name = cgroup_parse_resolved_name_and_labels(cg->chart_labels, new_name);
-    rrdlabels_remove_all_unmarked(cg->chart_labels);
+    char *name = cgroup_parse_resolved_name_and_labels(cg, new_name);
 
     freez(cg->name);
     cg->name = strdupz(name);
@@ -1029,9 +1070,8 @@ static void netdata_cgroup_ebpf_initialize_shm()
         goto end_init_shm;
     }
 
-    shm_cgroup_ebpf.header = (netdata_ebpf_cgroup_shm_header_t *) mmap(NULL, length,
-                                                                       PROT_READ | PROT_WRITE, MAP_SHARED,
-                                                                       shm_fd_cgroup_ebpf, 0);
+    shm_cgroup_ebpf.header = (netdata_ebpf_cgroup_shm_header_t *)
+        nd_mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd_cgroup_ebpf, 0);
 
     if (unlikely(MAP_FAILED == shm_cgroup_ebpf.header)) {
         shm_cgroup_ebpf.header = NULL;
@@ -1050,7 +1090,7 @@ static void netdata_cgroup_ebpf_initialize_shm()
     }
 
     collector_error("Cannot create semaphore, integration between eBPF and cgroup won't happen");
-    munmap(shm_cgroup_ebpf.header, length);
+    nd_munmap(shm_cgroup_ebpf.header, length);
     shm_cgroup_ebpf.header = NULL;
 
     end_init_shm:
@@ -1067,7 +1107,7 @@ static void cgroup_cleanup_ebpf_integration()
 
     if (shm_cgroup_ebpf.header) {
         shm_cgroup_ebpf.header->cgroup_root_count = 0;
-        munmap(shm_cgroup_ebpf.header, shm_cgroup_ebpf.header->body_length);
+        nd_munmap(shm_cgroup_ebpf.header, shm_cgroup_ebpf.header->body_length);
     }
 
     if (shm_fd_cgroup_ebpf > 0) {
@@ -1101,7 +1141,7 @@ static inline void read_cgroup_network_interfaces(struct cgroup *cg) {
 
     char *s;
     char buffer[CGROUP_NETWORK_INTERFACE_MAX_LINE + 1];
-    while((s = fgets(buffer, CGROUP_NETWORK_INTERFACE_MAX_LINE, instance->child_stdout_fp))) {
+    while((s = fgets(buffer, CGROUP_NETWORK_INTERFACE_MAX_LINE, spawn_popen_stdout(instance)))) {
         trim(s);
 
         if(*s && *s != '\n') {
@@ -1182,6 +1222,11 @@ static inline void discovery_process_cgroup(struct cgroup *cg) {
             cg->chart_labels = rrdlabels_create();
         rrdlabels_add(cg->chart_labels, "service_name", cg->name, RRDLABEL_SRC_AUTO);
         cg->enabled = 1;
+        return;
+    }
+
+    if (cg->options & CGROUP_OPTIONS_DISABLED_EXCLUDED) {
+        cg->enabled = 0;
         return;
     }
 

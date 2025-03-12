@@ -1,12 +1,8 @@
 #!/usr/bin/env bash
-#
-# Entry point script for netdata
-#
-# Copyright: 2018 and later Netdata Inc.
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Author  : Pavlos Emm. Katsoulakis <paul@netdata.cloud>
-# Author  : Austin S. Hemmelgarn <austin@netdata.cloud>
+# Entry point script for netdata
+
 set -e
 
 if [ ! -w / ] && [ "${EUID}" -eq 0 ]; then
@@ -108,16 +104,6 @@ if [ -w "/etc/netdata" ]; then
   else
     rm -f /etc/netdata/.container-hostname
   fi
-fi
-
-if [ -n "${NETDATA_CLAIM_URL}" ] && [ -n "${NETDATA_CLAIM_TOKEN}" ] && [ ! -f /var/lib/netdata/cloud.d/claimed_id ]; then
-  # shellcheck disable=SC2086
-  /usr/sbin/netdata-claim.sh -token="${NETDATA_CLAIM_TOKEN}" \
-                             -url="${NETDATA_CLAIM_URL}" \
-                             ${NETDATA_CLAIM_ROOMS:+-rooms="${NETDATA_CLAIM_ROOMS}"} \
-                             ${NETDATA_CLAIM_PROXY:+-proxy="${NETDATA_CLAIM_PROXY}"} \
-                             ${NETDATA_EXTRA_CLAIM_OPTS} \
-                             -daemon-not-running
 fi
 
 exec /usr/sbin/netdata -u "${DOCKER_USR}" -D -s /host -p "${NETDATA_LISTENER_PORT}" "$@"

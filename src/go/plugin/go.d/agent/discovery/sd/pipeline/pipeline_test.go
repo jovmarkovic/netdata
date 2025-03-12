@@ -14,7 +14,7 @@ import (
 	"github.com/netdata/netdata/go/plugins/plugin/go.d/agent/confgroup"
 	"github.com/netdata/netdata/go/plugins/plugin/go.d/agent/discovery/sd/model"
 
-	"github.com/ilyam8/hashstructure"
+	"github.com/gohugoio/hashstructure"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v2"
@@ -35,13 +35,13 @@ func Test_defaultConfigs(t *testing.T) {
 		require.NoError(t, err, "abs path")
 
 		bs, err := os.ReadFile(file)
-		require.NoError(t, err, "read config file")
+		require.NoErrorf(t, err, "read config file '%s'", file)
 
 		var cfg Config
-		require.NoError(t, yaml.Unmarshal(bs, &cfg), "unmarshal")
+		require.NoErrorf(t, yaml.Unmarshal(bs, &cfg), "unmarshal '%s'", e.Name())
 
 		_, err = New(cfg)
-		require.NoError(t, err, "create pipeline")
+		require.NoErrorf(t, err, "create pipeline '%s'", e.Name())
 	}
 }
 

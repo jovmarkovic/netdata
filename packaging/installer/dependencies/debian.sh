@@ -8,10 +8,6 @@ NON_INTERACTIVE=0
 DONT_WAIT=0
 
 package_tree="
-  autoconf
-  autoconf-archive
-  autogen
-  automake
   bison
   cmake
   curl
@@ -27,12 +23,10 @@ package_tree="
   libmnl-dev
   libssl-dev
   libsystemd-dev
-  libtool
   libuv1-dev
   libyaml-dev
   make
   pkg-config
-  python
   python3
   tar
   uuid-dev

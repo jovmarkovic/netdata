@@ -6,7 +6,6 @@ static struct engine *engine = NULL;
 
 void analytics_exporting_connectors_ssl(BUFFER *b)
 {
-#ifdef ENABLE_HTTPS
     if (netdata_ssl_exporting_ctx) {
         for (struct instance *instance = engine->instance_root; instance; instance = instance->next) {
             struct simple_connector_data *connector_specific_data = instance->connector_specific_data;
@@ -16,7 +15,6 @@ void analytics_exporting_connectors_ssl(BUFFER *b)
             }
         }
     }
-#endif
     buffer_strcat(b, "|");
 }
 
@@ -126,8 +124,6 @@ static void exporting_main_cleanup(void *pptr)
 
     static_thread->enabled = NETDATA_MAIN_THREAD_EXITING;
 
-    netdata_log_info("cleaning up...");
-
     if (!engine) {
         static_thread->enabled = NETDATA_MAIN_THREAD_EXITED;
         return;
@@ -197,12 +193,11 @@ void *exporting_main(void *ptr)
     RRDDIM *rd_main_system = NULL;
     create_main_rusage_chart(&st_main_rusage, &rd_main_user, &rd_main_system);
 
-    usec_t step_ut = localhost->rrd_update_every * USEC_PER_SEC;
     heartbeat_t hb;
-    heartbeat_init(&hb);
+    heartbeat_init(&hb, localhost->rrd_update_every * USEC_PER_SEC);
 
     while (service_running(SERVICE_EXPORTERS)) {
-        heartbeat_next(&hb, step_ut);
+        heartbeat_next(&hb);
         engine->now = now_realtime_sec();
 
         if (mark_scheduled_instances(engine))

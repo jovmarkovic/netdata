@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+set -x
+
 # shellcheck source=packaging/makeself/functions.sh
 . "$(dirname "${0}")/../functions.sh" "${@}" || exit 1
 
@@ -13,6 +15,7 @@ run cd "${NETDATA_SOURCE_PATH}" || exit 1
 # find the netdata version
 
 VERSION="$("${NETDATA_INSTALL_PARENT}/netdata/bin/netdata" -v | cut -f 2 -d ' ')"
+[ -z "${VERSION}" ] && VERSION="$(cat "${NETDATA_SOURCE_PATH}/packaging/version")"
 
 if [ "${VERSION}" == "" ]; then
   echo >&2 "Cannot find version number. Create makeself executable from source code with git tree structure."
@@ -90,7 +93,7 @@ run "${NETDATA_MAKESELF_PATH}/makeself.sh" \
   --help-header "${NETDATA_MAKESELF_PATH}/makeself-help-header.txt" \
   "${NETDATA_INSTALL_PATH}" \
   "${NETDATA_INSTALL_PATH}.gz.run" \
-  "netdata, the real-time performance and health monitoring system" \
+  "Netdata, X-Ray Vision for your infrastructure" \
   ./system/post-installer.sh
 
 run rm "${NETDATA_MAKESELF_PATH}/makeself.lsm.tmp"
@@ -104,13 +107,13 @@ run mkdir -p artifacts
 run mv "${NETDATA_INSTALL_PATH}.gz.run" "artifacts/${FILE}"
 
 [ -f "netdata-${BUILDARCH}-latest.gz.run" ] && rm "netdata-${BUILDARCH}-latest.gz.run"
-run ln -s "artifacts/${FILE}" "netdata-${BUILDARCH}-latest.gz.run"
+run cp "artifacts/${FILE}" "netdata-${BUILDARCH}-latest.gz.run"
 
 if [ "${BUILDARCH}" = "x86_64" ]; then
   [ -f "netdata-latest.gz.run" ] && rm "netdata-latest.gz.run"
-  run ln -s "artifacts/${FILE}" "netdata-latest.gz.run"
+  run cp "artifacts/${FILE}" "netdata-latest.gz.run"
   [ -f "artifacts/netdata-${VERSION}.gz.run" ] && rm "netdata-${VERSION}.gz.run"
-  run ln -s "./${FILE}" "artifacts/netdata-${VERSION}.gz.run"
+  run cp "artifacts/${FILE}" "artifacts/netdata-${VERSION}.gz.run"
 fi
 
 # shellcheck disable=SC2015

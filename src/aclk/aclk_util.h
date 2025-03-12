@@ -3,8 +3,6 @@
 #define ACLK_UTIL_H
 
 #include "libnetdata/libnetdata.h"
-
-#ifdef ENABLE_ACLK
 #include "mqtt_websockets/mqtt_wss_client.h"
 
 #define CLOUD_EC_MALFORMED_NODE_ID   1
@@ -95,15 +93,10 @@ enum aclk_topics {
     ACLK_TOPICID_CTXS_UPDATED          = 20
 };
 
-typedef size_t aclk_topic_cache_iter_t;
-#define ACLK_TOPIC_CACHE_ITER_T_INITIALIZER (0)
-
 const char *aclk_get_topic(enum aclk_topics topic);
-int aclk_generate_topic_cache(struct json_object *json);
+int aclk_generate_topic_cache(json_object *json);
 void free_topic_cache(void);
-const char *aclk_topic_cache_iterate(aclk_topic_cache_iter_t *iter);
-// TODO
-// aclk_topics_reload //when claim id changes
+const char *aclk_topic_cache_iterate(size_t *iter);
 
 #ifdef ACLK_LOG_CONVERSATION_DIR
 extern volatile int aclk_conversation_log_counter;
@@ -114,8 +107,5 @@ unsigned long int aclk_tbeb_delay(int reset, int base, unsigned long int min, un
 #define aclk_tbeb_reset(x) aclk_tbeb_delay(1, 0, 0, 0)
 
 void aclk_set_proxy(char **ohost, int *port, char **uname, char **pwd, enum mqtt_wss_proxy_type *type);
-#endif /* ENABLE_ACLK */
-
-int base64_encode_helper(unsigned char *out, int *outl, const unsigned char *in, int in_len);
 
 #endif /* ACLK_UTIL_H */

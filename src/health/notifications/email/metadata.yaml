@@ -20,6 +20,18 @@
           description: |
             - A working sendmail command is required for email alerts to work. Almost all MTAs provide a sendmail interface. Netdata sends all emails as user netdata, so make sure your sendmail works for local users.
             - Access to the terminal where Netdata Agent is running
+            - When running Netdata with Docker Compose the emails are sent with `msmtp`, and you need a basic configuration for it to work. 
+              
+              - Add a [msmtprc](https://marlam.de/msmtp/msmtprc.txt) config file on your Docker root folder, and edit it according to your needs.
+              - Link it into your Netdata container with this:
+              
+                ```yaml
+                    volumes:
+                      - /path/to/netdata-docker/msmtprc:/etc/msmtprc:ro
+                ```
+              
+              - Update your container with `docker compose up -d`.
+
     configuration:
       file:
         name: 'health_alarm_notify.conf'
@@ -44,7 +56,7 @@
             detailed_description: |
               All roles will default to this variable if left unconfigured.
               The `DEFAULT_RECIPIENT_CUSTOM` can be edited in the following entries at the bottom of the same file:
-              ```conf
+              ```text
               role_recipients_email[sysadmin]="systems@example.com"
               role_recipients_email[domainadmin]="domains@example.com"
               role_recipients_email[dba]="databases@example.com systems@example.com"

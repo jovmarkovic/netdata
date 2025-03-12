@@ -273,7 +273,7 @@ struct discovery_thread {
 
 extern struct discovery_thread discovery_thread;
 
-extern char *cgroups_rename_script;
+extern const char *cgroups_rename_script;
 extern char cgroup_chart_id_prefix[];
 extern char services_chart_id_prefix[];
 extern uv_mutex_t cgroup_root_mutex;
@@ -313,7 +313,7 @@ extern SIMPLE_PATTERN *enabled_cgroup_renames;
 extern SIMPLE_PATTERN *systemd_services_cgroups;
 extern SIMPLE_PATTERN *entrypoint_parent_process_comm;
 
-extern char *cgroups_network_interface_script;
+extern const char *cgroups_network_interface_script;
 
 extern int cgroups_check;
 
@@ -394,8 +394,8 @@ static inline char *cgroup_chart_type(char *buffer, struct cgroup *cg) {
 #define RRDFUNCTIONS_CGTOP_HELP "View running containers"
 #define RRDFUNCTIONS_SYSTEMD_SERVICES_HELP "View systemd services"
 
-int cgroup_function_cgroup_top(BUFFER *wb, const char *function);
-int cgroup_function_systemd_top(BUFFER *wb, const char *function);
+int cgroup_function_cgroup_top(BUFFER *wb, const char *function, BUFFER *payload, const char *source);
+int cgroup_function_systemd_top(BUFFER *wb, const char *function, BUFFER *payload, const char *source);
 
 void cgroup_netdev_link_init(void);
 const DICTIONARY_ITEM *cgroup_netdev_get(struct cgroup *cg);

@@ -2,6 +2,7 @@
 
 #include "database/rrd.h"
 #include "health_internals.h"
+#include "health-alert-entry.h"
 
 // ----------------------------------------------------------------------------
 // RRDCALC helpers
@@ -80,7 +81,7 @@ uint32_t rrdcalc_get_unique_id(RRDHOST *host, STRING *chart, STRING *name, uint3
         alarm_id = sql_get_alarm_id(host, chart, name, next_event_id);
         if (!alarm_id) {
             if (unlikely(!host->health_log.next_alarm_id))
-                host->health_log.next_alarm_id = (uint32_t)now_realtime_sec();
+                host->health_log.next_alarm_id = get_uint32_id();
             alarm_id = host->health_log.next_alarm_id++;
         }
     }
@@ -242,9 +243,8 @@ static void rrdcalc_link_to_rrdset(RRDCALC *rc) {
         rrdcalc_isrepeating(rc)?HEALTH_ENTRY_FLAG_IS_REPEATING:0);
 
     health_log_alert(host, ae);
-    health_alarm_log_add_entry(host, ae);
+    health_alarm_log_add_entry(host, ae, false);
     rrdset_flag_set(st, RRDSET_FLAG_HAS_RRDCALC_LINKED);
-
 }
 
 static void rrdcalc_unlink_from_rrdset(RRDCALC *rc, bool having_ll_wrlock) {
@@ -257,25 +257,27 @@ static void rrdcalc_unlink_from_rrdset(RRDCALC *rc, bool having_ll_wrlock) {
         return;
     }
 
-    RRDHOST *host = st->rrdhost;
+    if (!exit_initiated) {
+        RRDHOST *host = st->rrdhost;
 
-    time_t now = now_realtime_sec();
+        time_t now = now_realtime_sec();
 
-    if (likely(rc->status != RRDCALC_STATUS_REMOVED)) {
-        ALARM_ENTRY *ae = health_create_alarm_entry(
-            host,
-            rc,
-            now,
-            now - rc->last_status_change,
-            rc->old_value,
-            rc->value,
-            rc->status,
-            RRDCALC_STATUS_REMOVED,
-            0,
-            0);
+        if (likely(rc->status != RRDCALC_STATUS_REMOVED)) {
+            ALARM_ENTRY *ae = health_create_alarm_entry(
+                host,
+                rc,
+                now,
+                now - rc->last_status_change,
+                rc->old_value,
+                rc->value,
+                rc->status,
+                RRDCALC_STATUS_REMOVED,
+                0,
+                0);
 
-        health_log_alert(host, ae);
-        health_alarm_log_add_entry(host, ae);
+            health_log_alert(host, ae);
+            health_alarm_log_add_entry(host, ae, true);
+        }
     }
 
     // unlink it
@@ -329,15 +331,18 @@ static void rrdcalc_rrdhost_insert_callback(const DICTIONARY_ITEM *item __maybe_
     if(!rc->config.units)
         rc->config.units = string_dup(st->units);
 
-    if(rc->config.update_every < rc->rrdset->update_every) {
-        netdata_log_info(
-            "HEALTH: alert '%s.%s' has update every %d, less than chart update every %d. "
-            "Setting alarm update frequency to %d.",
-            string2str(st->id), string2str(rc->config.name),
-            rc->config.update_every, rc->rrdset->update_every, rc->rrdset->update_every);
-
-        rc->config.update_every = st->update_every;
-    }
+    // the following interferes with replication, changing the alert frequency to unexpected values
+    // let's respect user configuration, so we disable it
+    
+//    if(rc->config.update_every < rc->rrdset->update_every) {
+//        netdata_log_info(
+//            "HEALTH: alert '%s.%s' has update every %d, less than chart update every %d. "
+//            "Setting alarm update frequency to %d.",
+//            string2str(st->id), string2str(rc->config.name),
+//            rc->config.update_every, rc->rrdset->update_every, rc->rrdset->update_every);
+//
+//        rc->config.update_every = st->update_every;
+//    }
 
     rc->id = rrdcalc_get_unique_id(host, rc->chart, rc->config.name, &rc->next_event_id, &rc->config.hash_id);
 

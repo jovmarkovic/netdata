@@ -18,14 +18,22 @@
 
 typedef void (*instance_labels_cb_t)(RRDSET *st, void *data);
 
-#include "system.io.h"
-#include "system.ram.h"
-#include "system.interrupts.h"
-#include "system.processes.h"
-#include "system.ipc.h"
-#include "mem.swap.h"
-#include "mem.pgfaults.h"
-#include "mem.available.h"
-#include "disk.io.h"
+#include "system-io.h"
+#include "system-ram.h"
+#include "system-interrupts.h"
+#include "system-processes.h"
+#include "system-ipc.h"
+#include "mem-swap.h"
+#include "mem-pgfaults.h"
+#include "mem-available.h"
+#include "disk-io.h"
+#include "disk-ops.h"
+#include "disk-qops.h"
+#include "disk-util.h"
+#include "disk-busy.h"
+#include "disk-iotime.h"
+#include "disk-await.h"
+#include "disk-svctm.h"
+#include "disk-avgsz.h"
 
 #endif //NETDATA_COMMON_CONTEXTS_H

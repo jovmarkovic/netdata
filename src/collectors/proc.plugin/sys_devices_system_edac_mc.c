@@ -37,12 +37,12 @@ struct mc {
 };
 
 static struct mc *mc_root = NULL;
-static char *mc_dirname = NULL;
+static const char *mc_dirname = NULL;
 
 static void find_all_mc() {
     char name[FILENAME_MAX + 1];
     snprintfz(name, FILENAME_MAX, "%s%s", netdata_configured_host_prefix, "/sys/devices/system/edac/mc");
-    mc_dirname = config_get("plugin:proc:/sys/devices/system/edac/mc", "directory to monitor", name);
+    mc_dirname = inicfg_get(&netdata_config, "plugin:proc:/sys/devices/system/edac/mc", "directory to monitor", name);
 
     DIR *dir = opendir(mc_dirname);
     if(unlikely(!dir)) {

@@ -5,6 +5,8 @@
 #define MAX_PREPARED_STATEMENTS (32)
 pthread_key_t key_pool[MAX_PREPARED_STATEMENTS];
 
+long long def_journal_size_limit = 16777216;
+
 SQLITE_API int sqlite3_exec_monitored(
     sqlite3 *db,                               /* An open database */
     const char *sql,                           /* SQL to be evaluated */
@@ -12,12 +14,16 @@ SQLITE_API int sqlite3_exec_monitored(
     void *data,                                /* 1st argument to callback */
     char **errmsg                              /* Error msg written here */
 ) {
+    internal_fatal(!nd_thread_runs_sql(), "THIS THREAD CANNOT RUN SQL");
+
     int rc = sqlite3_exec(db, sql, callback, data, errmsg);
-    global_statistics_sqlite3_query_completed(rc == SQLITE_OK, rc == SQLITE_BUSY, rc == SQLITE_LOCKED);
+    pulse_sqlite3_query_completed(rc == SQLITE_OK, rc == SQLITE_BUSY, rc == SQLITE_LOCKED);
     return rc;
 }
 
 SQLITE_API int sqlite3_step_monitored(sqlite3_stmt *stmt) {
+    internal_fatal(!nd_thread_runs_sql(), "THIS THREAD CANNOT RUN SQL");
+
     int rc;
     int cnt = 0;
 
@@ -25,14 +31,14 @@ SQLITE_API int sqlite3_step_monitored(sqlite3_stmt *stmt) {
         rc = sqlite3_step(stmt);
         switch (rc) {
             case SQLITE_DONE:
-                global_statistics_sqlite3_query_completed(1, 0, 0);
+                pulse_sqlite3_query_completed(1, 0, 0);
                 break;
             case SQLITE_ROW:
-                global_statistics_sqlite3_row_completed();
+                pulse_sqlite3_row_completed();
                 break;
             case SQLITE_BUSY:
             case SQLITE_LOCKED:
-                global_statistics_sqlite3_query_completed(false, rc == SQLITE_BUSY, rc == SQLITE_LOCKED);
+                pulse_sqlite3_query_completed(false, rc == SQLITE_BUSY, rc == SQLITE_LOCKED);
                 usleep(SQLITE_INSERT_DELAY * USEC_PER_MS);
                 continue;
             default:
@@ -64,8 +70,7 @@ static bool mark_database_to_recover(sqlite3_stmt *res, sqlite3 *database, int r
     return false;
 }
 
-int execute_insert(sqlite3_stmt *res)
-{
+int execute_insert(sqlite3_stmt *res) {
     int rc;
     rc =  sqlite3_step_monitored(res);
     if (rc == SQLITE_CORRUPT) {
@@ -84,46 +89,47 @@ int configure_sqlite_database(sqlite3 *database, int target_version, const char 
     const char *def_synchronous = "NORMAL";
     const char *def_journal_mode = "WAL";
     const char *def_temp_store = "MEMORY";
-    long long def_journal_size_limit = 16777216;
     long long def_cache_size = -2000;
 
     // https://www.sqlite.org/pragma.html#pragma_auto_vacuum
     // PRAGMA schema.auto_vacuum = 0 | NONE | 1 | FULL | 2 | INCREMENTAL;
     snprintfz(buf, sizeof(buf) - 1, "PRAGMA auto_vacuum=%s", def_auto_vacuum);
-    if (config_exists(CONFIG_SECTION_SQLITE, "auto vacuum"))
-        snprintfz(buf, sizeof(buf) - 1, "PRAGMA auto_vacuum=%s",config_get(CONFIG_SECTION_SQLITE, "auto vacuum", def_auto_vacuum));
+    if (inicfg_exists(&netdata_config, CONFIG_SECTION_SQLITE, "auto vacuum"))
+        snprintfz(buf, sizeof(buf) - 1, "PRAGMA auto_vacuum=%s",inicfg_get(&netdata_config, CONFIG_SECTION_SQLITE, "auto vacuum", def_auto_vacuum));
     if (init_database_batch(database, list, description))
         return 1;
 
     // https://www.sqlite.org/pragma.html#pragma_synchronous
     // PRAGMA schema.synchronous = 0 | OFF | 1 | NORMAL | 2 | FULL | 3 | EXTRA;
     snprintfz(buf, sizeof(buf) - 1, "PRAGMA synchronous=%s", def_synchronous);
-    if (config_exists(CONFIG_SECTION_SQLITE, "synchronous"))
-        snprintfz(buf, sizeof(buf) - 1, "PRAGMA synchronous=%s", config_get(CONFIG_SECTION_SQLITE, "synchronous", def_synchronous));
+    if (inicfg_exists(&netdata_config, CONFIG_SECTION_SQLITE, "synchronous"))
+        snprintfz(buf, sizeof(buf) - 1, "PRAGMA synchronous=%s", inicfg_get(&netdata_config, CONFIG_SECTION_SQLITE, "synchronous", def_synchronous));
     if (init_database_batch(database, list, description))
         return 1;
 
     // https://www.sqlite.org/pragma.html#pragma_journal_mode
     // PRAGMA schema.journal_mode = DELETE | TRUNCATE | PERSIST | MEMORY | WAL | OFF
     snprintfz(buf, sizeof(buf) - 1, "PRAGMA journal_mode=%s", def_journal_mode);
-    if (config_exists(CONFIG_SECTION_SQLITE, "journal mode"))
-        snprintfz(buf, sizeof(buf) - 1, "PRAGMA journal_mode=%s", config_get(CONFIG_SECTION_SQLITE, "journal mode", def_journal_mode));
+    if (inicfg_exists(&netdata_config, CONFIG_SECTION_SQLITE, "journal mode"))
+        snprintfz(buf, sizeof(buf) - 1, "PRAGMA journal_mode=%s", inicfg_get(&netdata_config, CONFIG_SECTION_SQLITE, "journal mode", def_journal_mode));
     if (init_database_batch(database, list, description))
         return 1;
 
     // https://www.sqlite.org/pragma.html#pragma_temp_store
     // PRAGMA temp_store = 0 | DEFAULT | 1 | FILE | 2 | MEMORY;
     snprintfz(buf, sizeof(buf) - 1, "PRAGMA temp_store=%s", def_temp_store);
-    if (config_exists(CONFIG_SECTION_SQLITE, "temp store"))
-        snprintfz(buf, sizeof(buf) - 1, "PRAGMA temp_store=%s", config_get(CONFIG_SECTION_SQLITE, "temp store", def_temp_store));
+    if (inicfg_exists(&netdata_config, CONFIG_SECTION_SQLITE, "temp store"))
+        snprintfz(buf, sizeof(buf) - 1, "PRAGMA temp_store=%s", inicfg_get(&netdata_config, CONFIG_SECTION_SQLITE, "temp store", def_temp_store));
     if (init_database_batch(database, list, description))
         return 1;
 
     // https://www.sqlite.org/pragma.html#pragma_journal_size_limit
     // PRAGMA schema.journal_size_limit = N ;
     snprintfz(buf, sizeof(buf) - 1, "PRAGMA journal_size_limit=%lld", def_journal_size_limit);
-    if (config_exists(CONFIG_SECTION_SQLITE, "journal size limit"))
-        snprintfz(buf, sizeof(buf) - 1, "PRAGMA journal_size_limit=%lld", config_get_number(CONFIG_SECTION_SQLITE, "journal size limit", def_journal_size_limit));
+    if (inicfg_exists(&netdata_config, CONFIG_SECTION_SQLITE, "journal size limit")) {
+        def_journal_size_limit = inicfg_get_number(&netdata_config, CONFIG_SECTION_SQLITE, "journal size limit", def_journal_size_limit);
+        snprintfz(buf, sizeof(buf) - 1, "PRAGMA journal_size_limit=%lld", def_journal_size_limit);
+    }
     if (init_database_batch(database, list, description))
         return 1;
 
@@ -131,12 +137,16 @@ int configure_sqlite_database(sqlite3 *database, int target_version, const char 
     // PRAGMA schema.cache_size = pages;
     // PRAGMA schema.cache_size = -kibibytes;
     snprintfz(buf, sizeof(buf) - 1, "PRAGMA cache_size=%lld", def_cache_size);
-    if (config_exists(CONFIG_SECTION_SQLITE, "cache size"))
-        snprintfz(buf, sizeof(buf) - 1, "PRAGMA cache_size=%lld", config_get_number(CONFIG_SECTION_SQLITE, "cache size", def_cache_size));
+    if (inicfg_exists(&netdata_config, CONFIG_SECTION_SQLITE, "cache size"))
+        snprintfz(buf, sizeof(buf) - 1, "PRAGMA cache_size=%lld", inicfg_get_number(&netdata_config, CONFIG_SECTION_SQLITE, "cache size", def_cache_size));
     if (init_database_batch(database, list, description))
         return 1;
 
     snprintfz(buf, sizeof(buf) - 1, "PRAGMA user_version=%d", target_version);
+    if (init_database_batch(database, list, description))
+        return 1;
+
+    snprintfz(buf, sizeof(buf) - 1, "PRAGMA optimize=0x10002");
     if (init_database_batch(database, list, description))
         return 1;
 
@@ -248,14 +258,16 @@ int db_execute(sqlite3 *db, const char *cmd)
     int cnt = 0;
 
     while (cnt < SQL_MAX_RETRY) {
-        char *err_msg;
+        char *err_msg = NULL;
         rc = sqlite3_exec_monitored(db, cmd, 0, 0, &err_msg);
         if (likely(rc == SQLITE_OK))
             break;
 
         ++cnt;
-        error_report("Failed to execute '%s', rc = %d (%s) -- attempt %d", cmd, rc, err_msg, cnt);
-        sqlite3_free(err_msg);
+        error_report("Failed to execute '%s', rc = %d (%s) -- attempt %d", cmd, rc, err_msg ? err_msg : "unknown", cnt);
+        if (err_msg) {
+            sqlite3_free(err_msg);
+        }
 
         if (likely(rc == SQLITE_BUSY || rc == SQLITE_LOCKED)) {
             usleep(SQLITE_INSERT_DELAY * USEC_PER_MS);
@@ -338,7 +350,6 @@ void sql_close_database(sqlite3 *database, const char *database_name)
     if (unlikely(!database))
         return;
 
-    (void) db_execute(database, "PRAGMA analysis_limit=10000");
     (void) db_execute(database, "PRAGMA optimize");
 
     netdata_log_info("%s: Closing sqlite database", database_name);
@@ -397,7 +408,7 @@ int sqlite_library_init(void)
     return (SQLITE_OK != rc);
 }
 
-SPINLOCK sqlite_spinlock = NETDATA_SPINLOCK_INITIALIZER;
+SPINLOCK sqlite_spinlock = SPINLOCK_INITIALIZER;
 
 void sqlite_library_shutdown(void)
 {

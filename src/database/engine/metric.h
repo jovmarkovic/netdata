@@ -4,8 +4,6 @@
 
 #include "../rrd.h"
 
-#define MRG_CACHE_LINE_PADDING(x) uint8_t padding##x[64]
-
 typedef struct metric METRIC;
 typedef struct mrg MRG;
 
@@ -21,7 +19,7 @@ struct mrg_statistics {
     // --- non-atomic --- under a write lock
 
     size_t entries;
-    size_t size;    // total memory used, with indexing
+    int64_t size;    // total memory used, with indexing
 
     size_t additions;
     size_t additions_duplicate;
@@ -30,36 +28,34 @@ struct mrg_statistics {
     size_t delete_having_retention_or_referenced;
     size_t delete_misses;
 
-    MRG_CACHE_LINE_PADDING(0);
-
     // --- atomic --- multiple readers / writers
 
-    size_t entries_referenced;
+    PAD64(ssize_t) entries_acquired;
+    PAD64(ssize_t) current_references;
 
-    MRG_CACHE_LINE_PADDING(2);
-    size_t current_references;
+    PAD64(size_t) search_hits;
+    PAD64(size_t) search_misses;
 
-    MRG_CACHE_LINE_PADDING(3);
-    size_t search_hits;
-    size_t search_misses;
-
-    MRG_CACHE_LINE_PADDING(4);
-    size_t writers;
-    size_t writers_conflicts;
+    PAD64(size_t) writers;
+    PAD64(size_t) writers_conflicts;
 };
 
-MRG *mrg_create(ssize_t partitions);
-void mrg_destroy(MRG *mrg);
+MRG *mrg_create(void);
+
+// returns the number of metrics that were freed, but were still referenced
+size_t mrg_destroy(MRG *mrg);
 
 METRIC *mrg_metric_dup(MRG *mrg, METRIC *metric);
 void mrg_metric_release(MRG *mrg, METRIC *metric);
 
 METRIC *mrg_metric_add_and_acquire(MRG *mrg, MRG_ENTRY entry, bool *ret);
-METRIC *mrg_metric_get_and_acquire(MRG *mrg, nd_uuid_t *uuid, Word_t section);
+METRIC *mrg_metric_get_and_acquire_by_id(MRG *mrg, UUIDMAP_ID id, Word_t section);
+METRIC *mrg_metric_get_and_acquire_by_uuid(MRG *mrg, nd_uuid_t *uuid, Word_t section);
 bool mrg_metric_release_and_delete(MRG *mrg, METRIC *metric);
 
 Word_t mrg_metric_id(MRG *mrg, METRIC *metric);
 nd_uuid_t *mrg_metric_uuid(MRG *mrg, METRIC *metric);
+UUIDMAP_ID mrg_metric_uuidmap_id_dup(MRG *mrg, METRIC *metric);
 Word_t mrg_metric_section(MRG *mrg, METRIC *metric);
 
 bool mrg_metric_set_first_time_s(MRG *mrg, METRIC *metric, time_t first_time_s);
@@ -77,15 +73,16 @@ uint32_t mrg_metric_get_update_every_s(MRG *mrg, METRIC *metric);
 
 void mrg_metric_expand_retention(MRG *mrg, METRIC *metric, time_t first_time_s, time_t last_time_s, uint32_t update_every_s);
 void mrg_metric_get_retention(MRG *mrg, METRIC *metric, time_t *first_time_s, time_t *last_time_s, uint32_t *update_every_s);
-bool mrg_metric_zero_disk_retention(MRG *mrg __maybe_unused, METRIC *metric);
+bool mrg_metric_has_zero_disk_retention(MRG *mrg, METRIC *metric);
+void mrg_metric_clear_retention(MRG *mrg, METRIC *metric);
 
+#ifdef NETDATA_INTERNAL_CHECKS
 bool mrg_metric_set_writer(MRG *mrg, METRIC *metric);
 bool mrg_metric_clear_writer(MRG *mrg, METRIC *metric);
+#endif
 
 void mrg_get_statistics(MRG *mrg, struct mrg_statistics *s);
-size_t mrg_aral_structures(void);
-size_t mrg_aral_overhead(void);
-
+struct aral_statistics *mrg_aral_stats(void);
 
 void mrg_update_metric_retention_and_granularity_by_uuid(
         MRG *mrg, Word_t section, nd_uuid_t *uuid,

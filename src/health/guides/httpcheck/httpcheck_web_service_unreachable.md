@@ -1,6 +1,6 @@
 ### Understand the alert
 
-The Netdata agent monitors your HTTP endpoints. You can specify endpoints the Agent will monitor in the Agent's Go module under `go.d/httpcheck.conf`.
+The Netdata Agent monitors your HTTP endpoints. You can specify endpoints the Agent will monitor in the Agent's Go module under `go.d/httpcheck.conf`.
 
 If your system fails to connect to your endpoint, or if the request to that endpoint times out, then the Agent will mark the requests and log them as "unreachable".
 
@@ -30,4 +30,4 @@ To troubleshoot this error, check the following:
 
 ### Useful resources
 
-1. [HTTP endpoint monitoring with Netdata](/src/go/plugin/go.d/modules/httpcheck/integrations/http_endpoints.md)
+1. [HTTP endpoint monitoring with Netdata](/src/go/plugin/go.d/collector/httpcheck/integrations/http_endpoints.md)

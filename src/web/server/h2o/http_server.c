@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include "daemon/common.h"
-#include "streaming/common.h"
+#include "database/rrd.h"
+#include "streaming/h2o-common.h"
 #include "http_server.h"
 
 #pragma GCC diagnostic push
@@ -24,6 +24,7 @@ static h2o_accept_ctx_t accept_ctx;
 #define NBUF_INITIAL_SIZE_RESP (4096)
 #define API_V1_PREFIX "/api/v1/"
 #define API_V2_PREFIX "/api/v2/"
+#define API_V3_PREFIX "/api/v3/"
 #define HOST_SELECT_PREFIX "/host/"
 
 #define HTTPD_CONFIG_SECTION "httpd"
@@ -69,16 +70,16 @@ static int create_listener(const char *ip, int port)
 
 static int ssl_init()
 {
-    if (!config_get_boolean(HTTPD_CONFIG_SECTION, "ssl", false))
+    if (!inicfg_get_boolean(&netdata_config, HTTPD_CONFIG_SECTION, "ssl", false))
         return 0;
 
     char default_fn[FILENAME_MAX + 1];
 
     snprintfz(default_fn,  FILENAME_MAX, "%s/ssl/key.pem",  netdata_configured_user_config_dir);
-    const char *key_fn  = config_get(HTTPD_CONFIG_SECTION, "ssl key", default_fn);
+    const char *key_fn  = inicfg_get(&netdata_config, HTTPD_CONFIG_SECTION, "ssl key", default_fn);
 
     snprintfz(default_fn, FILENAME_MAX, "%s/ssl/cert.pem", netdata_configured_user_config_dir);
-    const char *cert_fn = config_get(HTTPD_CONFIG_SECTION, "ssl certificate",  default_fn);
+    const char *cert_fn = inicfg_get(&netdata_config, HTTPD_CONFIG_SECTION, "ssl certificate",  default_fn);
 
 #if OPENSSL_VERSION_NUMBER < OPENSSL_VERSION_110
     accept_ctx.ssl_ctx = SSL_CTX_new(SSLv23_server_method());
@@ -144,7 +145,7 @@ static inline int _netdata_uberhandler(h2o_req_t *req, RRDHOST **host)
         if (!*host)
             *host = rrdhost_find_by_guid(c_host_id);
         if (!*host)
-            *host = find_host_by_node_id(c_host_id);
+            *host = rrdhost_find_by_node_id(c_host_id);
         if (!*host) {
             req->res.status = HTTP_RESP_BAD_REQUEST;
             req->res.reason = "Wrong host id";
@@ -182,13 +183,17 @@ static inline int _netdata_uberhandler(h2o_req_t *req, RRDHOST **host)
             norm_path.len--;
     }
 
-    unsigned int api_version = 2;
-    size_t api_loc = h2o_strstr(norm_path.base, norm_path.len, H2O_STRLIT(API_V2_PREFIX));
+    unsigned int api_version = 3;
+    size_t api_loc = h2o_strstr(norm_path.base, norm_path.len, H2O_STRLIT(API_V3_PREFIX));
     if (api_loc == SIZE_MAX) {
-        api_version = 1;
-        api_loc = h2o_strstr(norm_path.base, norm_path.len, H2O_STRLIT(API_V1_PREFIX));
-        if (api_loc == SIZE_MAX)
-            return 1;
+        api_version = 2;
+        api_loc = h2o_strstr(norm_path.base, norm_path.len, H2O_STRLIT(API_V2_PREFIX));
+        if (api_loc == SIZE_MAX) {
+            api_version = 1;
+            api_loc = h2o_strstr(norm_path.base, norm_path.len, H2O_STRLIT(API_V1_PREFIX));
+            if (api_loc == SIZE_MAX)
+                return 1;
+        }
     }
 
     // API_V1_PREFIX and API_V2_PREFIX are the same length
@@ -235,7 +240,9 @@ static inline int _netdata_uberhandler(h2o_req_t *req, RRDHOST **host)
     }
 
 //inline int web_client_api_request_v2(RRDHOST *host, struct web_client *w, char *url_path_endpoint) {
-    if (api_version == 2)
+    if (api_version == 3)
+        web_client_api_request_v3(*host, &w, path_unescaped);
+    else if (api_version == 2)
         web_client_api_request_v2(*host, &w, path_unescaped);
     else
         web_client_api_request_v1(*host, &w, path_unescaped);
@@ -283,7 +290,7 @@ static int netdata_uberhandler(h2o_handler_t *self, h2o_req_t *req)
         char host_uuid_str[UUID_STR_LEN];
 
         if (host != NULL)
-            uuid_unparse_lower(host->host_uuid, host_uuid_str);
+            uuid_unparse_lower(host->host_id.uuid, host_uuid_str);
 
         nd_log(NDLS_ACCESS, NDLP_DEBUG, "HTTPD OK method: " PRINTF_H2O_IOVEC_FMT
                    ", path: " PRINTF_H2O_IOVEC_FMT
@@ -314,7 +321,7 @@ static int hdl_netdata_conf(h2o_handler_t *self, h2o_req_t *req)
         return -1;
 
     BUFFER *buf = buffer_create(NBUF_INITIAL_SIZE_RESP, NULL);
-    config_generate(buf, 0);
+    inicfg_generate(&netdata_config, buf, 0, true);
 
     void *managed = h2o_mem_alloc_shared(&req->pool, buf->len, NULL);
     memcpy(managed, buf->buffer, buf->len);
@@ -363,8 +370,8 @@ void *h2o_main(void *ptr) {
     h2o_pathconf_t *pathconf;
     h2o_hostconf_t *hostconf;
 
-    const char *bind_addr = config_get(HTTPD_CONFIG_SECTION, "bind to", "127.0.0.1");
-    int bind_port = config_get_number(HTTPD_CONFIG_SECTION, "port", 19998);
+    const char *bind_addr = inicfg_get(&netdata_config, HTTPD_CONFIG_SECTION, "bind to", "127.0.0.1");
+    int bind_port = inicfg_get_number(&netdata_config, HTTPD_CONFIG_SECTION, "port", 19998);
 
     h2o_config_init(&config);
     hostconf = h2o_config_register_host(&config, h2o_iovec_init(H2O_STRLIT("default")), bind_port);
@@ -416,6 +423,6 @@ void *h2o_main(void *ptr) {
     return NULL;
 }
 
-int httpd_is_enabled() {
-    return config_get_boolean(HTTPD_CONFIG_SECTION, "enabled", HTTPD_ENABLED_DEFAULT);
+bool httpd_is_enabled() {
+    return inicfg_get_boolean(&netdata_config, HTTPD_CONFIG_SECTION, "enabled", HTTPD_ENABLED_DEFAULT);
 }

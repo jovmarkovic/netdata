@@ -4,47 +4,68 @@ package socket
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"net"
 	"time"
 )
 
-// New returns a new pointer to a socket client given the socket
-// type (IP, TCP, UDP, UNIX), a network address (IP/domain:port),
-// a timeout and a TLS config. It supports both IPv4 and IPv6 address
-// and reuses connection where possible.
-func New(config Config) *Socket {
-	return &Socket{
-		Config: config,
-		conn:   nil,
-	}
+// Processor is a callback function passed to the Socket.Command method.
+// It processes each response line received from the server.
+type Processor func([]byte) (bool, error)
+
+// Client defines an interface for socket clients, abstracting the underlying implementation.
+// Implementations should provide connections for various socket types such as TCP, UDP, or Unix domain sockets.
+type Client interface {
+	Connect() error
+	Disconnect() error
+	Command(command string, process Processor) error
 }
 
-// Socket is the implementation of a socket client.
+// ConnectAndRead establishes a connection using the given configuration,
+// executes the provided processor function on the incoming response lines,
+// and ensures the connection is properly closed after use.
+func ConnectAndRead(cfg Config, process Processor) error {
+	sock := New(cfg)
+
+	if err := sock.Connect(); err != nil {
+		return err
+	}
+
+	defer func() { _ = sock.Disconnect() }()
+
+	return sock.read(process)
+}
+
+// New creates and returns a new Socket instance configured with the provided settings.
+// The socket supports multiple types (TCP, UDP, UNIX), addresses (IPv4, IPv6, domain names),
+// and optional TLS encryption. Connections are reused where possible.
+func New(cfg Config) *Socket {
+	return &Socket{Config: cfg}
+}
+
+// Socket is a concrete implementation of the Client interface, managing a network connection
+// based on the specified configuration (address, type, timeout, and optional TLS settings).
 type Socket struct {
 	Config
 	conn net.Conn
 }
 
-// Connect connects to the Socket address on the named network.
-// If the address is a domain name it will also perform the DNS resolution.
-// Address like :80 will attempt to connect to the localhost.
-// The config timeout and TLS config will be used.
-func (s *Socket) Connect() error {
-	network, address := networkType(s.Address)
-	var conn net.Conn
-	var err error
+// Config encapsulates the settings required to establish a network connection.
+type Config struct {
+	Address      string
+	Timeout      time.Duration
+	TLSConf      *tls.Config
+	MaxReadLines int64
+}
 
-	if s.TLSConf == nil {
-		conn, err = net.DialTimeout(network, address, s.ConnectTimeout)
-	} else {
-		var d net.Dialer
-		d.Timeout = s.ConnectTimeout
-		conn, err = tls.DialWithDialer(&d, network, address, s.TLSConf)
-	}
+// Connect establishes a connection to the specified address using the configuration details.
+func (s *Socket) Connect() error {
+	conn, err := s.dial()
 	if err != nil {
-		return err
+		return fmt.Errorf("socket.Connect: %w", err)
 	}
 
 	s.conn = conn
@@ -52,55 +73,97 @@ func (s *Socket) Connect() error {
 	return nil
 }
 
-// Disconnect closes the connection.
-// Any in-flight commands will be cancelled and return errors.
-func (s *Socket) Disconnect() (err error) {
-	if s.conn != nil {
-		err = s.conn.Close()
-		s.conn = nil
+// Disconnect terminates the active connection if one exists.
+func (s *Socket) Disconnect() error {
+	if s.conn == nil {
+		return nil
 	}
+	err := s.conn.Close()
+	s.conn = nil
 	return err
 }
 
-// Command writes the command string to the connection and passed the
-// response bytes line by line to the process function. It uses the
-// timeout value from the Socket config and returns read, write and
-// timeout errors if any. If a timeout occurs during the processing
-// of the responses this function will stop processing and return a
-// timeout error.
+// Command sends a command string to the connected server and processes its response line by line
+// using the provided Processor function. This method respects the timeout configuration
+// for write and read operations. If a timeout or processing error occurs, it stops and returns the error.
 func (s *Socket) Command(command string, process Processor) error {
 	if s.conn == nil {
 		return errors.New("cannot send command on nil connection")
 	}
-	if err := write(command, s.conn, s.WriteTimeout); err != nil {
+
+	if err := s.write(command); err != nil {
 		return err
 	}
-	return read(s.conn, process, s.ReadTimeout)
+
+	return s.read(process)
 }
 
-func write(command string, writer net.Conn, timeout time.Duration) error {
-	if writer == nil {
-		return errors.New("attempt to write on nil connection")
+func (s *Socket) write(command string) error {
+	if s.conn == nil {
+		return errors.New("write: nil connection")
 	}
-	if err := writer.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+
+	if err := s.conn.SetWriteDeadline(s.deadline()); err != nil {
 		return err
 	}
-	_, err := writer.Write([]byte(command))
+
+	_, err := s.conn.Write([]byte(command))
+
 	return err
 }
 
-func read(reader net.Conn, process Processor, timeout time.Duration) error {
+func (s *Socket) read(process Processor) error {
 	if process == nil {
-		return errors.New("process func is nil")
+		return errors.New("read: process func is nil")
 	}
-	if reader == nil {
-		return errors.New("attempt to read on nil connection")
+	if s.conn == nil {
+		return errors.New("read: nil connection")
 	}
-	if err := reader.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+
+	if err := s.conn.SetReadDeadline(s.deadline()); err != nil {
 		return err
 	}
-	scanner := bufio.NewScanner(reader)
-	for scanner.Scan() && process(scanner.Bytes()) {
+
+	sc := bufio.NewScanner(s.conn)
+
+	var n int64
+	limit := s.MaxReadLines
+
+	for sc.Scan() {
+		more, err := process(sc.Bytes())
+		if err != nil {
+			return err
+		}
+		if n++; limit > 0 && n > limit {
+			return fmt.Errorf("read line limit exceeded (%d", limit)
+		}
+		if !more {
+			break
+		}
 	}
-	return scanner.Err()
+
+	return sc.Err()
+}
+
+func (s *Socket) dial() (net.Conn, error) {
+	network, address := parseAddress(s.Address)
+
+	var d net.Dialer
+	d.Timeout = s.timeout()
+
+	if s.TLSConf != nil {
+		return tls.DialWithDialer(&d, network, address, s.TLSConf)
+	}
+	return d.DialContext(context.Background(), network, address)
+}
+
+func (s *Socket) deadline() time.Time {
+	return time.Now().Add(s.timeout())
+}
+
+func (s *Socket) timeout() time.Duration {
+	if s.Timeout == 0 {
+		return time.Second
+	}
+	return s.Timeout
 }

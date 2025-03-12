@@ -3,6 +3,7 @@
 #include "sqlite_functions.h"
 #include "sqlite_context.h"
 #include "sqlite_db_migration.h"
+#include "database/contexts/internal.h"
 
 #define DB_CONTEXT_METADATA_VERSION 1
 
@@ -16,6 +17,8 @@ const char *database_context_config[] = {
 };
 
 const char *database_context_cleanup[] = {
+    "DROP TRIGGER IF EXISTS del_context1",
+    "DROP TABLE IF EXISTS context_metadata_cleanup",
     "VACUUM",
     NULL
 };
@@ -72,6 +75,8 @@ int sql_init_context_database(int memory)
     return 0;
 }
 
+extern __thread sqlite3 *db_meta_thread;
+extern __thread sqlite3 *db_context_thread;
 //
 // Fetching data
 //
@@ -80,14 +85,14 @@ int sql_init_context_database(int memory)
 
 void ctx_get_chart_list(nd_uuid_t *host_uuid, void (*dict_cb)(SQL_CHART_DATA *, void *), void *data)
 {
-    static __thread sqlite3_stmt *res = NULL;
+    sqlite3_stmt *res = NULL;
 
     if (unlikely(!host_uuid)) {
        internal_error(true, "Requesting context chart list without host_id");
        return;
     }
 
-    if (!PREPARE_COMPILED_STATEMENT(db_meta, CTX_GET_CHART_LIST, &res))
+    if (!PREPARE_STATEMENT(db_meta_thread ? db_meta_thread : db_meta, CTX_GET_CHART_LIST, &res))
         return;
 
     int param = 0;
@@ -111,21 +116,21 @@ void ctx_get_chart_list(nd_uuid_t *host_uuid, void (*dict_cb)(SQL_CHART_DATA *, 
 
 done:
     REPORT_BIND_FAIL(res, param);
-    SQLITE_RESET(res);
+    SQLITE_FINALIZE(res);
 }
 
 // Dimension list
-#define CTX_GET_DIMENSION_LIST  "SELECT d.dim_id, d.id, d.name, CASE WHEN INSTR(d.options,\"hidden\") > 0 THEN 1 ELSE 0 END " \
-    "FROM dimension d WHERE d.chart_id = @id AND d.dim_id IS NOT NULL ORDER BY d.rowid ASC"
-void ctx_get_dimension_list(nd_uuid_t *chart_uuid, void (*dict_cb)(SQL_DIMENSION_DATA *, void *), void *data)
+#define CTX_GET_DIMENSION_LIST  "SELECT d.dim_id, d.id, d.name, CASE WHEN INSTR(d.options,\"hidden\") > 0 THEN 1 ELSE 0 END, c.type||'.'||c.id, c.context " \
+    "FROM dimension d, chart c WHERE c.host_id = @host_id AND d.chart_id = c.chart_id AND d.dim_id IS NOT NULL ORDER BY d.rowid ASC"
+void ctx_get_dimension_list(nd_uuid_t *host_uuid, void (*dict_cb)(SQL_DIMENSION_DATA *, void *), void *data)
 {
-    static __thread sqlite3_stmt *res = NULL;
+    sqlite3_stmt *res = NULL;
 
-    if (!PREPARE_COMPILED_STATEMENT(db_meta, CTX_GET_DIMENSION_LIST, &res))
+    if (!PREPARE_STATEMENT(db_meta_thread ? db_meta_thread : db_meta, CTX_GET_DIMENSION_LIST, &res))
         return;
 
     int param = 0;
-    SQLITE_BIND_FAIL(done, sqlite3_bind_blob(res, ++param, chart_uuid, sizeof(*chart_uuid), SQLITE_STATIC));
+    SQLITE_BIND_FAIL(done, sqlite3_bind_blob(res, ++param, host_uuid, sizeof(*host_uuid), SQLITE_STATIC));
 
     SQL_DIMENSION_DATA dimension_data;
 
@@ -135,12 +140,14 @@ void ctx_get_dimension_list(nd_uuid_t *chart_uuid, void (*dict_cb)(SQL_DIMENSION
         dimension_data.id = (char *) sqlite3_column_text(res, 1);
         dimension_data.name = (char *) sqlite3_column_text(res, 2);
         dimension_data.hidden = sqlite3_column_int(res, 3);
+        dimension_data.chart_id = (char *) sqlite3_column_text(res, 4);
+        dimension_data.context = (char *) sqlite3_column_text(res, 5);
         dict_cb(&dimension_data, data);
     }
 
 done:
     REPORT_BIND_FAIL(res, param);
-    SQLITE_RESET(res);
+    SQLITE_FINALIZE(res);
 }
 
 // LABEL LIST
@@ -177,13 +184,12 @@ done:
 
 void ctx_get_context_list(nd_uuid_t *host_uuid, void (*dict_cb)(VERSIONED_CONTEXT_DATA *, void *), void *data)
 {
-
     if (unlikely(!host_uuid))
         return;
 
-    static __thread sqlite3_stmt *res = NULL;
+    sqlite3_stmt *res = NULL;
 
-    if (!PREPARE_COMPILED_STATEMENT(db_context_meta, CTX_GET_CONTEXT_LIST, &res))
+    if (!PREPARE_STATEMENT(db_context_thread ? db_context_thread : db_context_meta, CTX_GET_CONTEXT_LIST, &res))
         return;
 
     VERSIONED_CONTEXT_DATA context_data = {0};
@@ -208,7 +214,7 @@ void ctx_get_context_list(nd_uuid_t *host_uuid, void (*dict_cb)(VERSIONED_CONTEX
 
 done:
     REPORT_BIND_FAIL(res, param);
-    SQLITE_RESET(res);
+    SQLITE_FINALIZE(res);
 }
 
 
@@ -228,7 +234,7 @@ int ctx_store_context(nd_uuid_t *host_uuid, VERSIONED_CONTEXT_DATA *context_data
     if (unlikely(!host_uuid || !context_data || !context_data->id))
         return 0;
 
-    if (!PREPARE_STATEMENT(db_context_meta, CTX_STORE_CONTEXT, &res))
+    if (!PREPARE_STATEMENT(db_context_meta ? db_context_meta : db_meta, CTX_STORE_CONTEXT, &res))
         return 1;
 
     int param = 0;
@@ -257,7 +263,6 @@ done:
 }
 
 // Delete a context
-
 #define CTX_DELETE_CONTEXT "DELETE FROM context WHERE host_id = @host_id AND id = @context"
 int ctx_delete_context(nd_uuid_t *host_uuid, VERSIONED_CONTEXT_DATA *context_data)
 {
@@ -269,6 +274,8 @@ int ctx_delete_context(nd_uuid_t *host_uuid, VERSIONED_CONTEXT_DATA *context_dat
 
     if (!PREPARE_STATEMENT(db_context_meta, CTX_DELETE_CONTEXT, &res))
         return 1;
+
+    metadata_queue_ctx_host_cleanup(host_uuid, context_data->id);
 
     int param = 0;
     SQLITE_BIND_FAIL(done, sqlite3_bind_blob(res, ++param, host_uuid, sizeof(*host_uuid), SQLITE_STATIC));

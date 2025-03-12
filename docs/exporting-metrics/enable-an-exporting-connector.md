@@ -9,7 +9,7 @@ the OpenTSDB and Graphite connectors.
 >
 > When you enable the exporting engine and a connector, the Netdata Agent exports metrics _beginning from the time you
 > restart its process_, not the entire
-> [database of long-term metrics](/docs/netdata-agent/configuration/optimizing-metrics-database/change-metrics-storage.md).
+> [database of long-term metrics](/src/database/README.md).
 
 Once you understand how to enable a connector, you can apply that knowledge to any other connector.
 
@@ -19,7 +19,7 @@ Use `edit-config` from your [Netdata config directory](/docs/netdata-agent/confi
 
 Enable the exporting engine itself by setting `enabled` to `yes`:
 
-```conf
+```text
 [exporting:global]
     enabled = yes
 ```
@@ -30,7 +30,7 @@ Save the file but keep it open, as you will edit it again to enable specific con
 
 Use the following configuration as a starting point. Copy and paste it into `exporting.conf`.
 
-```conf
+```text
 [opentsdb:http:my_opentsdb_http_instance]
     enabled = yes
     destination = localhost:4242

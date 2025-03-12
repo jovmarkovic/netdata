@@ -5,7 +5,7 @@
 
 struct health_plugin_globals health_globals = {
     .initialization = {
-        .spinlock = NETDATA_SPINLOCK_INITIALIZER,
+        .spinlock = SPINLOCK_INITIALIZER,
         .done = false,
     },
     .config = {
@@ -14,7 +14,7 @@ struct health_plugin_globals health_globals = {
         .use_summary_for_notifications = true,
 
         .health_log_entries_max = HEALTH_LOG_ENTRIES_DEFAULT,
-        .health_log_history = HEALTH_LOG_HISTORY_DEFAULT,
+        .health_log_retention_s = HEALTH_LOG_RETENTION_DEFAULT,
 
         .default_warn_repeat_every = 0,
         .default_crit_repeat_every = 0,
@@ -36,54 +36,57 @@ void health_plugin_disable(void) {
 }
 
 
-static void health_load_config_defaults(void) {
+void health_load_config_defaults(void) {
+    static bool done = false;
+    if(done) return;
+    done = true;
+
     char filename[FILENAME_MAX + 1];
 
     health_globals.config.enabled =
-        config_get_boolean(CONFIG_SECTION_HEALTH,
+        inicfg_get_boolean(&netdata_config, CONFIG_SECTION_HEALTH,
                            "enabled",
                            health_globals.config.enabled);
 
     health_globals.config.stock_enabled =
-        config_get_boolean(CONFIG_SECTION_HEALTH,
+        inicfg_get_boolean(&netdata_config, CONFIG_SECTION_HEALTH,
                            "enable stock health configuration",
                            health_globals.config.stock_enabled);
 
     health_globals.config.use_summary_for_notifications =
-        config_get_boolean(CONFIG_SECTION_HEALTH,
+        inicfg_get_boolean(&netdata_config, CONFIG_SECTION_HEALTH,
                            "use summary for notifications",
                            health_globals.config.use_summary_for_notifications);
 
     health_globals.config.default_warn_repeat_every =
-        config_get_duration(CONFIG_SECTION_HEALTH, "default repeat warning", "never");
+        inicfg_get_duration_seconds(&netdata_config, CONFIG_SECTION_HEALTH, "default repeat warning", 0);
 
     health_globals.config.default_crit_repeat_every =
-        config_get_duration(CONFIG_SECTION_HEALTH, "default repeat critical", "never");
+        inicfg_get_duration_seconds(&netdata_config, CONFIG_SECTION_HEALTH, "default repeat critical", 0);
 
     health_globals.config.health_log_entries_max =
-        config_get_number(CONFIG_SECTION_HEALTH, "in memory max health log entries",
+        inicfg_get_number(&netdata_config, CONFIG_SECTION_HEALTH, "in memory max health log entries",
                           health_globals.config.health_log_entries_max);
 
-    health_globals.config.health_log_history =
-        config_get_number(CONFIG_SECTION_HEALTH, "health log history", HEALTH_LOG_DEFAULT_HISTORY);
+    health_globals.config.health_log_retention_s =
+        inicfg_get_duration_seconds(&netdata_config, CONFIG_SECTION_HEALTH, "health log retention", HEALTH_LOG_RETENTION_DEFAULT);
 
     snprintfz(filename, FILENAME_MAX, "%s/alarm-notify.sh", netdata_configured_primary_plugins_dir);
     health_globals.config.default_exec =
-        string_strdupz(config_get(CONFIG_SECTION_HEALTH, "script to execute on alarm", filename));
+        string_strdupz(inicfg_get(&netdata_config, CONFIG_SECTION_HEALTH, "script to execute on alarm", filename));
 
     health_globals.config.enabled_alerts =
-        simple_pattern_create(config_get(CONFIG_SECTION_HEALTH, "enabled alarms", "*"),
+        simple_pattern_create(inicfg_get(&netdata_config, CONFIG_SECTION_HEALTH, "enabled alarms", "*"),
                               NULL, SIMPLE_PATTERN_EXACT, true);
 
     health_globals.config.run_at_least_every_seconds =
-        (int)config_get_number(CONFIG_SECTION_HEALTH,
-                               "run at least every seconds",
-                               health_globals.config.run_at_least_every_seconds);
+        (int)inicfg_get_duration_seconds(&netdata_config, CONFIG_SECTION_HEALTH, "run at least every",
+                                         health_globals.config.run_at_least_every_seconds);
 
     health_globals.config.postpone_alarms_during_hibernation_for_seconds =
-        config_get_number(CONFIG_SECTION_HEALTH,
-                          "postpone alarms during hibernation for seconds",
-                          health_globals.config.postpone_alarms_during_hibernation_for_seconds);
+        inicfg_get_duration_seconds(&netdata_config, CONFIG_SECTION_HEALTH,
+                                    "postpone alarms during hibernation for",
+                                    health_globals.config.postpone_alarms_during_hibernation_for_seconds);
 
     health_globals.config.default_recipient =
         string_strdupz("root");
@@ -101,7 +104,7 @@ static void health_load_config_defaults(void) {
                HEALTH_LOG_ENTRIES_MIN);
 
         health_globals.config.health_log_entries_max = HEALTH_LOG_ENTRIES_MIN;
-        config_set_number(CONFIG_SECTION_HEALTH, "in memory max health log entries",
+        inicfg_set_number(&netdata_config, CONFIG_SECTION_HEALTH, "in memory max health log entries",
                           (long)health_globals.config.health_log_entries_max);
     }
     else if(health_globals.config.health_log_entries_max > HEALTH_LOG_ENTRIES_MAX) {
@@ -111,34 +114,34 @@ static void health_load_config_defaults(void) {
                HEALTH_LOG_ENTRIES_MAX);
 
         health_globals.config.health_log_entries_max = HEALTH_LOG_ENTRIES_MAX;
-        config_set_number(CONFIG_SECTION_HEALTH, "in memory max health log entries",
+        inicfg_set_number(&netdata_config, CONFIG_SECTION_HEALTH, "in memory max health log entries",
                           (long)health_globals.config.health_log_entries_max);
     }
 
-    if (health_globals.config.health_log_history < HEALTH_LOG_MINIMUM_HISTORY) {
+    if (health_globals.config.health_log_retention_s < HEALTH_LOG_MINIMUM_HISTORY) {
         nd_log(NDLS_DAEMON, NDLP_WARNING,
-               "Health configuration has invalid health log history %u. Using minimum %d",
-               health_globals.config.health_log_history, HEALTH_LOG_MINIMUM_HISTORY);
+               "Health configuration has invalid health log retention %u. Using minimum %d",
+               health_globals.config.health_log_retention_s, HEALTH_LOG_MINIMUM_HISTORY);
 
-        health_globals.config.health_log_history = HEALTH_LOG_MINIMUM_HISTORY;
-        config_set_number(CONFIG_SECTION_HEALTH, "health log history", health_globals.config.health_log_history);
+        health_globals.config.health_log_retention_s = HEALTH_LOG_MINIMUM_HISTORY;
+        inicfg_set_duration_seconds(&netdata_config, CONFIG_SECTION_HEALTH, "health log retention", health_globals.config.health_log_retention_s);
     }
 
     nd_log(NDLS_DAEMON, NDLP_DEBUG,
            "Health log history is set to %u seconds (%u days)",
-           health_globals.config.health_log_history, health_globals.config.health_log_history / 86400);
+           health_globals.config.health_log_retention_s, health_globals.config.health_log_retention_s / 86400);
 }
 
-inline char *health_user_config_dir(void) {
+inline const char *health_user_config_dir(void) {
     char buffer[FILENAME_MAX + 1];
     snprintfz(buffer, FILENAME_MAX, "%s/health.d", netdata_configured_user_config_dir);
-    return config_get(CONFIG_SECTION_DIRECTORIES, "health config", buffer);
+    return inicfg_get(&netdata_config, CONFIG_SECTION_DIRECTORIES, "health config", buffer);
 }
 
-inline char *health_stock_config_dir(void) {
+inline const char *health_stock_config_dir(void) {
     char buffer[FILENAME_MAX + 1];
     snprintfz(buffer, FILENAME_MAX, "%s/health.d", netdata_configured_stock_config_dir);
-    return config_get(CONFIG_SECTION_DIRECTORIES, "stock health config", buffer);
+    return inicfg_get(&netdata_config, CONFIG_SECTION_DIRECTORIES, "stock health config", buffer);
 }
 
 void health_plugin_init(void) {

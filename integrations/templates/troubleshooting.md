@@ -4,6 +4,10 @@
 
 ### Debug Mode
 
+[% if entry.meta.plugin_name == 'go.d.plugin' %]
+**Important**: Debug mode is not supported for data collection jobs created via the UI using the Dyncfg feature.
+[% endif %]
+
 To troubleshoot issues with the `[[ entry.meta.module_name ]]` collector, run the `[[ entry.meta.plugin_name ]]` with the debug option enabled. The output
 should give you clues as to why the collector isn't working.
 
@@ -81,13 +85,12 @@ docker logs netdata 2>&1 | grep [[ entry.meta.module_name ]]
 
 [% endif %]
 [% endif %]
-[% elif entry.integration_type == 'notification' %]
-[% if 'cloud-notifications' in entry._src_path|string %]
+[% elif entry.integration_type == 'cloud_notification' %]
 [% if entry.troubleshooting.problems.list %]
 ## Troubleshooting
 
 [% endif %]
-[% else %]
+[% elif entry.integration_type == 'agent_notification' %]
 ## Troubleshooting
 
 ### Test Notification
@@ -110,7 +113,6 @@ export NETDATA_ALARM_NOTIFY_DEBUG=1
 
 Note that this will test _all_ alert mechanisms for the selected role.
 
-[% endif %]
 [% elif entry.integration_type == 'exporter' %]
 [% if entry.troubleshooting.problems.list %]
 ## Troubleshooting

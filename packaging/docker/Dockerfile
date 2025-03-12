@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# author  : paulfantom
 
 # This image contains preinstalled dependencies
 # hadolint ignore=DL3007
-FROM netdata/builder:v2 as builder
+FROM netdata/builder:v2 AS builder
 
 # One of 'nightly' or 'stable'
 ARG RELEASE_CHANNEL=nightly
@@ -28,6 +27,7 @@ WORKDIR /opt/netdata.git
 RUN chmod +x netdata-installer.sh && \
    cp -rp /deps/* /usr/local/ && \
    /bin/echo -e "INSTALL_TYPE='oci'\nPREBUILT_ARCH='$(uname -m)'" > ./system/.install-type && \
+   NETDATA_CMAKE_OPTIONS="-DENABLE_LIBUNWIND=On" \
    CFLAGS="$(packaging/docker/gen-cflags.sh)" LDFLAGS="-Wl,--gc-sections" ./netdata-installer.sh --dont-wait --dont-start-it --use-system-protobuf \
    ${EXTRA_INSTALL_OPTS} --disable-ebpf --install-no-prefix / "$([ "$RELEASE_CHANNEL" = stable ] && echo --stable-channel)"
 
@@ -47,7 +47,6 @@ RUN mkdir -p /app/usr/sbin/ \
     mv /var/lib/netdata     /app/var/lib/ && \
     mv /etc/netdata         /app/etc/ && \
     mv /usr/sbin/netdata    /app/usr/sbin/ && \
-    mv /usr/sbin/netdata-claim.sh    /app/usr/sbin/ && \
     mv /usr/sbin/netdatacli    /app/usr/sbin/ && \
     mv /usr/sbin/systemd-cat-native /app/usr/sbin/ && \
     mv packaging/docker/run.sh        /app/usr/sbin/ && \
@@ -60,7 +59,7 @@ RUN mkdir -p /app/usr/sbin/ \
 #####################################################################
 # This image contains preinstalled dependencies
 # hadolint ignore=DL3007
-FROM netdata/base:v2 as base
+FROM netdata/base:v2 AS base
 
 LABEL org.opencontainers.image.authors="Netdatabot <bot@netdata.cloud>"
 LABEL org.opencontainers.image.url="https://netdata.cloud"
@@ -77,11 +76,11 @@ ONBUILD ENV NETDATA_OFFICIAL_IMAGE=false
 
 ARG NETDATA_UID=201
 ARG NETDATA_GID=201
-ENV DOCKER_GRP netdata
-ENV DOCKER_USR netdata
+ENV DOCKER_GRP=netdata
+ENV DOCKER_USR=netdata
 # If DISABLE_TELEMETRY is set, it will disable anonymous stats collection and reporting
 #ENV DISABLE_TELEMETRY=1
-ENV NETDATA_LISTENER_PORT 19999
+ENV NETDATA_LISTENER_PORT=19999
 EXPOSE $NETDATA_LISTENER_PORT
 
 ENV NETDATA_EXTRA_DEB_PACKAGES=""
@@ -93,7 +92,6 @@ RUN mkdir -p /opt/src /var/log/netdata && \
     ln -sf /dev/stderr /var/log/netdata/error.log && \
     ln -sf /dev/stderr /var/log/netdata/daemon.log && \
     ln -sf /dev/stdout /var/log/netdata/collector.log && \
-    ln -sf /dev/stdout /var/log/netdata/fluentbit.log && \
     ln -sf /dev/stdout /var/log/netdata/health.log
 
 COPY --from=builder /app /

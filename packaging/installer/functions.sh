@@ -297,10 +297,30 @@ prepare_cmake_options() {
     NETDATA_CMAKE_OPTIONS="${NETDATA_CMAKE_OPTIONS} -DUSE_CXX_11=On"
   fi
 
+  if [ -n "${NETDATA_ENABLE_LTO}" ]; then
+    if [ "${NETDATA_ENABLE_LTO}" -eq 1 ]; then
+      NETDATA_CMAKE_OPTIONS="${NETDATA_CMAKE_OPTIONS} -DDISABLE_LTO=Off"
+    else
+      NETDATA_CMAKE_OPTIONS="${NETDATA_CMAKE_OPTIONS} -DDISABLE_LTO=On"
+    fi
+  fi
+
   if [ "${ENABLE_GO:-1}" -eq 1 ]; then
     enable_feature PLUGIN_GO 1
   else
     enable_feature PLUGIN_GO 0
+  fi
+
+  if [ "${ENABLE_PYTHON:-1}" -eq 1 ]; then
+    enable_feature PLUGIN_PYTHON 1
+  else
+    enable_feature PLUGIN_PYTHON 0
+  fi
+
+  if [ "${ENABLE_CHARTS:-1}" -eq 1 ]; then
+    enable_feature PLUGIN_CHARTS 1
+  else
+    enable_feature PLUGIN_CHARTS 0
   fi
 
   if [ "${USE_SYSTEM_PROTOBUF:-0}" -eq 1 ]; then
@@ -340,14 +360,10 @@ prepare_cmake_options() {
   enable_feature PLUGIN_LOCAL_LISTENERS "${IS_LINUX}"
   enable_feature PLUGIN_NETWORK_VIEWER "${IS_LINUX}"
   enable_feature PLUGIN_EBPF "${ENABLE_EBPF:-0}"
-  enable_feature PLUGIN_LOGS_MANAGEMENT "${ENABLE_LOGS_MANAGEMENT:-0}"
-  enable_feature LOGS_MANAGEMENT_TESTS "${ENABLE_LOGS_MANAGEMENT_TESTS:-0}"
 
-  enable_feature ACLK "${ENABLE_CLOUD:-1}"
-  enable_feature CLOUD "${ENABLE_CLOUD:-1}"
   enable_feature BUNDLED_JSONC "${NETDATA_BUILD_JSON_C:-0}"
   enable_feature DBENGINE "${ENABLE_DBENGINE:-1}"
-  enable_feature H2O "${ENABLE_H2O:-1}"
+  enable_feature H2O "${ENABLE_H2O:-0}"
   enable_feature ML "${NETDATA_ENABLE_ML:-1}"
   enable_feature PLUGIN_APPS "${ENABLE_APPS:-1}"
 
@@ -589,16 +605,23 @@ issystemd() {
   ns=''
   systemctl=''
 
-  # if the directory /lib/systemd/system OR /usr/lib/systemd/system (SLES 12.x) does not exit, it is not systemd
-  if [ ! -d /lib/systemd/system ] && [ ! -d /usr/lib/systemd/system ]; then
-    return 1
-  fi
-
   # if there is no systemctl command, it is not systemd
   systemctl=$(command -v systemctl 2> /dev/null)
   if [ -z "${systemctl}" ] || [ ! -x "${systemctl}" ]; then
     return 1
   fi
+
+  # Check the output of systemctl is-system-running.
+  # If this reports 'offline', it’s not systemd. If it reports 'unknown'
+  # or nothing at all (which indicates the command is not supported), it
+  # may or may not be systemd, so continue to other checks. If it reports
+  # anything else, it is systemd.
+  case "$(systemctl is-system-running)" in
+    offline) return 1 ;;
+    unknown) : ;;
+    "") : ;;
+    *) return 0 ;;
+  esac
 
   # if pid 1 is systemd, it is systemd
   [ "$(basename "$(readlink /proc/1/exe)" 2> /dev/null)" = "systemd" ] && return 0
@@ -621,13 +644,22 @@ issystemd() {
 }
 
 get_systemd_service_dir() {
-  if [ -w "/lib/systemd/system" ]; then
-    echo "/lib/systemd/system"
-  elif [ -w "/usr/lib/systemd/system" ]; then
-    echo "/usr/lib/systemd/system"
-  elif [ -w "/etc/systemd/system" ]; then
-    echo "/etc/systemd/system"
+  unit_paths="$(systemctl show -p UnitPath | cut -f 2- -d '=' | tr ' ' '\n')"
+
+  if [ -n "${unit_paths}" ]; then
+    lib_paths="$(echo "${unit_paths}" | grep -vE '^/(run|etc)' | awk '{line[NR] = $0} END {for (i = NR; i > 0; i--) print line[i]}')"
+    etc_paths="$(echo "${unit_paths}" | grep -E '^/etc' | grep -vE '(attached|control)$')"
+  else
+    lib_paths="/usr/lib/systemd/system /lib/systemd/system /usr/local/lib/systemd/system"
+    etc_paths="/etc/systemd/system"
   fi
+
+  for path in ${lib_paths} ${etc_paths}; do
+    if [ -d "${path}" ] && [ -w "${path}" ]; then
+      echo "${path}"
+      return 0
+    fi
+  done
 }
 
 run_install_service_script() {
@@ -787,35 +819,43 @@ stop_all_netdata() {
     if [ -n "${NETDATA_STOP_CMD}" ]; then
       if ${NETDATA_STOP_CMD}; then
         stop_success=1
-        sleep 5
       fi
     elif issystemd; then
       if systemctl stop netdata; then
         stop_success=1
-        sleep 5
       fi
     elif [ "${uname}" = "Darwin" ]; then
       if launchctl stop netdata; then
         stop_success=1
-        sleep 5
       fi
     elif [ "${uname}" = "FreeBSD" ]; then
       if /etc/rc.d/netdata stop; then
         stop_success=1
-        sleep 5
       fi
     else
       if service netdata stop; then
         stop_success=1
-        sleep 5
       fi
+    fi
+  fi
+
+  if [ "${stop_success}" = "1" ]; then
+    sleep 30
+
+    if [ -n "$(netdata_pids)" ]; then
+      stop_success=0
     fi
   fi
 
   if [ "$stop_success" = "0" ]; then
     if [ -n "$(netdata_pids)" ] && [ -n "$(command -v netdatacli)" ]; then
-      netdatacli shutdown-agent
-      sleep 20
+      for p in /tmp/netdata-ipc /run/netdata/netdata.pipe /var/run/netdata/netdata.pipe /tmp/netdata/netdata.pipe; do
+        if [ -f "${p}" ]; then
+          NETDATA_PIPENAME="${p}" netdatacli shutdown-agent && break
+        fi
+      done
+
+      sleep 30
     fi
 
     for p in $(netdata_pids); do

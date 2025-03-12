@@ -78,7 +78,6 @@ static void freebsd_main_cleanup(void *pptr)
 
     static_thread->enabled = NETDATA_MAIN_THREAD_EXITING;
 
-    collector_info("cleaning up...");
     worker_unregister();
 
     static_thread->enabled = NETDATA_MAIN_THREAD_EXITED;
@@ -92,27 +91,26 @@ void *freebsd_main(void *ptr)
 
     // initialize FreeBSD plugin
     if (freebsd_plugin_init())
-        netdata_cleanup_and_exit(1, NULL, NULL, NULL);
+        netdata_cleanup_and_exit(EXIT_REASON_FATAL, NULL, NULL, NULL);
 
     // check the enabled status for each module
     int i;
     for (i = 0; freebsd_modules[i].name; i++) {
         struct freebsd_module *pm = &freebsd_modules[i];
 
-        pm->enabled = config_get_boolean("plugin:freebsd", pm->name, pm->enabled);
+        pm->enabled = inicfg_get_boolean(&netdata_config, "plugin:freebsd", pm->name, pm->enabled);
         pm->rd = NULL;
 
         worker_register_job_name(i, freebsd_modules[i].dim);
     }
 
-    usec_t step = localhost->rrd_update_every * USEC_PER_SEC;
     heartbeat_t hb;
-    heartbeat_init(&hb);
+    heartbeat_init(&hb, localhost->rrd_update_every * USEC_PER_SEC);
 
     while(service_running(SERVICE_COLLECTORS))  {
         worker_is_idle();
 
-        usec_t hb_dt = heartbeat_next(&hb, step);
+        usec_t hb_dt = heartbeat_next(&hb);
 
        if (!service_running(SERVICE_COLLECTORS))
             break;

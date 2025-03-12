@@ -12,7 +12,7 @@
 
 #define READ_RETRY_PERIOD 60 // seconds
 
-time_t double_linked_device_collect_delay_secs = 120;
+time_t virtual_device_collect_delay_secs = 40;
 
 enum {
     NETDEV_DUPLEX_UNKNOWN,
@@ -92,7 +92,6 @@ static struct netdev {
     int enabled;
     bool updated;
     bool function_ready;
-    bool double_linked; // iflink != ifindex
 
     time_t discover_time;
     
@@ -252,6 +251,8 @@ static struct netdev {
 // ----------------------------------------------------------------------------
 
 static void netdev_charts_release(struct netdev *d) {
+    rrdvar_chart_variable_release(d->st_bandwidth, d->chart_var_speed);
+
     if(d->st_bandwidth) rrdset_is_obsolete___safe_from_collector_thread(d->st_bandwidth);
     if(d->st_packets) rrdset_is_obsolete___safe_from_collector_thread(d->st_packets);
     if(d->st_errors) rrdset_is_obsolete___safe_from_collector_thread(d->st_errors);
@@ -473,7 +474,7 @@ static void netdev_rename_this_device(struct netdev *d) {
 
 // ----------------------------------------------------------------------------
 
-int netdev_function_net_interfaces(BUFFER *wb, const char *function __maybe_unused) {
+static int netdev_function_net_interfaces(BUFFER *wb, const char *function __maybe_unused, BUFFER *payload __maybe_unused, const char *source __maybe_unused) {
     buffer_flush(wb);
     wb->content_type = CT_APPLICATION_JSON;
     buffer_json_initialize(wb, "\"", "\"", 0, true, BUFFER_JSON_OPTIONS_DEFAULT);
@@ -809,7 +810,6 @@ static struct netdev *get_netdev(const char *name) {
     d->len = strlen(d->name);
     d->chart_labels = rrdlabels_create();
     d->function_ready = false;
-    d->double_linked = false;
 
     d->chart_type_net_bytes      = strdupz("net");
     d->chart_type_net_compressed = strdupz("net_compressed");
@@ -858,25 +858,10 @@ static struct netdev *get_netdev(const char *name) {
     return d;
 }
 
-static bool is_iface_double_linked(struct netdev *d) {
-    char filename[FILENAME_MAX + 1];
-    unsigned long long iflink = 0;
-    unsigned long long ifindex = 0;
-
-    snprintfz(filename, FILENAME_MAX, "%s/sys/class/net/%s/iflink", netdata_configured_host_prefix, d->name);
-    if (read_single_number_file(filename, &iflink))
-        return false;
-
-    snprintfz(filename, FILENAME_MAX, "%s/sys/class/net/%s/ifindex", netdata_configured_host_prefix, d->name);
-    if (read_single_number_file(filename, &ifindex))
-        return false;
-
-    return iflink != ifindex;
-}
-
 int do_proc_net_dev(int update_every, usec_t dt) {
     (void)dt;
     static SIMPLE_PATTERN *disabled_list = NULL;
+    static SIMPLE_PATTERN *virtual_iface_no_delay = NULL;
     static procfile *ff = NULL;
     static int enable_new_interfaces = -1;
     static int do_bandwidth = -1, do_packets = -1, do_errors = -1, do_drops = -1, do_fifo = -1, do_compressed = -1,
@@ -918,11 +903,29 @@ int do_proc_net_dev(int update_every, usec_t dt) {
             do_carrier = do_mtu = CONFIG_BOOLEAN_YES;
 
         // only CSLIP, PPP
-        do_compressed   = config_get_boolean_ondemand(CONFIG_SECTION_PLUGIN_PROC_NETDEV, "compressed packets for all interfaces", CONFIG_BOOLEAN_NO);
+        do_compressed   = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_NETDEV, "compressed packets for all interfaces", CONFIG_BOOLEAN_NO);
 
         disabled_list = simple_pattern_create(
-                config_get(CONFIG_SECTION_PLUGIN_PROC_NETDEV, "disable by default interfaces matching",
-                           "lo fireqos* *-ifb fwpr* fwbr* fwln*"), NULL, SIMPLE_PATTERN_EXACT, true);
+            inicfg_get(&netdata_config, 
+                CONFIG_SECTION_PLUGIN_PROC_NETDEV,
+                "disable by default interfaces matching",
+                "lo fireqos* *-ifb fwpr* fwbr* fwln* ifb4*"),
+            NULL,
+            SIMPLE_PATTERN_EXACT,
+            true);
+
+        virtual_iface_no_delay = simple_pattern_create(
+            " bond* "
+            " vlan* "
+            " vmbr* "
+            " wg* "
+            " vpn* "
+            " tun* "
+            " gre* "
+            " docker* ",
+            NULL,
+            SIMPLE_PATTERN_EXACT,
+            true);
 
         netdev_renames_init();
     }
@@ -1001,15 +1004,13 @@ int do_proc_net_dev(int update_every, usec_t dt) {
 
             snprintfz(buf, FILENAME_MAX, "plugin:proc:/proc/net/dev:%s", d->name);
 
-            if (config_exists(buf, "enabled"))
-                d->enabled = config_get_boolean_ondemand(buf, "enabled", d->enabled);
-            if (config_exists(buf, "virtual"))
-                d->virtual = config_get_boolean(buf, "virtual", d->virtual);
+            if (inicfg_exists(&netdata_config, buf, "enabled"))
+                d->enabled = inicfg_get_boolean_ondemand(&netdata_config, buf, "enabled", d->enabled);
+            if (inicfg_exists(&netdata_config, buf, "virtual"))
+                d->virtual = inicfg_get_boolean(&netdata_config, buf, "virtual", d->virtual);
 
             if(d->enabled == CONFIG_BOOLEAN_NO)
                 continue;
-
-            d->double_linked = is_iface_double_linked(d);
 
             d->do_bandwidth = do_bandwidth;
             d->do_packets = do_packets;
@@ -1024,30 +1025,30 @@ int do_proc_net_dev(int update_every, usec_t dt) {
             d->do_carrier = do_carrier;
             d->do_mtu = do_mtu;
 
-            if (config_exists(buf, "bandwidth"))
-                d->do_bandwidth = config_get_boolean_ondemand(buf, "bandwidth", do_bandwidth);
-            if (config_exists(buf, "packets"))
-                d->do_packets = config_get_boolean_ondemand(buf, "packets", do_packets);
-            if (config_exists(buf, "errors"))
-                d->do_errors = config_get_boolean_ondemand(buf, "errors", do_errors);
-            if (config_exists(buf, "drops"))
-                d->do_drops = config_get_boolean_ondemand(buf, "drops", do_drops);
-            if (config_exists(buf, "fifo"))
-                d->do_fifo = config_get_boolean_ondemand(buf, "fifo", do_fifo);
-            if (config_exists(buf, "compressed"))
-                d->do_compressed = config_get_boolean_ondemand(buf, "compressed", do_compressed);
-            if (config_exists(buf, "events"))
-                d->do_events = config_get_boolean_ondemand(buf, "events", do_events);
-            if (config_exists(buf, "speed"))
-                d->do_speed = config_get_boolean_ondemand(buf, "speed", do_speed);
-            if (config_exists(buf, "duplex"))
-                d->do_duplex = config_get_boolean_ondemand(buf, "duplex", do_duplex);
-            if (config_exists(buf, "operstate"))
-                d->do_operstate = config_get_boolean_ondemand(buf, "operstate", do_operstate);
-            if (config_exists(buf, "carrier"))
-                d->do_carrier = config_get_boolean_ondemand(buf, "carrier", do_carrier);
-            if (config_exists(buf, "mtu"))
-                d->do_mtu = config_get_boolean_ondemand(buf, "mtu", do_mtu);
+            if (inicfg_exists(&netdata_config, buf, "bandwidth"))
+                d->do_bandwidth = inicfg_get_boolean_ondemand(&netdata_config, buf, "bandwidth", do_bandwidth);
+            if (inicfg_exists(&netdata_config, buf, "packets"))
+                d->do_packets = inicfg_get_boolean_ondemand(&netdata_config, buf, "packets", do_packets);
+            if (inicfg_exists(&netdata_config, buf, "errors"))
+                d->do_errors = inicfg_get_boolean_ondemand(&netdata_config, buf, "errors", do_errors);
+            if (inicfg_exists(&netdata_config, buf, "drops"))
+                d->do_drops = inicfg_get_boolean_ondemand(&netdata_config, buf, "drops", do_drops);
+            if (inicfg_exists(&netdata_config, buf, "fifo"))
+                d->do_fifo = inicfg_get_boolean_ondemand(&netdata_config, buf, "fifo", do_fifo);
+            if (inicfg_exists(&netdata_config, buf, "compressed"))
+                d->do_compressed = inicfg_get_boolean_ondemand(&netdata_config, buf, "compressed", do_compressed);
+            if (inicfg_exists(&netdata_config, buf, "events"))
+                d->do_events = inicfg_get_boolean_ondemand(&netdata_config, buf, "events", do_events);
+            if (inicfg_exists(&netdata_config, buf, "speed"))
+                d->do_speed = inicfg_get_boolean_ondemand(&netdata_config, buf, "speed", do_speed);
+            if (inicfg_exists(&netdata_config, buf, "duplex"))
+                d->do_duplex = inicfg_get_boolean_ondemand(&netdata_config, buf, "duplex", do_duplex);
+            if (inicfg_exists(&netdata_config, buf, "operstate"))
+                d->do_operstate = inicfg_get_boolean_ondemand(&netdata_config, buf, "operstate", do_operstate);
+            if (inicfg_exists(&netdata_config, buf, "carrier"))
+                d->do_carrier = inicfg_get_boolean_ondemand(&netdata_config, buf, "carrier", do_carrier);
+            if (inicfg_exists(&netdata_config, buf, "mtu"))
+                d->do_mtu = inicfg_get_boolean_ondemand(&netdata_config, buf, "mtu", do_mtu);
         }
 
         if(unlikely(!d->enabled))
@@ -1060,8 +1061,10 @@ int do_proc_net_dev(int update_every, usec_t dt) {
         // This is necessary to prevent the creation of charts for virtual interfaces that will later be 
         // recreated as container interfaces (create container) or
         // rediscovered and recreated only to be deleted almost immediately (stop/remove container)
-        if (d->double_linked && d->virtual && (now - d->discover_time < double_linked_device_collect_delay_secs))
+        if (d->virtual && !simple_pattern_matches(virtual_iface_no_delay, d->name) &&
+            (now - d->discover_time < virtual_device_collect_delay_secs)) {
             continue;
+        }
 
         if(likely(d->do_bandwidth != CONFIG_BOOLEAN_NO || !d->virtual)) {
             d->rbytes      = str2kernel_uint_t(procfile_lineword(ff, l, 1));
@@ -1278,8 +1281,6 @@ int do_proc_net_dev(int update_every, usec_t dt) {
                                         , RRDSET_TYPE_LINE
                                 );
 
-                                rrdset_flag_set(d->st_speed, RRDSET_FLAG_DETAIL);
-
                                 rrdset_update_rrdlabels(d->st_speed, d->chart_labels);
 
                                 d->rd_speed = rrddim_add(d->st_speed, "speed",  NULL,  1, 1, RRD_ALGORITHM_ABSOLUTE);
@@ -1318,8 +1319,6 @@ int do_proc_net_dev(int update_every, usec_t dt) {
                         , RRDSET_TYPE_LINE
                 );
 
-                rrdset_flag_set(d->st_duplex, RRDSET_FLAG_DETAIL);
-
                 rrdset_update_rrdlabels(d->st_duplex, d->chart_labels);
 
                 d->rd_duplex_full = rrddim_add(d->st_duplex, "full", NULL, 1, 1, RRD_ALGORITHM_ABSOLUTE);
@@ -1349,8 +1348,6 @@ int do_proc_net_dev(int update_every, usec_t dt) {
                         , update_every
                         , RRDSET_TYPE_LINE
                 );
-
-                rrdset_flag_set(d->st_operstate, RRDSET_FLAG_DETAIL);
 
                 rrdset_update_rrdlabels(d->st_operstate, d->chart_labels);
 
@@ -1390,8 +1387,6 @@ int do_proc_net_dev(int update_every, usec_t dt) {
                         , RRDSET_TYPE_LINE
                 );
 
-                rrdset_flag_set(d->st_carrier, RRDSET_FLAG_DETAIL);
-
                 rrdset_update_rrdlabels(d->st_carrier, d->chart_labels);
 
                 d->rd_carrier_up = rrddim_add(d->st_carrier, "up",  NULL,  1, 1, RRD_ALGORITHM_ABSOLUTE);
@@ -1420,8 +1415,6 @@ int do_proc_net_dev(int update_every, usec_t dt) {
                         , RRDSET_TYPE_LINE
                 );
 
-                rrdset_flag_set(d->st_mtu, RRDSET_FLAG_DETAIL);
-
                 rrdset_update_rrdlabels(d->st_mtu, d->chart_labels);
 
                 d->rd_mtu = rrddim_add(d->st_mtu, "mtu",  NULL,  1, 1, RRD_ALGORITHM_ABSOLUTE);
@@ -1448,8 +1441,6 @@ int do_proc_net_dev(int update_every, usec_t dt) {
                         , update_every
                         , RRDSET_TYPE_LINE
                 );
-
-                rrdset_flag_set(d->st_packets, RRDSET_FLAG_DETAIL);
 
                 rrdset_update_rrdlabels(d->st_packets, d->chart_labels);
 
@@ -1490,8 +1481,6 @@ int do_proc_net_dev(int update_every, usec_t dt) {
                         , RRDSET_TYPE_LINE
                 );
 
-                rrdset_flag_set(d->st_errors, RRDSET_FLAG_DETAIL);
-
                 rrdset_update_rrdlabels(d->st_errors, d->chart_labels);
 
                 d->rd_rerrors = rrddim_add(d->st_errors, "inbound",  NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
@@ -1528,8 +1517,6 @@ int do_proc_net_dev(int update_every, usec_t dt) {
                         , update_every
                         , RRDSET_TYPE_LINE
                 );
-
-                rrdset_flag_set(d->st_drops, RRDSET_FLAG_DETAIL);
 
                 rrdset_update_rrdlabels(d->st_drops, d->chart_labels);
 
@@ -1568,8 +1555,6 @@ int do_proc_net_dev(int update_every, usec_t dt) {
                         , RRDSET_TYPE_LINE
                 );
 
-                rrdset_flag_set(d->st_fifo, RRDSET_FLAG_DETAIL);
-
                 rrdset_update_rrdlabels(d->st_fifo, d->chart_labels);
 
                 d->rd_rfifo = rrddim_add(d->st_fifo, "receive",  NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
@@ -1607,8 +1592,6 @@ int do_proc_net_dev(int update_every, usec_t dt) {
                         , RRDSET_TYPE_LINE
                 );
 
-                rrdset_flag_set(d->st_compressed, RRDSET_FLAG_DETAIL);
-
                 rrdset_update_rrdlabels(d->st_compressed, d->chart_labels);
 
                 d->rd_rcompressed = rrddim_add(d->st_compressed, "received", NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
@@ -1645,8 +1628,6 @@ int do_proc_net_dev(int update_every, usec_t dt) {
                         , update_every
                         , RRDSET_TYPE_LINE
                 );
-
-                rrdset_flag_set(d->st_events, RRDSET_FLAG_DETAIL);
 
                 rrdset_update_rrdlabels(d->st_events, d->chart_labels);
 
@@ -1704,8 +1685,6 @@ static void netdev_main_cleanup(void *pptr) {
     if(CLEANUP_FUNCTION_GET_PTR(pptr) != (void *)0x01)
         return;
 
-    collector_info("cleaning up...");
-
     worker_unregister();
 }
 
@@ -1717,20 +1696,20 @@ void *netdev_main(void *ptr_is_null __maybe_unused)
     worker_register_job_name(0, "netdev");
 
     if (getenv("KUBERNETES_SERVICE_HOST") != NULL && getenv("KUBERNETES_SERVICE_PORT") != NULL)
-        double_linked_device_collect_delay_secs = 300;
+        virtual_device_collect_delay_secs = 300;
 
     rrd_function_add_inline(localhost, NULL, "network-interfaces", 10,
-                            RRDFUNCTIONS_PRIORITY_DEFAULT, RRDFUNCTIONS_NETDEV_HELP,
+                            RRDFUNCTIONS_PRIORITY_DEFAULT, RRDFUNCTIONS_VERSION_DEFAULT,
+                            RRDFUNCTIONS_NETDEV_HELP,
                             "top", HTTP_ACCESS_ANONYMOUS_DATA,
                             netdev_function_net_interfaces);
 
-    usec_t step = localhost->rrd_update_every * USEC_PER_SEC;
     heartbeat_t hb;
-    heartbeat_init(&hb);
+    heartbeat_init(&hb, localhost->rrd_update_every * USEC_PER_SEC);
 
     while (service_running(SERVICE_COLLECTORS)) {
         worker_is_idle();
-        usec_t hb_dt = heartbeat_next(&hb, step);
+        usec_t hb_dt = heartbeat_next(&hb);
 
         if (unlikely(!service_running(SERVICE_COLLECTORS)))
             break;

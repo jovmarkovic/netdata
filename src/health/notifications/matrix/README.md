@@ -39,8 +39,8 @@ Send notifications to Matrix network rooms using Netdata's Agent alert notificat
 The configuration file name for this integration is `health_alarm_notify.conf`.
 
 
-You can edit the configuration file using the `edit-config` script from the
-Netdata [config directory](/docs/netdata-agent/configuration/README.md#the-netdata-config-directory).
+You can edit the configuration file using the [`edit-config`](https://github.com/netdata/netdata/blob/master/docs/netdata-agent/configuration/README.md#edit-a-configuration-file-using-edit-config) script from the
+Netdata [config directory](https://github.com/netdata/netdata/blob/master/docs/netdata-agent/configuration/README.md#the-netdata-config-directory).
 
 ```bash
 cd /etc/netdata 2>/dev/null || cd /opt/netdata/etc/netdata
@@ -77,7 +77,7 @@ All roles will default to this variable if left unconfigured.
 
 You can have different Rooms per role, by editing `DEFAULT_RECIPIENT_MATRIX` with the `!roomid:homeservername` you want, in the following entries at the bottom of the same file:
 
-```conf
+```text
 role_recipients_matrix[sysadmin]="!roomid1:homeservername"
 role_recipients_matrix[domainadmin]="!roomid2:homeservername"
 role_recipients_matrix[dba]="!roomid3:homeservername"

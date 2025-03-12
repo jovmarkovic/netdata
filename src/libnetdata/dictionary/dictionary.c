@@ -21,12 +21,35 @@ inline void dictionary_write_unlock(DICTIONARY *dict) {
 }
 
 // ----------------------------------------------------------------------------
+// ARAL for dict and hooks
+
+static ARAL *ar_dict = NULL;
+static ARAL *ar_hooks = NULL;
+
+static void dictionary_init_aral(void) {
+    if(ar_dict && ar_hooks) return;
+
+    static SPINLOCK spinlock = SPINLOCK_INITIALIZER;
+    spinlock_lock(&spinlock);
+
+    if(!ar_dict)
+        ar_dict = aral_by_size_acquire(sizeof(DICTIONARY));
+
+    if(!ar_hooks)
+        ar_hooks = aral_by_size_acquire(sizeof(struct dictionary_hooks));
+
+    spinlock_unlock(&spinlock);
+}
+
+// ----------------------------------------------------------------------------
 // callbacks registration
 
 static inline void dictionary_hooks_allocate(DICTIONARY *dict) {
     if(dict->hooks) return;
 
-    dict->hooks = callocz(1, sizeof(struct dictionary_hooks));
+    dictionary_init_aral();
+
+    dict->hooks = aral_callocz(ar_hooks);
     dict->hooks->links = 1;
 
     DICTIONARY_STATS_PLUS_MEMORY(dict, 0, sizeof(struct dictionary_hooks), 0);
@@ -37,7 +60,7 @@ static inline size_t dictionary_hooks_free(DICTIONARY *dict) {
 
     REFCOUNT links = __atomic_sub_fetch(&dict->hooks->links, 1, __ATOMIC_ACQUIRE);
     if(links == 0) {
-        freez(dict->hooks);
+        aral_freez(ar_hooks, dict->hooks);
         dict->hooks = NULL;
 
         DICTIONARY_STATS_MINUS_MEMORY(dict, 0, sizeof(struct dictionary_hooks), 0);
@@ -89,6 +112,7 @@ void dictionary_register_delete_callback(DICTIONARY *dict, dict_cb_delete_t dele
 // ----------------------------------------------------------------------------
 // dictionary statistics API
 
+ALWAYS_INLINE
 size_t dictionary_version(DICTIONARY *dict) {
     if(unlikely(!dict)) return 0;
 
@@ -97,6 +121,8 @@ size_t dictionary_version(DICTIONARY *dict) {
 
     return __atomic_load_n(&dict->version, __ATOMIC_RELAXED);
 }
+
+ALWAYS_INLINE
 size_t dictionary_entries(DICTIONARY *dict) {
     if(unlikely(!dict)) return 0;
 
@@ -108,6 +134,7 @@ size_t dictionary_entries(DICTIONARY *dict) {
 
     return entries;
 }
+
 size_t dictionary_referenced_items(DICTIONARY *dict) {
     if(unlikely(!dict)) return 0;
 
@@ -204,25 +231,11 @@ void dictionary_static_items_aral_init(void) {
     if(unlikely(!dict_items_aral || !dict_shared_items_aral)) {
         spinlock_lock(&spinlock);
 
-        // we have to check again
         if(!dict_items_aral)
-            dict_items_aral = aral_create(
-                    "dict-items",
-                    sizeof(DICTIONARY_ITEM),
-                    0,
-                    65536,
-                    aral_by_size_statistics(),
-                    NULL, NULL, false, false);
+            dict_items_aral = aral_by_size_acquire(sizeof(DICTIONARY_ITEM));
 
-        // we have to check again
         if(!dict_shared_items_aral)
-            dict_shared_items_aral = aral_create(
-                    "dict-shared-items",
-                    sizeof(DICTIONARY_ITEM_SHARED),
-                    0,
-                    65536,
-                    aral_by_size_statistics(),
-                    NULL, NULL, false, false);
+            dict_shared_items_aral = aral_by_size_acquire(sizeof(DICTIONARY_ITEM_SHARED));
 
         spinlock_unlock(&spinlock);
     }
@@ -282,7 +295,7 @@ static bool dictionary_free_all_resources(DICTIONARY *dict, size_t *mem, bool fo
     if(dict->value_aral)
         aral_by_size_release(dict->value_aral);
 
-    freez(dict);
+    aral_freez(ar_dict, dict);
 
     internal_error(
         false,
@@ -317,11 +330,12 @@ static void dictionary_queue_for_destruction(DICTIONARY *dict) {
     netdata_mutex_unlock(&dictionaries_waiting_to_be_destroyed_mutex);
 }
 
-void cleanup_destroyed_dictionaries(void) {
-    if(!dictionaries_waiting_to_be_destroyed)
-        return;
-
+bool cleanup_destroyed_dictionaries(void) {
     netdata_mutex_lock(&dictionaries_waiting_to_be_destroyed_mutex);
+    if (!dictionaries_waiting_to_be_destroyed) {
+        netdata_mutex_unlock(&dictionaries_waiting_to_be_destroyed_mutex);
+        return false;
+    }
 
     DICTIONARY *dict, *last = NULL, *next = NULL;
     for(dict = dictionaries_waiting_to_be_destroyed; dict ; dict = next) {
@@ -357,7 +371,10 @@ void cleanup_destroyed_dictionaries(void) {
         }
     }
 
+    bool ret = dictionaries_waiting_to_be_destroyed != NULL;
     netdata_mutex_unlock(&dictionaries_waiting_to_be_destroyed_mutex);
+
+    return ret;
 }
 
 // ----------------------------------------------------------------------------
@@ -477,9 +494,10 @@ static bool api_is_name_good_with_trace(DICTIONARY *dict __maybe_unused, const c
 // API - dictionary management
 
 static DICTIONARY *dictionary_create_internal(DICT_OPTIONS options, struct dictionary_stats *stats, size_t fixed_size) {
+    dictionary_init_aral();
     cleanup_destroyed_dictionaries();
 
-    DICTIONARY *dict = callocz(1, sizeof(DICTIONARY));
+    DICTIONARY *dict = aral_callocz(ar_dict);
     dict->options = options;
     dict->stats = stats;
 
@@ -497,8 +515,8 @@ static DICTIONARY *dictionary_create_internal(DICT_OPTIONS options, struct dicti
     else
         dict->value_aral = NULL;
 
-    if(!(dict->options & (DICT_OPTION_INDEX_JUDY|DICT_OPTION_INDEX_HASHTABLE)))
-        dict->options |= DICT_OPTION_INDEX_JUDY;
+//    if(!(dict->options & (DICT_OPTION_INDEX_JUDY|DICT_OPTION_INDEX_HASHTABLE)))
+    dict->options |= DICT_OPTION_INDEX_JUDY;
 
     size_t dict_size = 0;
     dict_size += sizeof(DICTIONARY);
@@ -539,7 +557,7 @@ DICTIONARY *dictionary_create_view(DICTIONARY *master) {
 #endif
 
     DICTIONARY *dict = dictionary_create_internal(master->options, master->stats,
-                                                  master->value_aral ? aral_element_size(master->value_aral) : 0);
+                                                  master->value_aral ? aral_requested_element_size(master->value_aral) : 0);
 
     dict->master = master;
 
@@ -577,6 +595,8 @@ void dictionary_flush(DICTIONARY *dict) {
     ll_recursive_unlock(dict, DICTIONARY_LOCK_WRITE);
 
     DICTIONARY_STATS_DICT_FLUSHES_PLUS1(dict);
+
+    dictionary_garbage_collect(dict);
 }
 
 size_t dictionary_destroy(DICTIONARY *dict) {
@@ -586,7 +606,6 @@ size_t dictionary_destroy(DICTIONARY *dict) {
 
     ll_recursive_lock(dict, DICTIONARY_LOCK_WRITE);
 
-    dict_flag_set(dict, DICT_FLAG_DESTROYED);
     DICTIONARY_STATS_DICT_DESTRUCTIONS_PLUS1(dict);
 
     size_t referenced_items = dictionary_referenced_items(dict);
@@ -704,6 +723,7 @@ void *dictionary_get_advanced(DICTIONARY *dict, const char *name, ssize_t name_l
 // ----------------------------------------------------------------------------
 // DUP/REL an item (increase/decrease its reference counter)
 
+ALWAYS_INLINE
 DICT_ITEM_CONST DICTIONARY_ITEM *dictionary_acquired_item_dup(DICTIONARY *dict, DICT_ITEM_CONST DICTIONARY_ITEM *item) {
     // we allow the item to be NULL here
     api_internal_check(dict, item, false, true);
@@ -716,6 +736,7 @@ DICT_ITEM_CONST DICTIONARY_ITEM *dictionary_acquired_item_dup(DICTIONARY *dict, 
     return item;
 }
 
+ALWAYS_INLINE
 void dictionary_acquired_item_release(DICTIONARY *dict, DICT_ITEM_CONST DICTIONARY_ITEM *item) {
     // we allow the item to be NULL here
     api_internal_check(dict, item, false, true);
@@ -731,10 +752,12 @@ void dictionary_acquired_item_release(DICTIONARY *dict, DICT_ITEM_CONST DICTIONA
 // ----------------------------------------------------------------------------
 // get the name/value of an item
 
+ALWAYS_INLINE
 const char *dictionary_acquired_item_name(DICT_ITEM_CONST DICTIONARY_ITEM *item) {
     return item_get_name(item);
 }
 
+ALWAYS_INLINE
 void *dictionary_acquired_item_value(DICT_ITEM_CONST DICTIONARY_ITEM *item) {
     if(likely(item))
         return item->shared->value;

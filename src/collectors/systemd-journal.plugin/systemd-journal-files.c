@@ -285,8 +285,8 @@ void journal_file_update_header(const char *filename, struct journal_file *jf) {
             if(dash_seqnum) {
                 const char *dash_first_msg_ut = strchr(dash_seqnum + 1, '-');
                 if(dash_first_msg_ut) {
-                    const char *dot_journal = strstr(dash_first_msg_ut + 1, ".journal");
-                    if(dot_journal) {
+                    const char *dot_journal = NULL;
+                    if(is_journal_file(filename, -1, &dot_journal) && dot_journal && dot_journal > dash_first_msg_ut) {
                         if(dash_seqnum - at - 1 == 32 &&
                             dash_first_msg_ut - dash_seqnum - 1 == 16 &&
                             dot_journal - dash_first_msg_ut - 1 == 16) {
@@ -344,9 +344,9 @@ void journal_file_update_header(const char *filename, struct journal_file *jf) {
 
     jf->last_scan_header_vs_last_modified_ut = jf->file_last_modified_ut;
 
-    nd_log(NDLS_COLLECTORS, NDLP_DEBUG,
-           "Journal file header updated '%s'",
-           jf->filename);
+//    nd_log(NDLS_COLLECTORS, NDLP_DEBUG,
+//           "Journal file header updated '%s'",
+//           jf->filename);
 }
 
 static STRING *string_strdupz_source(const char *s, const char *e, size_t max_len, const char *prefix) {
@@ -369,8 +369,7 @@ static STRING *string_strdupz_source(const char *s, const char *e, size_t max_le
     buf[max_len - 1] = '\0';
 
     for(size_t i = 0; buf[i] ;i++)
-        if(!isalnum(buf[i]) && buf[i] != '-' && buf[i] != '.' && buf[i] != ':')
-            buf[i] = '_';
+        if(!is_netdata_api_valid_character(buf[i])) buf[i] = '_';
 
     return string_strdupz(buf);
 }
@@ -393,7 +392,7 @@ static void files_registry_insert_cb(const DICTIONARY_ITEM *item, void *value, v
 
                 char *e = strchr(s, '@');
                 if(!e)
-                    e = strstr(s, ".journal");
+                    is_journal_file(s, -1, (const char **)&e);
 
                 if(e) {
                     const char *d = s;
@@ -460,9 +459,9 @@ static bool files_registry_conflict_cb(const DICTIONARY_ITEM *item __maybe_unuse
 
         jf->msg_last_ut = jf->file_last_modified_ut;
 
-        nd_log(NDLS_COLLECTORS, NDLP_DEBUG,
-               "Journal file updated to the journal files registry '%s'",
-               jf->filename);
+//        nd_log(NDLS_COLLECTORS, NDLP_DEBUG,
+//               "Journal file updated to the journal files registry '%s'",
+//               jf->filename);
     }
 
     return false;
@@ -475,19 +474,6 @@ struct journal_file_source {
     uint64_t size;
 };
 
-static void human_readable_size_ib(uint64_t size, char *dst, size_t dst_len) {
-    if(size > 1024ULL * 1024 * 1024 * 1024)
-        snprintfz(dst, dst_len, "%0.2f TiB", (double)size / 1024.0 / 1024.0 / 1024.0 / 1024.0);
-    else if(size > 1024ULL * 1024 * 1024)
-        snprintfz(dst, dst_len, "%0.2f GiB", (double)size / 1024.0 / 1024.0 / 1024.0);
-    else if(size > 1024ULL * 1024)
-        snprintfz(dst, dst_len, "%0.2f MiB", (double)size / 1024.0 / 1024.0);
-    else if(size > 1024ULL)
-        snprintfz(dst, dst_len, "%0.2f KiB", (double)size / 1024.0);
-    else
-        snprintfz(dst, dst_len, "%"PRIu64" B", size);
-}
-
 #define print_duration(dst, dst_len, pos, remaining, duration, one, many, printed) do { \
     if((remaining) > (duration)) {                                                      \
         uint64_t _count = (remaining) / (duration);                                     \
@@ -498,22 +484,6 @@ static void human_readable_size_ib(uint64_t size, char *dst, size_t dst_len) {
     } \
 } while(0)
 
-static void human_readable_duration_s(time_t duration_s, char *dst, size_t dst_len) {
-    if(duration_s < 0)
-        duration_s = -duration_s;
-
-    size_t pos = 0;
-    dst[0] = 0 ;
-
-    bool printed = false;
-    print_duration(dst, dst_len, pos, duration_s, 86400 * 365, "year", "years", printed);
-    print_duration(dst, dst_len, pos, duration_s, 86400 * 30, "month", "months", printed);
-    print_duration(dst, dst_len, pos, duration_s, 86400 * 1, "day", "days", printed);
-    print_duration(dst, dst_len, pos, duration_s, 3600 * 1, "hour", "hours", printed);
-    print_duration(dst, dst_len, pos, duration_s, 60 * 1, "min", "mins", printed);
-    print_duration(dst, dst_len, pos, duration_s, 1, "sec", "secs", printed);
-}
-
 static int journal_file_to_json_array_cb(const DICTIONARY_ITEM *item, void *entry, void *data) {
     struct journal_file_source *jfs = entry;
     BUFFER *wb = data;
@@ -522,12 +492,12 @@ static int journal_file_to_json_array_cb(const DICTIONARY_ITEM *item, void *entr
 
     buffer_json_add_array_item_object(wb);
     {
-        char size_for_humans[100];
-        human_readable_size_ib(jfs->size, size_for_humans, sizeof(size_for_humans));
+        char size_for_humans[128];
+        size_snprintf(size_for_humans, sizeof(size_for_humans), jfs->size, "B", false);
 
-        char duration_for_humans[1024];
-        human_readable_duration_s((time_t)((jfs->last_ut - jfs->first_ut) / USEC_PER_SEC),
-                duration_for_humans, sizeof(duration_for_humans));
+        char duration_for_humans[128];
+        duration_snprintf(duration_for_humans, sizeof(duration_for_humans),
+                          (time_t)((jfs->last_ut - jfs->first_ut) / USEC_PER_SEC), "s", true);
 
         char info[1024];
         snprintfz(info, sizeof(info), "%zu files, with a total size of %s, covering %s",
@@ -602,10 +572,39 @@ static void files_registry_delete_cb(const DICTIONARY_ITEM *item, void *value, v
     string_freez(jf->source);
 }
 
-void journal_directory_scan_recursively(DICTIONARY *files, DICTIONARY *dirs, const char *dirname, int depth) {
-    static const char *ext = ".journal";
-    static const ssize_t ext_len = sizeof(".journal") - 1;
+#define EXT_DOT_JOURNAL ".journal"
+#define EXT_DOT_JOURNAL_TILDA ".journal~"
 
+static struct {
+    const char *ext;
+    ssize_t len;
+} valid_journal_extension[] = {
+    { .ext = EXT_DOT_JOURNAL, .len = sizeof(EXT_DOT_JOURNAL) - 1 },
+    { .ext = EXT_DOT_JOURNAL_TILDA, .len = sizeof(EXT_DOT_JOURNAL_TILDA) - 1 },
+};
+
+bool is_journal_file(const char *filename, ssize_t len, const char **start_of_extension) {
+    if(len < 0)
+        len = (ssize_t)strlen(filename);
+
+    for(size_t i = 0; i < _countof(valid_journal_extension) ;i++) {
+        const char *ext = valid_journal_extension[i].ext;
+        ssize_t elen = valid_journal_extension[i].len;
+
+        if(len > elen && strcmp(filename + len - elen, ext) == 0) {
+            if(start_of_extension)
+                *start_of_extension = filename + len - elen;
+            return true;
+        }
+    }
+
+    if(start_of_extension)
+        *start_of_extension = NULL;
+
+    return false;
+}
+
+void journal_directory_scan_recursively(DICTIONARY *files, DICTIONARY *dirs, const char *dirname, int depth) {
     if (depth > VAR_LOG_JOURNAL_MAX_DEPTH)
         return;
 
@@ -635,7 +634,7 @@ void journal_directory_scan_recursively(DICTIONARY *files, DICTIONARY *dirs, con
         if (entry->d_type == DT_DIR) {
             journal_directory_scan_recursively(files, dirs, full_path, depth++);
         }
-        else if (entry->d_type == DT_REG && len > ext_len && strcmp(full_path + len - ext_len, ext) == 0) {
+        else if (entry->d_type == DT_REG && is_journal_file(full_path, len, NULL)) {
             if(files)
                 dictionary_set(files, full_path, NULL, 0);
 
@@ -653,7 +652,7 @@ void journal_directory_scan_recursively(DICTIONARY *files, DICTIONARY *dirs, con
                     journal_directory_scan_recursively(files, dirs, resolved_path, depth++);
                 }
             }
-            else if(S_ISREG(info.st_mode) && len > ext_len && strcmp(full_path + len - ext_len, ext) == 0) {
+            else if(S_ISREG(info.st_mode) && is_journal_file(full_path, len, NULL)) {
                 if(files)
                     dictionary_set(files, full_path, NULL, 0);
 
@@ -705,7 +704,7 @@ int filenames_compar(const void *a, const void *b) {
 }
 
 void journal_files_registry_update(void) {
-    static SPINLOCK spinlock = NETDATA_SPINLOCK_INITIALIZER;
+    static SPINLOCK spinlock = SPINLOCK_INITIALIZER;
 
     if(spinlock_trylock(&spinlock)) {
         usec_t scan_monotonic_ut = now_monotonic_usec();
@@ -756,6 +755,7 @@ void journal_files_registry_update(void) {
                 dictionary_del(journal_files_registry, jf_dfe.name);
         }
         dfe_done(jf);
+        dictionary_garbage_collect(journal_files_registry);
 
         journal_files_scans++;
         spinlock_unlock(&spinlock);

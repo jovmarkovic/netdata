@@ -84,9 +84,9 @@ static inline DICTIONARY_ITEM *dict_item_create(DICTIONARY *dict __maybe_unused,
 
 static inline void *dict_item_value_mallocz(DICTIONARY *dict, size_t value_len) {
     if(dict->value_aral) {
-        internal_fatal(aral_element_size(dict->value_aral) != value_len,
+        internal_fatal(aral_requested_element_size(dict->value_aral) != value_len,
                        "DICTIONARY: item value size %zu does not match the configured fixed one %zu",
-                       value_len, aral_element_size(dict->value_aral));
+                       value_len, aral_requested_element_size(dict->value_aral));
         return aral_mallocz(dict->value_aral);
     }
     else
@@ -216,8 +216,6 @@ static inline size_t dict_item_free_with_hooks(DICTIONARY *dict, DICTIONARY_ITEM
     size_t item_size = 0, key_size = 0, value_size = 0;
 
     key_size += item->key_len;
-    if(unlikely(!(dict->options & DICT_OPTION_NAME_LINK_DONT_CLONE)))
-        item_free_name(dict, item);
 
     if(item_shared_release_and_check_if_it_can_be_freed(dict, item)) {
         dictionary_execute_delete_callback(dict, item);
@@ -233,6 +231,10 @@ static inline size_t dict_item_free_with_hooks(DICTIONARY *dict, DICTIONARY_ITEM
         item->shared = NULL;
         item_size += sizeof(DICTIONARY_ITEM_SHARED);
     }
+
+    // free the name after calling the delete callback
+    if(unlikely(!(dict->options & DICT_OPTION_NAME_LINK_DONT_CLONE)))
+        item_free_name(dict, item);
 
     aral_freez(dict_items_aral, item);
 

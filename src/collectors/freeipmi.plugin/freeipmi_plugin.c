@@ -1,9 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 /*
- *  netdata freeipmi.plugin
- *  Copyright (C) 2023 Netdata Inc.
- *  GPL v3+
- *
  *  Based on:
  *  ipmimonitoring-sensors.c,v 1.51 2016/11/02 23:46:24 chu11 Exp
  *  ipmimonitoring-sel.c,v 1.51 2016/11/02 23:46:24 chu11 Exp
@@ -1240,9 +1236,9 @@ void *netdata_ipmi_collection_thread(void *ptr) {
     usec_t step = t->freq_s * USEC_PER_SEC;
 
     heartbeat_t hb;
-    heartbeat_init(&hb);
+    heartbeat_init(&hb, step);
     while(++iteration) {
-        heartbeat_next(&hb, step);
+        heartbeat_next(&hb);
 
         if(t->debug)
             fprintf(stderr, "%s: calling netdata_ipmi_collect_data() for %s\n",
@@ -1488,7 +1484,7 @@ static void freeimi_function_sensors(const char *transaction, char *function __m
     char function_copy[strlen(function) + 1];
     memcpy(function_copy, function, sizeof(function_copy));
     char *words[1024];
-    size_t num_words = quoted_strings_splitter_pluginsd(function_copy, words, 1024);
+    size_t num_words = quoted_strings_splitter_whitespace(function_copy, words, 1024);
     for(size_t i = 1; i < num_words ;i++) {
         char *param = get_word(words, num_words, i);
         if(strcmp(param, "info") == 0) {
@@ -1629,7 +1625,10 @@ close_and_send:
     buffer_json_member_add_time_t(wb, "expires", now_s + update_every);
     buffer_json_finalize(wb);
 
-    pluginsd_function_result_to_stdout(transaction, HTTP_RESP_OK, "application/json", now_s + update_every, wb);
+    wb->response_code = HTTP_RESP_OK;
+    wb->content_type = CT_APPLICATION_JSON;
+    wb->expires = now_s + update_every;
+    pluginsd_function_result_to_stdout(transaction, wb);
 
     buffer_free(wb);
 }
@@ -1637,14 +1636,13 @@ close_and_send:
 // ----------------------------------------------------------------------------
 // main, command line arguments parsing
 
-static NORETURN void plugin_exit(int code) {
+static void plugin_exit(int code) {
     fflush(stdout);
     function_plugin_should_exit = true;
     exit(code);
 }
 
 int main (int argc, char **argv) {
-    clocks_init();
     nd_log_initialize_for_external_plugins("freeipmi.plugin");
     netdata_threads_init_for_external_plugins(0); // set the default threads stack size here
 
@@ -1738,9 +1736,8 @@ int main (int argc, char **argv) {
             fprintf(stderr,
                     "\n"
                     " netdata %s %s\n"
-                    " Copyright (C) 2023 Netdata Inc.\n"
+                    " Copyright 2018-2025 Netdata Inc.\n"
                     " Released under GNU General Public License v3 or later.\n"
-                    " All rights reserved.\n"
                     "\n"
                     " This program is a data collector plugin for netdata.\n"
                     "\n"
@@ -1957,7 +1954,7 @@ int main (int argc, char **argv) {
     struct ipmi_collection_thread sensors_data = {
             .type = IPMI_COLLECT_TYPE_SENSORS,
             .freq_s = update_every,
-            .spinlock = NETDATA_SPINLOCK_INITIALIZER,
+            .spinlock = SPINLOCK_INITIALIZER,
             .debug = debug,
             .state = {
                     .debug = debug,
@@ -1972,7 +1969,7 @@ int main (int argc, char **argv) {
     }, sel_data = {
             .type = IPMI_COLLECT_TYPE_SEL,
             .freq_s = update_every_sel,
-            .spinlock = NETDATA_SPINLOCK_INITIALIZER,
+            .spinlock = SPINLOCK_INITIALIZER,
             .debug = debug,
             .state = {
                     .debug = debug,
@@ -1997,15 +1994,13 @@ int main (int argc, char **argv) {
     time_t started_t = now_monotonic_sec();
 
     size_t iteration = 0;
-    usec_t step = 100 * USEC_PER_MS;
     bool global_chart_created = false;
     bool tty = isatty(fileno(stdout)) == 1;
 
     heartbeat_t hb;
-    heartbeat_init(&hb);
-
+    heartbeat_init(&hb, update_every * USEC_PER_SEC);
     for(iteration = 0; 1 ; iteration++) {
-        usec_t dt = heartbeat_next(&hb, step);
+        usec_t dt = heartbeat_next(&hb);
 
         if (!tty) {
             netdata_mutex_lock(&stdout_mutex);
@@ -2024,7 +2019,6 @@ int main (int argc, char **argv) {
 
         switch(state.sensors.status) {
             case ICS_RUNNING:
-                step = update_every * USEC_PER_SEC;
                 if(state.sensors.last_iteration_ut < now_monotonic_usec() - IPMI_RESTART_IF_SENSORS_DONT_ITERATE_EVERY_SECONDS * USEC_PER_SEC) {
                     collector_error("%s(): sensors have not be collected for %zu seconds. Exiting to restart.",
                                     __FUNCTION__, (size_t)((now_monotonic_usec() - state.sensors.last_iteration_ut) / USEC_PER_SEC));
@@ -2041,11 +2035,13 @@ int main (int argc, char **argv) {
                 collector_error("%s(): sensors failed to initialize. Calling DISABLE.", __FUNCTION__);
                 fprintf(stdout, "DISABLE\n");
                 plugin_exit(0);
+                break;
 
             case ICS_FAILED:
                 collector_error("%s(): sensors fails repeatedly to collect metrics. Exiting to restart.", __FUNCTION__);
                 fprintf(stdout, "EXIT\n");
                 plugin_exit(0);
+                break;
         }
 
         if(netdata_do_sel) {

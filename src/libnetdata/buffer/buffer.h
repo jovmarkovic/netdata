@@ -3,12 +3,15 @@
 #ifndef NETDATA_WEB_BUFFER_H
 #define NETDATA_WEB_BUFFER_H 1
 
+#include "../uuid/uuid.h"
+#include "../http/content_type.h"
 #include "../string/utf8.h"
 #include "../libnetdata.h"
 
 #define BUFFER_JSON_MAX_DEPTH 32 // max is 255
 
 extern const char hex_digits[16];
+extern const char hex_digits_lower[16];
 extern const char base64_digits[64];
 extern unsigned char hex_value_from_ascii[256];
 extern unsigned char base64_value_from_ascii[256];
@@ -39,14 +42,15 @@ typedef enum __attribute__ ((__packed__)) {
 } BUFFER_JSON_OPTIONS;
 
 typedef struct web_buffer {
-    size_t size;            // allocation size of buffer, in bytes
-    size_t len;             // current data length in buffer, in bytes
-    char *buffer;           // the buffer itself
+    uint32_t size;          // allocation size of buffer, in bytes
+    uint32_t len;           // current data length in buffer, in bytes
     HTTP_CONTENT_TYPE content_type;    // the content type of the data in the buffer
     BUFFER_OPTIONS options; // options related to the content
+    uint16_t response_code;
     time_t date;            // the timestamp this content has been generated
     time_t expires;         // the timestamp this content expires
     size_t *statistics;
+    char *buffer;           // the buffer itself
 
     struct {
         char key_quote[BUFFER_QUOTE_MAX_SIZE + 1];
@@ -62,7 +66,7 @@ typedef struct web_buffer {
 #define buffer_cacheable(wb)    do { (wb)->options |= WB_CONTENT_CACHEABLE;    if((wb)->options & WB_CONTENT_NO_CACHEABLE) (wb)->options &= ~WB_CONTENT_NO_CACHEABLE; } while(0)
 #define buffer_no_cacheable(wb) do { (wb)->options |= WB_CONTENT_NO_CACHEABLE; if((wb)->options & WB_CONTENT_CACHEABLE)    (wb)->options &= ~WB_CONTENT_CACHEABLE;  (wb)->expires = 0; } while(0)
 
-#define buffer_strlen(wb) ((wb)->len)
+#define buffer_strlen(wb) (size_t)((wb)->len)
 
 #define BUFFER_OVERFLOW_EOF "EOF"
 
@@ -80,7 +84,8 @@ static inline void _buffer_overflow_check(BUFFER *b __maybe_unused) {
                    "BUFFER: detected overflow.");
 }
 
-static inline void buffer_flush(BUFFER *wb) {
+ALWAYS_INLINE
+static void buffer_flush(BUFFER *wb) {
     wb->len = 0;
 
     wb->json.depth = 0;
@@ -113,7 +118,8 @@ void buffer_char_replace(BUFFER *wb, char from, char to);
 
 void buffer_print_sn_flags(BUFFER *wb, SN_FLAGS flags, bool send_anomaly_bit);
 
-static inline void buffer_need_bytes(BUFFER *buffer, size_t needed_free_size) {
+ALWAYS_INLINE
+static void buffer_need_bytes(BUFFER *buffer, size_t needed_free_size) {
     if(unlikely(buffer->len + needed_free_size >= buffer->size))
         buffer_increase(buffer, needed_free_size + 1);
 }
@@ -123,6 +129,7 @@ void buffer_json_initialize(BUFFER *wb, const char *key_quote, const char *value
 
 void buffer_json_finalize(BUFFER *wb);
 
+ALWAYS_INLINE
 static const char *buffer_tostring(BUFFER *wb)
 {
     if(unlikely(!wb))
@@ -136,7 +143,8 @@ static const char *buffer_tostring(BUFFER *wb)
     return(wb->buffer);
 }
 
-static inline void _buffer_json_depth_push(BUFFER *wb, BUFFER_JSON_NODE_TYPE type) {
+ALWAYS_INLINE
+static void _buffer_json_depth_push(BUFFER *wb, BUFFER_JSON_NODE_TYPE type) {
 #ifdef NETDATA_INTERNAL_CHECKS
     assert(wb->json.depth <= BUFFER_JSON_MAX_DEPTH && "BUFFER JSON: max nesting reached");
 #endif
@@ -148,21 +156,21 @@ static inline void _buffer_json_depth_push(BUFFER *wb, BUFFER_JSON_NODE_TYPE typ
     wb->json.stack[wb->json.depth].type = type;
 }
 
-static inline void _buffer_json_depth_pop(BUFFER *wb) {
+ALWAYS_INLINE
+static void _buffer_json_depth_pop(BUFFER *wb) {
     wb->json.depth--;
 }
 
-static inline void buffer_fast_charcat(BUFFER *wb, const char c) {
-
+ALWAYS_INLINE
+static void buffer_putc(BUFFER *wb, char c) {
     buffer_need_bytes(wb, 2);
-    *(&wb->buffer[wb->len]) = c;
-    wb->len += 1;
+    wb->buffer[wb->len++] = c;
     wb->buffer[wb->len] = '\0';
-
     buffer_overflow_check(wb);
 }
 
-static inline void buffer_fast_rawcat(BUFFER *wb, const char *txt, size_t len) {
+ALWAYS_INLINE
+static void buffer_fast_rawcat(BUFFER *wb, const char *txt, size_t len) {
     if(unlikely(!txt || !*txt || !len)) return;
 
     buffer_need_bytes(wb, len + 1);
@@ -181,14 +189,8 @@ static inline void buffer_fast_rawcat(BUFFER *wb, const char *txt, size_t len) {
     buffer_overflow_check(wb);
 }
 
-static inline void buffer_putc(BUFFER *wb, char c) {
-    buffer_need_bytes(wb, 2);
-    wb->buffer[wb->len++] = c;
-    wb->buffer[wb->len] = '\0';
-    buffer_overflow_check(wb);
-}
-
-static inline void buffer_fast_strcat(BUFFER *wb, const char *txt, size_t len) {
+ALWAYS_INLINE
+static void buffer_fast_strcat(BUFFER *wb, const char *txt, size_t len) {
     if(unlikely(!txt || !*txt || !len)) return;
 
     buffer_need_bytes(wb, len + 1);
@@ -215,7 +217,8 @@ static inline void buffer_fast_strcat(BUFFER *wb, const char *txt, size_t len) {
     buffer_overflow_check(wb);
 }
 
-static inline void buffer_strcat(BUFFER *wb, const char *txt) {
+ALWAYS_INLINE
+static void buffer_strcat(BUFFER *wb, const char *txt) {
     if(unlikely(!txt || !*txt)) return;
 
     const char *t = txt;
@@ -237,7 +240,8 @@ static inline void buffer_strcat(BUFFER *wb, const char *txt) {
     buffer_overflow_check(wb);
 }
 
-static inline void buffer_contents_replace(BUFFER *wb, const char *txt, size_t len) {
+ALWAYS_INLINE
+static void buffer_contents_replace(BUFFER *wb, const char *txt, size_t len) {
     wb->len = 0;
     buffer_need_bytes(wb, len + 1);
 
@@ -248,7 +252,8 @@ static inline void buffer_contents_replace(BUFFER *wb, const char *txt, size_t l
     buffer_overflow_check(wb);
 }
 
-static inline void buffer_strncat(BUFFER *wb, const char *txt, size_t len) {
+ALWAYS_INLINE
+static void buffer_strncat(BUFFER *wb, const char *txt, size_t len) {
     if(unlikely(!txt || !*txt)) return;
 
     buffer_need_bytes(wb, len + 1);
@@ -261,7 +266,8 @@ static inline void buffer_strncat(BUFFER *wb, const char *txt, size_t len) {
     buffer_overflow_check(wb);
 }
 
-static inline void buffer_memcat(BUFFER *wb, const void *mem, size_t bytes) {
+ALWAYS_INLINE
+static void buffer_memcat(BUFFER *wb, const void *mem, size_t bytes) {
     if(unlikely(!mem)) return;
 
     buffer_need_bytes(wb, bytes + 1);
@@ -274,7 +280,8 @@ static inline void buffer_memcat(BUFFER *wb, const void *mem, size_t bytes) {
     buffer_overflow_check(wb);
 }
 
-static inline void buffer_json_strcat(BUFFER *wb, const char *txt)
+ALWAYS_INLINE
+static void buffer_json_strcat(BUFFER *wb, const char *txt)
 {
     if(unlikely(!txt || !*txt)) return;
 
@@ -316,11 +323,20 @@ static inline void buffer_json_strcat(BUFFER *wb, const char *txt)
             if(unlikely(*t < ' ')) {
                 uint32_t v = *t++;
                 *d++ = '\\';
-                *d++ = 'u';
-                *d++ = hex_digits[(v >> 12) & 0xf];
-                *d++ = hex_digits[(v >> 8) & 0xf];
-                *d++ = hex_digits[(v >> 4) & 0xf];
-                *d++ = hex_digits[v & 0xf];
+                switch (v) {
+                    case '\n': *d++ = 'n'; break;
+                    case '\r': *d++ = 'r'; break;
+                    case '\t': *d++ = 't'; break;
+                    case '\b': *d++ = 'b'; break;
+                    case '\f': *d++ = 'f'; break;
+                    default:
+                        *d++ = 'u';
+                        *d++ = hex_digits[(v >> 12) & 0xf];
+                        *d++ = hex_digits[(v >> 8) & 0xf];
+                        *d++ = hex_digits[(v >> 4) & 0xf];
+                        *d++ = hex_digits[v & 0xf];
+                        break;
+                }
             }
             else {
                 if (unlikely(*t == '\\' || *t == '\"'))
@@ -339,7 +355,8 @@ static inline void buffer_json_strcat(BUFFER *wb, const char *txt)
     buffer_overflow_check(wb);
 }
 
-static inline void buffer_json_quoted_strcat(BUFFER *wb, const char *txt) {
+ALWAYS_INLINE
+static void buffer_json_quoted_strcat(BUFFER *wb, const char *txt) {
     if(unlikely(!txt || !*txt)) return;
 
     if(*txt == '"')
@@ -378,13 +395,15 @@ static inline void buffer_json_quoted_strcat(BUFFER *wb, const char *txt) {
 // point the remaining value fits in 32 bits, and then calls
 // print_number_lu_r() to print the rest with 32 bit arithmetic.
 
-static inline char *print_uint32_reversed(char *dst, uint32_t value) {
+ALWAYS_INLINE
+static char *print_uint32_reversed(char *dst, uint32_t value) {
     char *d = dst;
     do *d++ = (char)('0' + (value % 10)); while((value /= 10));
     return d;
 }
 
-static inline char *print_uint64_reversed(char *dst, uint64_t value) {
+ALWAYS_INLINE
+static char *print_uint64_reversed(char *dst, uint64_t value) {
 #ifdef ENV32BIT
     if(value <= (uint64_t)0xffffffff)
         return print_uint32_reversed(dst, value);
@@ -400,14 +419,16 @@ static inline char *print_uint64_reversed(char *dst, uint64_t value) {
 #endif
 }
 
-static inline char *print_uint32_hex_reversed(char *dst, uint32_t value) {
+ALWAYS_INLINE
+static char *print_uint32_hex_reversed(char *dst, uint32_t value) {
     static const char *digits = "0123456789ABCDEF";
     char *d = dst;
     do *d++ = digits[value & 0xf]; while((value >>= 4));
     return d;
 }
 
-static inline char *print_uint64_hex_reversed(char *dst, uint64_t value) {
+ALWAYS_INLINE
+static char *print_uint64_hex_reversed(char *dst, uint64_t value) {
 #ifdef ENV32BIT
     if(value <= (uint64_t)0xffffffff)
         return print_uint32_hex_reversed(dst, value);
@@ -423,19 +444,33 @@ static inline char *print_uint64_hex_reversed(char *dst, uint64_t value) {
 #endif
 }
 
-static inline char *print_uint64_base64_reversed(char *dst, uint64_t value) {
+ALWAYS_INLINE
+static char *print_uint64_hex_reversed_full(char *dst, uint64_t value) {
+    char *d = dst;
+    for(size_t c = 0; c < sizeof(uint64_t) * 2; c++) {
+        *d++ = hex_digits[value & 0xf];
+        value >>= 4;
+    }
+
+    return d;
+}
+
+ALWAYS_INLINE
+static char *print_uint64_base64_reversed(char *dst, uint64_t value) {
     char *d = dst;
     do *d++ = base64_digits[value & 63]; while ((value >>= 6));
     return d;
 }
 
-static inline void char_array_reverse(char *from, char *to) {
+ALWAYS_INLINE
+static void char_array_reverse(char *from, char *to) {
     // from and to are inclusive
     char *begin = from, *end = to, aux;
     while (end > begin) aux = *end, *end-- = *begin, *begin++ = aux;
 }
 
-static inline int print_netdata_double(char *dst, NETDATA_DOUBLE value) {
+ALWAYS_INLINE
+static int print_netdata_double(char *dst, NETDATA_DOUBLE value) {
     char *s = dst;
 
     if(unlikely(value < 0)) {
@@ -498,47 +533,88 @@ static inline int print_netdata_double(char *dst, NETDATA_DOUBLE value) {
     return (int)(d - dst);
 }
 
-static inline void buffer_print_uint64(BUFFER *wb, uint64_t value) {
-    buffer_need_bytes(wb, 50);
-
-    char *s = &wb->buffer[wb->len];
+ALWAYS_INLINE
+static size_t print_uint64(char *dst, uint64_t value) {
+    char *s = dst;
     char *d = print_uint64_reversed(s, value);
     char_array_reverse(s, d - 1);
     *d = '\0';
-    wb->len += d - s;
-
-    buffer_overflow_check(wb);
+    return d - s;
 }
 
-static inline void buffer_print_int64(BUFFER *wb, int64_t value) {
-    buffer_need_bytes(wb, 50);
+ALWAYS_INLINE
+static size_t print_int64(char *dst, int64_t value) {
+    size_t len = 0;
 
     if(value < 0) {
-        buffer_fast_strcat(wb, "-", 1);
+        *dst++ = '-';
         value = -value;
+        len++;
     }
 
-    buffer_print_uint64(wb, (uint64_t)value);
+    return print_uint64(dst, value) + len;
+}
 
+#define UINT64_MAX_LENGTH (24) // 21 should be enough
+ALWAYS_INLINE
+static void buffer_print_uint64(BUFFER *wb, uint64_t value) {
+    buffer_need_bytes(wb, UINT64_MAX_LENGTH);
+    wb->len += print_uint64(&wb->buffer[wb->len], value);
     buffer_overflow_check(wb);
 }
 
-static inline void buffer_print_uint64_hex(BUFFER *wb, uint64_t value) {
-    buffer_need_bytes(wb, sizeof(uint64_t) * 2 + 2 + 1);
-
-    buffer_fast_strcat(wb, HEX_PREFIX, sizeof(HEX_PREFIX) - 1);
-
-    char *s = &wb->buffer[wb->len];
-    char *d = print_uint64_hex_reversed(s, value);
-    char_array_reverse(s, d - 1);
-    *d = '\0';
-    wb->len += d - s;
-
+ALWAYS_INLINE
+static void buffer_print_int64(BUFFER *wb, int64_t value) {
+    buffer_need_bytes(wb, UINT64_MAX_LENGTH);
+    wb->len += print_int64(&wb->buffer[wb->len], value);
     buffer_overflow_check(wb);
 }
 
-static inline void buffer_print_uint64_base64(BUFFER *wb, uint64_t value) {
-    buffer_need_bytes(wb, sizeof(uint64_t) * 2 + 2 + 1);
+#define UINT64_HEX_MAX_LENGTH ((sizeof(HEX_PREFIX) - 1) + (sizeof(uint64_t) * 2) + 1)
+ALWAYS_INLINE
+static size_t print_uint64_hex(char *dst, uint64_t value) {
+    char *d = dst;
+
+    const char *s = HEX_PREFIX;
+    while(*s) *d++ = *s++;
+
+    char *e = print_uint64_hex_reversed(d, value);
+    char_array_reverse(d, e - 1);
+    *e = '\0';
+    return e - dst;
+}
+
+ALWAYS_INLINE
+static size_t print_uint64_hex_full(char *dst, uint64_t value) {
+    char *d = dst;
+
+    const char *s = HEX_PREFIX;
+    while(*s) *d++ = *s++;
+
+    char *e = print_uint64_hex_reversed_full(d, value);
+    char_array_reverse(d, e - 1);
+    *e = '\0';
+    return e - dst;
+}
+
+ALWAYS_INLINE
+static void buffer_print_uint64_hex(BUFFER *wb, uint64_t value) {
+    buffer_need_bytes(wb, UINT64_HEX_MAX_LENGTH);
+    wb->len += print_uint64_hex(&wb->buffer[wb->len], value);
+    buffer_overflow_check(wb);
+}
+
+ALWAYS_INLINE
+static void buffer_print_uint64_hex_full(BUFFER *wb, uint64_t value) {
+    buffer_need_bytes(wb, UINT64_HEX_MAX_LENGTH);
+    wb->len += print_uint64_hex_full(&wb->buffer[wb->len], value);
+    buffer_overflow_check(wb);
+}
+
+#define UINT64_B64_MAX_LENGTH ((sizeof(IEEE754_UINT64_B64_PREFIX) - 1) + (sizeof(uint64_t) * 2) + 1)
+ALWAYS_INLINE
+static void buffer_print_uint64_base64(BUFFER *wb, uint64_t value) {
+    buffer_need_bytes(wb, UINT64_B64_MAX_LENGTH);
 
     buffer_fast_strcat(wb, IEEE754_UINT64_B64_PREFIX, sizeof(IEEE754_UINT64_B64_PREFIX) - 1);
 
@@ -551,11 +627,12 @@ static inline void buffer_print_uint64_base64(BUFFER *wb, uint64_t value) {
     buffer_overflow_check(wb);
 }
 
-static inline void buffer_print_int64_hex(BUFFER *wb, int64_t value) {
+ALWAYS_INLINE
+static void buffer_print_int64_hex(BUFFER *wb, int64_t value) {
     buffer_need_bytes(wb, 2);
 
     if(value < 0) {
-        buffer_fast_strcat(wb, "-", 1);
+        buffer_putc(wb, '-');
         value = -value;
     }
 
@@ -564,11 +641,12 @@ static inline void buffer_print_int64_hex(BUFFER *wb, int64_t value) {
     buffer_overflow_check(wb);
 }
 
-static inline void buffer_print_int64_base64(BUFFER *wb, int64_t value) {
+ALWAYS_INLINE
+static void buffer_print_int64_base64(BUFFER *wb, int64_t value) {
     buffer_need_bytes(wb, 2);
 
     if(value < 0) {
-        buffer_fast_strcat(wb, "-", 1);
+        buffer_putc(wb, '-');
         value = -value;
     }
 
@@ -577,8 +655,11 @@ static inline void buffer_print_int64_base64(BUFFER *wb, int64_t value) {
     buffer_overflow_check(wb);
 }
 
-static inline void buffer_print_netdata_double(BUFFER *wb, NETDATA_DOUBLE value) {
-    buffer_need_bytes(wb, 512 + 2);
+#define DOUBLE_MAX_LENGTH (512) // 318 should be enough, including null
+
+ALWAYS_INLINE
+static void buffer_print_netdata_double(BUFFER *wb, NETDATA_DOUBLE value) {
+    buffer_need_bytes(wb, DOUBLE_MAX_LENGTH);
 
     if(isnan(value) || isinf(value)) {
         buffer_fast_strcat(wb, "null", 4);
@@ -594,8 +675,10 @@ static inline void buffer_print_netdata_double(BUFFER *wb, NETDATA_DOUBLE value)
     buffer_overflow_check(wb);
 }
 
-static inline void buffer_print_netdata_double_hex(BUFFER *wb, NETDATA_DOUBLE value) {
-    buffer_need_bytes(wb, sizeof(uint64_t) * 2 + 2 + 1 + 1);
+#define DOUBLE_HEX_MAX_LENGTH ((sizeof(IEEE754_DOUBLE_HEX_PREFIX) - 1) + (sizeof(uint64_t) * 2) + 1)
+ALWAYS_INLINE
+static void buffer_print_netdata_double_hex(BUFFER *wb, NETDATA_DOUBLE value) {
+    buffer_need_bytes(wb, DOUBLE_HEX_MAX_LENGTH);
 
     uint64_t *ptr = (uint64_t *) (&value);
     buffer_fast_strcat(wb, IEEE754_DOUBLE_HEX_PREFIX, sizeof(IEEE754_DOUBLE_HEX_PREFIX) - 1);
@@ -609,8 +692,10 @@ static inline void buffer_print_netdata_double_hex(BUFFER *wb, NETDATA_DOUBLE va
     buffer_overflow_check(wb);
 }
 
-static inline void buffer_print_netdata_double_base64(BUFFER *wb, NETDATA_DOUBLE value) {
-    buffer_need_bytes(wb, sizeof(uint64_t) * 2 + 2 + 1 + 1);
+#define DOUBLE_B64_MAX_LENGTH ((sizeof(IEEE754_DOUBLE_B64_PREFIX) - 1) + (sizeof(uint64_t) * 2) + 1)
+ALWAYS_INLINE
+static void buffer_print_netdata_double_base64(BUFFER *wb, NETDATA_DOUBLE value) {
+    buffer_need_bytes(wb, DOUBLE_B64_MAX_LENGTH);
 
     uint64_t *ptr = (uint64_t *) (&value);
     buffer_fast_strcat(wb, IEEE754_DOUBLE_B64_PREFIX, sizeof(IEEE754_DOUBLE_B64_PREFIX) - 1);
@@ -630,7 +715,8 @@ typedef enum {
     NUMBER_ENCODING_BASE64,
 } NUMBER_ENCODING;
 
-static inline void buffer_print_int64_encoded(BUFFER *wb, NUMBER_ENCODING encoding, int64_t value) {
+ALWAYS_INLINE
+static void buffer_print_int64_encoded(BUFFER *wb, NUMBER_ENCODING encoding, int64_t value) {
     if(encoding == NUMBER_ENCODING_BASE64)
         return buffer_print_int64_base64(wb, value);
 
@@ -640,7 +726,8 @@ static inline void buffer_print_int64_encoded(BUFFER *wb, NUMBER_ENCODING encodi
     return buffer_print_int64(wb, value);
 }
 
-static inline void buffer_print_uint64_encoded(BUFFER *wb, NUMBER_ENCODING encoding, uint64_t value) {
+ALWAYS_INLINE
+static void buffer_print_uint64_encoded(BUFFER *wb, NUMBER_ENCODING encoding, uint64_t value) {
     if(encoding == NUMBER_ENCODING_BASE64)
         return buffer_print_uint64_base64(wb, value);
 
@@ -650,7 +737,8 @@ static inline void buffer_print_uint64_encoded(BUFFER *wb, NUMBER_ENCODING encod
     return buffer_print_uint64(wb, value);
 }
 
-static inline void buffer_print_netdata_double_encoded(BUFFER *wb, NUMBER_ENCODING encoding, NETDATA_DOUBLE value) {
+ALWAYS_INLINE
+static void buffer_print_netdata_double_encoded(BUFFER *wb, NUMBER_ENCODING encoding, NETDATA_DOUBLE value) {
     if(encoding == NUMBER_ENCODING_BASE64)
         return buffer_print_netdata_double_base64(wb, value);
 
@@ -660,7 +748,8 @@ static inline void buffer_print_netdata_double_encoded(BUFFER *wb, NUMBER_ENCODI
     return buffer_print_netdata_double(wb, value);
 }
 
-static inline void buffer_print_spaces(BUFFER *wb, size_t spaces) {
+ALWAYS_INLINE
+static void buffer_print_spaces(BUFFER *wb, size_t spaces) {
     buffer_need_bytes(wb, spaces * 4 + 1);
 
     char *d = &wb->buffer[wb->len];
@@ -677,29 +766,33 @@ static inline void buffer_print_spaces(BUFFER *wb, size_t spaces) {
     buffer_overflow_check(wb);
 }
 
-static inline void buffer_print_json_comma(BUFFER *wb) {
+ALWAYS_INLINE
+static void buffer_print_json_comma(BUFFER *wb) {
     if(wb->json.stack[wb->json.depth].count)
-        buffer_fast_strcat(wb, ",", 1);
+        buffer_putc(wb, ',');
 }
 
-static inline void buffer_print_json_comma_newline_spacing(BUFFER *wb) {
+ALWAYS_INLINE
+static void buffer_print_json_comma_newline_spacing(BUFFER *wb) {
     buffer_print_json_comma(wb);
 
     if((wb->json.options & BUFFER_JSON_OPTIONS_MINIFY) ||
         (wb->json.stack[wb->json.depth].type == BUFFER_JSON_ARRAY && !(wb->json.options & BUFFER_JSON_OPTIONS_NEWLINE_ON_ARRAY_ITEMS)))
         return;
 
-    buffer_fast_strcat(wb, "\n", 1);
+    buffer_putc(wb, '\n');
     buffer_print_spaces(wb, wb->json.depth + 1);
 }
 
-static inline void buffer_print_json_key(BUFFER *wb, const char *key) {
+ALWAYS_INLINE
+static void buffer_print_json_key(BUFFER *wb, const char *key) {
     buffer_strcat(wb, wb->json.key_quote);
     buffer_json_strcat(wb, key);
     buffer_strcat(wb, wb->json.key_quote);
 }
 
-static inline void buffer_json_add_string_value(BUFFER *wb, const char *value) {
+ALWAYS_INLINE
+static void buffer_json_add_string_value(BUFFER *wb, const char *value) {
     if(value) {
         buffer_strcat(wb, wb->json.value_quote);
         buffer_json_strcat(wb, value);
@@ -709,7 +802,8 @@ static inline void buffer_json_add_string_value(BUFFER *wb, const char *value) {
         buffer_fast_strcat(wb, "null", 4);
 }
 
-static inline void buffer_json_add_quoted_string_value(BUFFER *wb, const char *value) {
+ALWAYS_INLINE
+static void buffer_json_add_quoted_string_value(BUFFER *wb, const char *value) {
     if(value) {
         buffer_strcat(wb, wb->json.value_quote);
         buffer_json_quoted_strcat(wb, value);
@@ -734,17 +828,17 @@ static inline void buffer_json_object_close(BUFFER *wb) {
     assert(wb->json.stack[wb->json.depth].type == BUFFER_JSON_OBJECT && "BUFFER JSON: an object is not open to close it");
 #endif
     if(!(wb->json.options & BUFFER_JSON_OPTIONS_MINIFY)) {
-        buffer_fast_strcat(wb, "\n", 1);
+        buffer_putc(wb, '\n');
         buffer_print_spaces(wb, wb->json.depth);
     }
-    buffer_fast_strcat(wb, "}", 1);
+    buffer_putc(wb, '}');
     _buffer_json_depth_pop(wb);
 }
 
 static inline void buffer_json_member_add_string(BUFFER *wb, const char *key, const char *value) {
     buffer_print_json_comma_newline_spacing(wb);
     buffer_print_json_key(wb, key);
-    buffer_fast_strcat(wb, ":", 1);
+    buffer_putc(wb, ':');
     buffer_json_add_string_value(wb, value);
 
     wb->json.stack[wb->json.depth].count++;
@@ -762,10 +856,13 @@ static inline void buffer_json_member_add_string_or_empty(BUFFER *wb, const char
     buffer_json_member_add_string(wb, key, value);
 }
 
+void buffer_json_member_add_datetime_rfc3339(BUFFER *wb, const char *key, uint64_t datetime_ut, bool utc);
+void buffer_json_member_add_duration_ut(BUFFER *wb, const char *key, int64_t duration_ut);
+
 static inline void buffer_json_member_add_quoted_string(BUFFER *wb, const char *key, const char *value) {
     buffer_print_json_comma_newline_spacing(wb);
     buffer_print_json_key(wb, key);
-    buffer_fast_strcat(wb, ":", 1);
+    buffer_putc(wb, ':');
 
     if(!value || strcmp(value, "null") == 0)
         buffer_fast_strcat(wb, "null", 4);
@@ -775,10 +872,10 @@ static inline void buffer_json_member_add_quoted_string(BUFFER *wb, const char *
     wb->json.stack[wb->json.depth].count++;
 }
 
-static inline void buffer_json_member_add_uuid(BUFFER *wb, const char *key, nd_uuid_t *value) {
+static inline void buffer_json_member_add_uuid_ptr(BUFFER *wb, const char *key, nd_uuid_t *value) {
     buffer_print_json_comma_newline_spacing(wb);
     buffer_print_json_key(wb, key);
-    buffer_fast_strcat(wb, ":", 1);
+    buffer_putc(wb, ':');
 
     if(value && !uuid_is_null(*value)) {
         char uuid[GUID_LEN + 1];
@@ -791,10 +888,42 @@ static inline void buffer_json_member_add_uuid(BUFFER *wb, const char *key, nd_u
     wb->json.stack[wb->json.depth].count++;
 }
 
+static inline void buffer_json_member_add_uuid(BUFFER *wb, const char *key, nd_uuid_t value) {
+    buffer_print_json_comma_newline_spacing(wb);
+    buffer_print_json_key(wb, key);
+    buffer_putc(wb, ':');
+
+    if(!uuid_is_null(value)) {
+        char uuid[UUID_STR_LEN];
+        uuid_unparse_lower(value, uuid);
+        buffer_json_add_string_value(wb, uuid);
+    }
+    else
+        buffer_json_add_string_value(wb, NULL);
+
+    wb->json.stack[wb->json.depth].count++;
+}
+
+static inline void buffer_json_member_add_uuid_compact(BUFFER *wb, const char *key, nd_uuid_t value) {
+    buffer_print_json_comma_newline_spacing(wb);
+    buffer_print_json_key(wb, key);
+    buffer_putc(wb, ':');
+
+    if(!uuid_is_null(value)) {
+        char uuid[UUID_COMPACT_STR_LEN];
+        uuid_unparse_lower_compact(value, uuid);
+        buffer_json_add_string_value(wb, uuid);
+    }
+    else
+        buffer_json_add_string_value(wb, NULL);
+
+    wb->json.stack[wb->json.depth].count++;
+}
+
 static inline void buffer_json_member_add_boolean(BUFFER *wb, const char *key, bool value) {
     buffer_print_json_comma_newline_spacing(wb);
     buffer_print_json_key(wb, key);
-    buffer_fast_strcat(wb, ":", 1);
+    buffer_putc(wb, ':');
     buffer_strcat(wb, value?"true":"false");
 
     wb->json.stack[wb->json.depth].count++;
@@ -807,7 +936,7 @@ static inline void buffer_json_member_add_array(BUFFER *wb, const char *key) {
         buffer_fast_strcat(wb, ":[", 2);
     }
     else
-        buffer_fast_strcat(wb, "[", 1);
+        buffer_putc(wb, '[');
 
     wb->json.stack[wb->json.depth].count++;
 
@@ -818,13 +947,13 @@ static inline void buffer_json_add_array_item_array(BUFFER *wb) {
     if(!(wb->json.options & BUFFER_JSON_OPTIONS_MINIFY) && wb->json.stack[wb->json.depth].type == BUFFER_JSON_ARRAY) {
         // an array inside another array
         buffer_print_json_comma(wb);
-        buffer_fast_strcat(wb, "\n", 1);
+        buffer_putc(wb, '\n');
         buffer_print_spaces(wb, wb->json.depth + 1);
     }
     else
         buffer_print_json_comma_newline_spacing(wb);
 
-    buffer_fast_strcat(wb, "[", 1);
+    buffer_putc(wb, '[');
     wb->json.stack[wb->json.depth].count++;
 
     _buffer_json_depth_push(wb, BUFFER_JSON_ARRAY);
@@ -911,7 +1040,7 @@ static inline void buffer_json_add_array_item_time_t2ms(BUFFER *wb, time_t value
 static inline void buffer_json_add_array_item_object(BUFFER *wb) {
     buffer_print_json_comma_newline_spacing(wb);
 
-    buffer_fast_strcat(wb, "{", 1);
+    buffer_putc(wb, '{');
     wb->json.stack[wb->json.depth].count++;
 
     _buffer_json_depth_push(wb, BUFFER_JSON_OBJECT);
@@ -920,7 +1049,7 @@ static inline void buffer_json_add_array_item_object(BUFFER *wb) {
 static inline void buffer_json_member_add_time_t(BUFFER *wb, const char *key, time_t value) {
     buffer_print_json_comma_newline_spacing(wb);
     buffer_print_json_key(wb, key);
-    buffer_fast_strcat(wb, ":", 1);
+    buffer_putc(wb, ':');
     buffer_print_int64(wb, value);
 
     wb->json.stack[wb->json.depth].count++;
@@ -929,7 +1058,7 @@ static inline void buffer_json_member_add_time_t(BUFFER *wb, const char *key, ti
 static inline void buffer_json_member_add_time_t2ms(BUFFER *wb, const char *key, time_t value) {
     buffer_print_json_comma_newline_spacing(wb);
     buffer_print_json_key(wb, key);
-    buffer_fast_strcat(wb, ":", 1);
+    buffer_putc(wb, ':');
     buffer_print_int64(wb, value);
     buffer_fast_strcat(wb, "000", 3);
 
@@ -939,7 +1068,7 @@ static inline void buffer_json_member_add_time_t2ms(BUFFER *wb, const char *key,
 static inline void buffer_json_member_add_uint64(BUFFER *wb, const char *key, uint64_t value) {
     buffer_print_json_comma_newline_spacing(wb);
     buffer_print_json_key(wb, key);
-    buffer_fast_strcat(wb, ":", 1);
+    buffer_putc(wb, ':');
     buffer_print_uint64(wb, value);
 
     wb->json.stack[wb->json.depth].count++;
@@ -948,7 +1077,7 @@ static inline void buffer_json_member_add_uint64(BUFFER *wb, const char *key, ui
 static inline void buffer_json_member_add_int64(BUFFER *wb, const char *key, int64_t value) {
     buffer_print_json_comma_newline_spacing(wb);
     buffer_print_json_key(wb, key);
-    buffer_fast_strcat(wb, ":", 1);
+    buffer_putc(wb, ':');
     buffer_print_int64(wb, value);
 
     wb->json.stack[wb->json.depth].count++;
@@ -957,7 +1086,7 @@ static inline void buffer_json_member_add_int64(BUFFER *wb, const char *key, int
 static inline void buffer_json_member_add_double(BUFFER *wb, const char *key, NETDATA_DOUBLE value) {
     buffer_print_json_comma_newline_spacing(wb);
     buffer_print_json_key(wb, key);
-    buffer_fast_strcat(wb, ":", 1);
+    buffer_putc(wb, ':');
     buffer_print_netdata_double(wb, value);
 
     wb->json.stack[wb->json.depth].count++;
@@ -969,11 +1098,11 @@ static inline void buffer_json_array_close(BUFFER *wb) {
     assert(wb->json.stack[wb->json.depth].type == BUFFER_JSON_ARRAY && "BUFFER JSON: an array is not open to close it");
 #endif
     if(wb->json.options & BUFFER_JSON_OPTIONS_NEWLINE_ON_ARRAY_ITEMS) {
-        buffer_fast_strcat(wb, "\n", 1);
+        buffer_putc(wb, '\n');
         buffer_print_spaces(wb, wb->json.depth);
     }
 
-    buffer_fast_strcat(wb, "]", 1);
+    buffer_putc(wb, ']');
     _buffer_json_depth_pop(wb);
 }
 
@@ -1066,6 +1195,7 @@ typedef enum __attribute__((packed)) {
     RRDF_FIELD_TRANSFORM_DURATION_S,  // transform as duration in second to a human-readable duration
     RRDF_FIELD_TRANSFORM_DATETIME_MS,  // UNIX epoch timestamp in ms
     RRDF_FIELD_TRANSFORM_DATETIME_USEC,  // UNIX epoch timestamp in usec
+    RRDF_FIELD_TRANSFORM_XML,   // format the field with an XML prettifier
 } RRDF_FIELD_TRANSFORM;
 
 static inline const char *rrdf_field_transform_to_string(RRDF_FIELD_TRANSFORM transform) {
@@ -1085,6 +1215,9 @@ static inline const char *rrdf_field_transform_to_string(RRDF_FIELD_TRANSFORM tr
 
         case RRDF_FIELD_TRANSFORM_DATETIME_USEC:
             return "datetime_usec";
+
+        case RRDF_FIELD_TRANSFORM_XML:
+            return "xml";
     }
 }
 
@@ -1231,6 +1364,18 @@ static inline BUFFER *buffer_dup(BUFFER *src) {
     BUFFER *dst = buffer_create(buffer_strlen(src) + 1, src->statistics);
     buffer_copy(dst, src);
     return dst;
+}
+
+char *url_encode(const char *str);
+static inline void buffer_key_value_urlencode(BUFFER *wb, const char *key, const char *value) {
+    char *encoded = NULL;
+
+    if(value && *value)
+        encoded = url_encode(value);
+
+    buffer_sprintf(wb, "%s=%s", key, encoded ? encoded : "");
+
+    freez(encoded);
 }
 
 #endif /* NETDATA_WEB_BUFFER_H */

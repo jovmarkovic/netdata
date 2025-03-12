@@ -84,8 +84,8 @@ static struct {
     bool enabled;
     char *iceServers[WEBRTC_MAX_ICE_SERVERS];
     int iceServersCount;
-    char *proxyServer;
-    char *bindAddress;
+    const char *proxyServer;
+    const char *bindAddress;
 
     struct {
         SPINLOCK spinlock;
@@ -115,7 +115,7 @@ static struct {
         .proxyServer = NULL, // [("http"|"socks5") (":"|"://")][username ":" password "@"]hostname["    :" port]
         .bindAddress = NULL,
         .unsafe = {
-                .spinlock = NETDATA_SPINLOCK_INITIALIZER,
+                .spinlock = SPINLOCK_INITIALIZER,
                 .head = NULL,
         },
 };
@@ -142,10 +142,12 @@ static void webrtc_config_ice_servers(void) {
     webrtc_base.iceServersCount = i;
     internal_error(true, "WEBRTC: there are %d default ice servers: '%s'", webrtc_base.iceServersCount, buffer_tostring(wb));
 
-    char *servers = config_get(CONFIG_SECTION_WEBRTC, "ice servers", buffer_tostring(wb));
+    const char *servers = inicfg_get(&netdata_config, CONFIG_SECTION_WEBRTC, "ice servers", buffer_tostring(wb));
 
     webrtc_base.iceServersCount = 0;
-    char *s = servers, *e;
+    char tmp[strlen(servers) + 1];
+    strcpy(tmp, servers);
+    char *s = tmp, *e;
     while(*s) {
         if(isspace(*s))
             s++;
@@ -172,18 +174,18 @@ static void webrtc_config_ice_servers(void) {
 }
 
 void webrtc_initialize() {
-    webrtc_base.enabled = config_get_boolean(CONFIG_SECTION_WEBRTC, "enabled", webrtc_base.enabled);
+    webrtc_base.enabled = inicfg_get_boolean(&netdata_config, CONFIG_SECTION_WEBRTC, "enabled", webrtc_base.enabled);
     internal_error(true, "WEBRTC: is %s", webrtc_base.enabled ? "enabled" : "disabled");
 
     webrtc_config_ice_servers();
 
-    webrtc_base.proxyServer = config_get(CONFIG_SECTION_WEBRTC, "proxy server", webrtc_base.proxyServer ? webrtc_base.proxyServer : "");
+    webrtc_base.proxyServer = inicfg_get(&netdata_config, CONFIG_SECTION_WEBRTC, "proxy server", webrtc_base.proxyServer ? webrtc_base.proxyServer : "");
     if(!webrtc_base.proxyServer || !*webrtc_base.proxyServer)
         webrtc_base.proxyServer = NULL;
 
     internal_error(true, "WEBRTC: proxy server is: '%s'", webrtc_base.proxyServer ? webrtc_base.proxyServer : "");
 
-    webrtc_base.bindAddress = config_get(CONFIG_SECTION_WEBRTC, "bind address", webrtc_base.bindAddress ? webrtc_base.bindAddress : "");
+    webrtc_base.bindAddress = inicfg_get(&netdata_config, CONFIG_SECTION_WEBRTC, "bind address", webrtc_base.bindAddress ? webrtc_base.bindAddress : "");
     if(!webrtc_base.bindAddress || !*webrtc_base.bindAddress)
         webrtc_base.bindAddress = NULL;
 

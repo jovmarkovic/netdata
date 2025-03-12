@@ -10,10 +10,6 @@ NON_INTERACTIVE=0
 DONT_WAIT=0
 
 declare -a package_tree=(
-  autoconf
-  autoconf-archive
-  autogen
-  automake
   bison
   cmake
   curl
@@ -28,7 +24,6 @@ declare -a package_tree=(
   liblz4-devel
   libmnl-devel
   libopenssl-devel
-  libtool
   libuuid-devel
   libuv-devel
   libyaml-devel

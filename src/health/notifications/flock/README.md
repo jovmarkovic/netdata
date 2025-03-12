@@ -37,8 +37,8 @@ Send notifications to Flock using Netdata's Agent alert notification feature, wh
 The configuration file name for this integration is `health_alarm_notify.conf`.
 
 
-You can edit the configuration file using the `edit-config` script from the
-Netdata [config directory](/docs/netdata-agent/configuration/README.md#the-netdata-config-directory).
+You can edit the configuration file using the [`edit-config`](https://github.com/netdata/netdata/blob/master/docs/netdata-agent/configuration/README.md#edit-a-configuration-file-using-edit-config) script from the
+Netdata [config directory](https://github.com/netdata/netdata/blob/master/docs/netdata-agent/configuration/README.md#the-netdata-config-directory).
 
 ```bash
 cd /etc/netdata 2>/dev/null || cd /opt/netdata/etc/netdata
@@ -59,7 +59,7 @@ The following options can be defined for this notification
 ##### DEFAULT_RECIPIENT_FLOCK
 
 You can have different channels per role, by editing DEFAULT_RECIPIENT_FLOCK with the channel you want, in the following entries at the bottom of the same file:
-```conf
+```text
 role_recipients_flock[sysadmin]="systems"
 role_recipients_flock[domainadmin]="domains"
 role_recipients_flock[dba]="databases systems"

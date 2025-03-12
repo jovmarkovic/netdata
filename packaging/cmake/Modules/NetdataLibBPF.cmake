@@ -1,7 +1,5 @@
-# Handling for libbpf (used by the eBPF plugin)
-#
-# Copyright (c) 2024 Netdata Inc.
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Handling for libbpf (used by the eBPF plugin)
 
 include(ExternalProject)
 include(NetdataUtil)
@@ -31,7 +29,7 @@ function(netdata_bundle_libbpf)
     if(USE_LEGACY_LIBBPF)
         set(_libbpf_tag 673424c56127bb556e64095f41fd60c26f9083ec) # v0.0.9_netdata-1
     else()
-        set(_libbpf_tag 3d78a726c618560ad7fb03ceaf0fd03e8b2656b4) # v1.4.3p_netdata
+        set(_libbpf_tag ad7c3a4266bf5ce301a5691eb7b405dbb27c7f3d) # v1.5.0p_netdata
     endif()
 
     if(DEFINED BUILD_SHARED_LIBS)
@@ -61,7 +59,7 @@ function(netdata_bundle_libbpf)
 
     set(_libbpf_lib_dir lib)
 
-    if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64)|(amd64)")
         set(_libbpf_lib_dir lib64)
     endif()
 
@@ -95,7 +93,7 @@ endfunction()
 
 # Add libbpf as a link dependency for the given target.
 function(netdata_add_libbpf_to_target _target)
-    target_link_libraries(${_target} PUBLIC libbpf_library)
+    target_link_libraries(${_target} libbpf_library)
     target_include_directories(${_target} BEFORE PUBLIC "${NETDATA_LIBBPF_INCLUDE_DIRECTORIES}")
     target_compile_options(${_target} PUBLIC "${NETDATA_LIBBPF_COMPILE_OPTIONS}")
     add_dependencies(${_target} libbpf)

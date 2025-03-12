@@ -5,16 +5,12 @@
 set -e
 
 declare -a package_tree=(
-  autoconf
-  autoconf-archive
-  automake
   bison
   cmake
-  cmake3
   curl
   elfutils-libelf-devel
-  flex
   findutils
+  flex
   gcc
   gcc-c++
   git
@@ -22,7 +18,6 @@ declare -a package_tree=(
   json-c-devel
   libatomic
   libmnl-devel
-  libtool
   libuuid-devel
   libuv-devel
   libyaml-devel

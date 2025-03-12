@@ -3,7 +3,7 @@
 #include "../libnetdata.h"
 
 bool is_system_ieee754_double(void) {
-    static bool logged = false;
+//    static bool logged = false;
 
     struct {
         NETDATA_DOUBLE original;
@@ -51,29 +51,30 @@ bool is_system_ieee754_double(void) {
         uint64_t *ptr = (uint64_t *)&tests[i].original;
 
         if(*ptr != tests[i].i && (tests[i].original == tests[i].d || (isnan(tests[i].original) && isnan(tests[i].d)))) {
-            if(!logged)
-                netdata_log_info("IEEE754: test #%zu, value " NETDATA_DOUBLE_FORMAT_G " is represented in this system as %lX, but it was expected as %lX",
-                     i+1, tests[i].original, *ptr, tests[i].i);
+//            if(!logged)
+//                netdata_log_info("IEEE754: test #%zu, value " NETDATA_DOUBLE_FORMAT_G " is represented in this system as %016llX, but it was expected as %016llX",
+//                     i+1, tests[i].original, (long long unsigned int)*ptr, (long long unsigned int)tests[i].i);
             errors++;
         }
     }
 
     if(!errors && sizeof(NETDATA_DOUBLE) == sizeof(uint64_t)) {
-        if(!logged)
-            netdata_log_info("IEEE754: system is using IEEE754 DOUBLE PRECISION values");
+//        if(!logged)
+//            netdata_log_info("IEEE754: system is using IEEE754 DOUBLE PRECISION values");
 
-        logged = true;
+//        logged = true;
         return true;
     }
     else {
-        if(!logged)
-            netdata_log_info("IEEE754: system is NOT compatible with IEEE754 DOUBLE PRECISION values");
+//        if(!logged)
+//            netdata_log_info("IEEE754: system is NOT compatible with IEEE754 DOUBLE PRECISION values");
 
-        logged = true;
+//        logged = true;
         return false;
     }
 }
 
+ALWAYS_INLINE_HOT_FLATTEN
 storage_number pack_storage_number(NETDATA_DOUBLE value, SN_FLAGS flags) {
     // bit 32 = sign 0:positive, 1:negative
     // bit 31 = 0:divide, 1:multiply

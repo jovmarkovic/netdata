@@ -1,7 +1,5 @@
-# Handling for eBPF CO-RE files
-#
-# Copyright (c) 2024 Netdata Inc.
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Handling for eBPF CO-RE files
 
 include(ExternalProject)
 
@@ -11,8 +9,8 @@ set(ebpf-co-re_SOURCE_DIR "${CMAKE_BINARY_DIR}/ebpf-co-re")
 function(netdata_fetch_ebpf_co_re)
     ExternalProject_Add(
         ebpf-co-re
-        URL https://github.com/netdata/ebpf-co-re/releases/download/v1.4.3/netdata-ebpf-co-re-glibc-v1.4.3.tar.xz
-        URL_HASH SHA256=52a8cf65b4659d173ec3d9fb69315ba48c1f091d1882968748b37a8f7bf9f92d
+        URL https://github.com/netdata/ebpf-co-re/releases/download/v1.5.0/netdata-ebpf-co-re-glibc-v1.5.0.tar.xz
+        URL_HASH SHA256=9585a5a48853f70efa51c48f57df34b4e47b1af56eaaef731f57525ebd76b90c
         SOURCE_DIR "${ebpf-co-re_SOURCE_DIR}"
         CONFIGURE_COMMAND ""
         BUILD_COMMAND ""

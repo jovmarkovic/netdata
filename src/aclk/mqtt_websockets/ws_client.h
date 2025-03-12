@@ -1,27 +1,23 @@
-// SPDX-License-Identifier: GPL-3.0-only
-// Copyright (C) 2020 Timotej Šiškovič
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #ifndef WS_CLIENT_H
 #define WS_CLIENT_H
 
-#include "c-rbuf/cringbuffer.h"
-#include "mqtt_wss_log.h"
-
-#include <stdint.h>
-
-#define WS_CLIENT_NEED_MORE_BYTES     0x10
-#define WS_CLIENT_PARSING_DONE        0x11
-#define WS_CLIENT_CONNECTION_CLOSED   0x12
-#define WS_CLIENT_PROTOCOL_ERROR     -0x10
-#define WS_CLIENT_BUFFER_FULL        -0x11
-#define WS_CLIENT_INTERNAL_ERROR     -0x12
+#define WS_CLIENT_NEED_MORE_BYTES            0x10
+#define WS_CLIENT_PARSING_DONE               0x11
+#define WS_CLIENT_CONNECTION_CLOSED          0x12
+#define WS_CLIENT_CONNECTION_REMOTE_CLOSED   0x13
+#define WS_CLIENT_PROTOCOL_ERROR            -0x10
+#define WS_CLIENT_BUFFER_FULL               -0x11
+#define WS_CLIENT_INTERNAL_ERROR            -0x12
 
 enum websocket_client_conn_state {
     WS_RAW = 0,
     WS_HANDSHAKE,
     WS_ESTABLISHED,
     WS_ERROR,        // connection has to be restarted if this is reached
-    WS_CONN_CLOSED_GRACEFUL
+    WS_CONN_CLOSED_GRACEFUL,
+    WS_CONN_CLOSED_GRACEFUL_BY_REMOTE,
 };
 
 enum websocket_client_hdr_parse_state {
@@ -83,6 +79,7 @@ typedef struct websocket_client {
     struct ws_rx {
         enum websocket_client_rx_ws_parse_state parse_state;
         enum websocket_opcode opcode;
+        bool remote_closed;
         uint64_t payload_length;
         uint64_t payload_processed;
         union {
@@ -98,23 +95,20 @@ typedef struct websocket_client {
     // memory usage and remove one more memcpy buf_read->buf_to_mqtt
     rbuf_t buf_to_mqtt; // RAW data for MQTT lib
 
-    int entropy_fd;
-
     // careful host is borrowed, don't free
     char **host;
-    mqtt_wss_log_ctx_t log;
 } ws_client;
 
-ws_client *ws_client_new(size_t buf_size, char **host, mqtt_wss_log_ctx_t log);
+ws_client *ws_client_new(size_t buf_size, char **host);
 void ws_client_destroy(ws_client *client);
 void ws_client_reset(ws_client *client);
 
 int ws_client_start_handshake(ws_client *client);
 
-int ws_client_want_write(ws_client *client);
+int ws_client_want_write(const ws_client *client);
 
 int ws_client_process(ws_client *client);
 
-int ws_client_send(ws_client *client, enum websocket_opcode frame_type, const char *data, size_t size);
+int ws_client_send(const ws_client *client, enum websocket_opcode frame_type, const char *data, size_t size);
 
 #endif /* WS_CLIENT_H */

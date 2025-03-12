@@ -26,7 +26,7 @@ You can send notifications to PagerDuty using Netdata's Agent alert notification
 
 #### 
 
-- An installation of the [PagerDuty](https://www.pagerduty.com/docs/guides/agent-install-guide/) agent on the node running the Netdata Agent
+- An installation of the [PagerDuty](https://www.pagerduty.com/docs/guides/agent-install-guide/) Agent on the node running the Netdata Agent
 - A PagerDuty Generic API service using either the `Events API v2` or `Events API v1`
 - [Add a new service](https://support.pagerduty.com/docs/services-and-integrations#section-configuring-services-and-integrations) to PagerDuty. Click Use our API directly and select either `Events API v2` or `Events API v1`. Once you finish creating the service, click on the Integrations tab to find your Integration Key.
 - Access to the terminal where Netdata Agent is running
@@ -40,8 +40,8 @@ You can send notifications to PagerDuty using Netdata's Agent alert notification
 The configuration file name for this integration is `health_alarm_notify.conf`.
 
 
-You can edit the configuration file using the `edit-config` script from the
-Netdata [config directory](/docs/netdata-agent/configuration/README.md#the-netdata-config-directory).
+You can edit the configuration file using the [`edit-config`](https://github.com/netdata/netdata/blob/master/docs/netdata-agent/configuration/README.md#edit-a-configuration-file-using-edit-config) script from the
+Netdata [config directory](https://github.com/netdata/netdata/blob/master/docs/netdata-agent/configuration/README.md#the-netdata-config-directory).
 
 ```bash
 cd /etc/netdata 2>/dev/null || cd /opt/netdata/etc/netdata
@@ -63,7 +63,7 @@ The following options can be defined for this notification
 All roles will default to this variable if left unconfigured.
 
 The `DEFAULT_RECIPIENT_PD` can be edited in the following entries at the bottom of the same file:
-```conf
+```text
 role_recipients_pd[sysadmin]="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxa"
 role_recipients_pd[domainadmin]="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxb"
 role_recipients_pd[dba]="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxc"

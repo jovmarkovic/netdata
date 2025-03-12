@@ -302,7 +302,7 @@ int do_sys_class_infiniband(int update_every, usec_t dt)
     static int initialized = 0;
     static int enable_new_ports = -1, enable_only_active = CONFIG_BOOLEAN_YES;
     static int do_bytes = -1, do_packets = -1, do_errors = -1, do_hwpackets = -1, do_hwerrors = -1;
-    static char *sys_class_infiniband_dirname = NULL;
+    static const char *sys_class_infiniband_dirname = NULL;
 
     static long long int dt_to_refresh_ports = 0, last_refresh_ports_usec = 0;
 
@@ -311,28 +311,28 @@ int do_sys_class_infiniband(int update_every, usec_t dt)
 
         snprintfz(dirname, FILENAME_MAX, "%s%s", netdata_configured_host_prefix, "/sys/class/infiniband");
         sys_class_infiniband_dirname =
-            config_get(CONFIG_SECTION_PLUGIN_SYS_CLASS_INFINIBAND, "dirname to monitor", dirname);
+            inicfg_get(&netdata_config, CONFIG_SECTION_PLUGIN_SYS_CLASS_INFINIBAND, "dirname to monitor", dirname);
 
-        do_bytes     = config_get_boolean_ondemand(
-            CONFIG_SECTION_PLUGIN_SYS_CLASS_INFINIBAND, "bandwidth counters",        CONFIG_BOOLEAN_YES);
-        do_packets   = config_get_boolean_ondemand(
-            CONFIG_SECTION_PLUGIN_SYS_CLASS_INFINIBAND, "packets counters",          CONFIG_BOOLEAN_YES);
-        do_errors    = config_get_boolean_ondemand(
-            CONFIG_SECTION_PLUGIN_SYS_CLASS_INFINIBAND, "errors counters",           CONFIG_BOOLEAN_YES);
-        do_hwpackets = config_get_boolean_ondemand(
-            CONFIG_SECTION_PLUGIN_SYS_CLASS_INFINIBAND, "hardware packets counters", CONFIG_BOOLEAN_AUTO);
-        do_hwerrors  = config_get_boolean_ondemand(
-            CONFIG_SECTION_PLUGIN_SYS_CLASS_INFINIBAND, "hardware errors counters",  CONFIG_BOOLEAN_AUTO);
+        do_bytes     = inicfg_get_boolean_ondemand(
+            &netdata_config, CONFIG_SECTION_PLUGIN_SYS_CLASS_INFINIBAND, "bandwidth counters",        CONFIG_BOOLEAN_YES);
+        do_packets   = inicfg_get_boolean_ondemand(
+            &netdata_config, CONFIG_SECTION_PLUGIN_SYS_CLASS_INFINIBAND, "packets counters",          CONFIG_BOOLEAN_YES);
+        do_errors    = inicfg_get_boolean_ondemand(
+            &netdata_config, CONFIG_SECTION_PLUGIN_SYS_CLASS_INFINIBAND, "errors counters",           CONFIG_BOOLEAN_YES);
+        do_hwpackets = inicfg_get_boolean_ondemand(
+            &netdata_config, CONFIG_SECTION_PLUGIN_SYS_CLASS_INFINIBAND, "hardware packets counters", CONFIG_BOOLEAN_AUTO);
+        do_hwerrors  = inicfg_get_boolean_ondemand(
+            &netdata_config, CONFIG_SECTION_PLUGIN_SYS_CLASS_INFINIBAND, "hardware errors counters",  CONFIG_BOOLEAN_AUTO);
 
-        enable_only_active = config_get_boolean_ondemand(
-            CONFIG_SECTION_PLUGIN_SYS_CLASS_INFINIBAND, "monitor only active ports", CONFIG_BOOLEAN_AUTO);
+        enable_only_active = inicfg_get_boolean_ondemand(
+            &netdata_config, CONFIG_SECTION_PLUGIN_SYS_CLASS_INFINIBAND, "monitor only active ports", CONFIG_BOOLEAN_AUTO);
         disabled_list = simple_pattern_create(
-                config_get(CONFIG_SECTION_PLUGIN_SYS_CLASS_INFINIBAND, "disable by default interfaces matching", ""),
+                inicfg_get(&netdata_config, CONFIG_SECTION_PLUGIN_SYS_CLASS_INFINIBAND, "disable by default interfaces matching", ""),
                 NULL,
                 SIMPLE_PATTERN_EXACT, true);
 
         dt_to_refresh_ports =
-            config_get_number(CONFIG_SECTION_PLUGIN_SYS_CLASS_INFINIBAND, "refresh ports state every seconds", 30) *
+            inicfg_get_duration_seconds(&netdata_config, CONFIG_SECTION_PLUGIN_SYS_CLASS_INFINIBAND, "refresh ports state every", 30) *
             USEC_PER_SEC;
         if (dt_to_refresh_ports < 0)
             dt_to_refresh_ports = 0;
@@ -401,9 +401,9 @@ int do_sys_class_infiniband(int update_every, usec_t dt)
                     snprintfz(buffer, FILENAME_MAX, "plugin:proc:/sys/class/infiniband:%s", p->name);
 
                     // Standard counters
-                    p->do_bytes   = config_get_boolean_ondemand(buffer, "bytes",   do_bytes);
-                    p->do_packets = config_get_boolean_ondemand(buffer, "packets", do_packets);
-                    p->do_errors  = config_get_boolean_ondemand(buffer, "errors",  do_errors);
+                    p->do_bytes   = inicfg_get_boolean_ondemand(&netdata_config, buffer, "bytes",   do_bytes);
+                    p->do_packets = inicfg_get_boolean_ondemand(&netdata_config, buffer, "packets", do_packets);
+                    p->do_errors  = inicfg_get_boolean_ondemand(&netdata_config, buffer, "errors",  do_errors);
 
 // Gen filename allocation and concatenation
 #define GEN_DO_COUNTER_NAME(NAME, GRP, DESC, DIR, PORT, ...)                                                           \
@@ -416,8 +416,8 @@ int do_sys_class_infiniband(int update_every, usec_t dt)
                     DIR *hwcounters_dir = opendir(hwcounters_dirname);
                     if (hwcounters_dir) {
                         // By default set standard
-                        p->do_hwpackets = config_get_boolean_ondemand(buffer, "hwpackets", do_hwpackets);
-                        p->do_hwerrors  = config_get_boolean_ondemand(buffer, "hwerrors",  do_hwerrors);
+                        p->do_hwpackets = inicfg_get_boolean_ondemand(&netdata_config, buffer, "hwpackets", do_hwpackets);
+                        p->do_hwerrors  = inicfg_get_boolean_ondemand(&netdata_config, buffer, "hwerrors",  do_hwerrors);
 
 // VENDORS: Set your own
 
@@ -538,8 +538,7 @@ int do_sys_class_infiniband(int update_every, usec_t dt)
                     port->priority + 1,
                     update_every,
                     RRDSET_TYPE_AREA);
-                // Create Dimensions
-                rrdset_flag_set(port->st_bytes, RRDSET_FLAG_DETAIL);
+
                 // On this chart, we want to have a KB/s so the dashboard will autoscale it
                 // The reported values are also per-lane, so we must multiply it by the width
                 // x4 lanes multiplier as per Documentation/ABI/stable/sysfs-class-infiniband
@@ -576,8 +575,7 @@ int do_sys_class_infiniband(int update_every, usec_t dt)
                     port->priority + 2,
                     update_every,
                     RRDSET_TYPE_AREA);
-                // Create Dimensions
-                rrdset_flag_set(port->st_packets, RRDSET_FLAG_DETAIL);
+
                 FOREACH_COUNTER_PACKETS(GEN_RRD_DIM_ADD, port)
             }
 
@@ -605,8 +603,7 @@ int do_sys_class_infiniband(int update_every, usec_t dt)
                     port->priority + 3,
                     update_every,
                     RRDSET_TYPE_LINE);
-                // Create Dimensions
-                rrdset_flag_set(port->st_errors, RRDSET_FLAG_DETAIL);
+
                 FOREACH_COUNTER_ERRORS(GEN_RRD_DIM_ADD, port)
             }
 
@@ -641,8 +638,6 @@ int do_sys_class_infiniband(int update_every, usec_t dt)
                         update_every,
                         RRDSET_TYPE_LINE);
 
-                    rrdset_flag_set(port->st_hwerrors, RRDSET_FLAG_DETAIL);
-
                     // VENDORS: Set your selection
 
                     // VENDOR: Mellanox
@@ -676,8 +671,6 @@ int do_sys_class_infiniband(int update_every, usec_t dt)
                         port->priority + 5,
                         update_every,
                         RRDSET_TYPE_LINE);
-
-                    rrdset_flag_set(port->st_hwpackets, RRDSET_FLAG_DETAIL);
 
                     // VENDORS: Set your selection
 

@@ -2,7 +2,7 @@
 
 #include "plugin_proc.h"
 
-static char *pci_aer_dirname = NULL;
+static const char *pci_aer_dirname = NULL;
 
 typedef enum __attribute__((packed)) {
     AER_DEV_NONFATAL                    = (1 << 0),
@@ -42,7 +42,7 @@ static bool aer_value_conflict_callback(const DICTIONARY_ITEM *item __maybe_unus
 
 static void aer_insert_callback(const DICTIONARY_ITEM *item __maybe_unused, void *value, void *data __maybe_unused) {
     struct aer_entry *a = value;
-    a->values = dictionary_create(DICT_OPTION_SINGLE_THREADED|DICT_OPTION_DONT_OVERWRITE_VALUE);
+    a->values = dictionary_create_advanced(DICT_OPTION_SINGLE_THREADED|DICT_OPTION_DONT_OVERWRITE_VALUE|DICT_OPTION_FIXED_SIZE, &dictionary_stats_category_collectors, sizeof(struct aer_value));
     dictionary_register_conflict_callback(a->values, aer_value_conflict_callback, NULL);
 }
 
@@ -102,7 +102,7 @@ static bool recursively_find_pci_aer(AER_TYPE types, const char *base_dir, const
 static void find_all_pci_aer(AER_TYPE types) {
     char name[FILENAME_MAX + 1];
     snprintfz(name, FILENAME_MAX, "%s%s", netdata_configured_host_prefix, "/sys/devices");
-    pci_aer_dirname = config_get("plugin:proc:/sys/devices/pci/aer", "directory to monitor", name);
+    pci_aer_dirname = inicfg_get(&netdata_config, "plugin:proc:/sys/devices/pci/aer", "directory to monitor", name);
 
     DIR *dir = opendir(pci_aer_dirname);
     if(unlikely(!dir)) {
@@ -195,21 +195,21 @@ int do_proc_sys_devices_pci_aer(int update_every, usec_t dt __maybe_unused) {
         int do_root_ports = CONFIG_BOOLEAN_AUTO;
         int do_pci_slots = CONFIG_BOOLEAN_NO;
 
-        char buffer[100 + 1] = "";
-        rrdlabels_get_value_strcpyz(localhost->rrdlabels, buffer, 100, "_virtualization");
+        char buffer[128];
+        rrdlabels_get_value_strcpyz(localhost->rrdlabels, buffer, sizeof(buffer), "_virtualization");
         if(strcmp(buffer, "none") != 0) {
             // no need to run on virtualized environments
             do_root_ports = CONFIG_BOOLEAN_NO;
             do_pci_slots = CONFIG_BOOLEAN_NO;
         }
 
-        do_root_ports = config_get_boolean("plugin:proc:/sys/class/pci/aer", "enable root ports", do_root_ports);
-        do_pci_slots = config_get_boolean("plugin:proc:/sys/class/pci/aer", "enable pci slots", do_pci_slots);
+        do_root_ports = inicfg_get_boolean(&netdata_config, "plugin:proc:/sys/class/pci/aer", "enable root ports", do_root_ports);
+        do_pci_slots = inicfg_get_boolean(&netdata_config, "plugin:proc:/sys/class/pci/aer", "enable pci slots", do_pci_slots);
 
         if(!do_root_ports && !do_pci_slots)
             return 1;
 
-        aer_root = dictionary_create(DICT_OPTION_SINGLE_THREADED | DICT_OPTION_DONT_OVERWRITE_VALUE);
+        aer_root = dictionary_create_advanced(DICT_OPTION_SINGLE_THREADED | DICT_OPTION_DONT_OVERWRITE_VALUE | DICT_OPTION_FIXED_SIZE, &dictionary_stats_category_collectors, sizeof(struct aer_entry));
         dictionary_register_insert_callback(aer_root, aer_insert_callback, NULL);
 
         AER_TYPE types = ((do_root_ports) ? (AER_ROOTPORT_TOTAL_ERR_COR|AER_ROOTPORT_TOTAL_ERR_FATAL) : 0) |

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include "daemon/common.h"
+#include "database/rrd.h"
 
 #define STATSD_CHART_PREFIX "statsd"
 
@@ -220,7 +220,7 @@ typedef struct statsd_app {
     const char *name;
     SIMPLE_PATTERN *metrics;
     STATS_METRIC_OPTIONS default_options;
-    RRD_MEMORY_MODE rrd_memory_mode;
+    RRD_DB_MODE rrd_memory_mode;
     int32_t rrd_history_entries;
     DICTIONARY *dict;
 
@@ -261,7 +261,7 @@ static struct statsd {
     size_t udp_packets_received;
     size_t udp_bytes_read;
 
-    int32_t update_every;
+    time_t update_every;
     bool enabled;
     bool private_charts_hidden;
     SIMPLE_PATTERN *charts_for;
@@ -623,7 +623,7 @@ static inline void statsd_process_dictionary(STATSD_METRIC *m, const char *value
         statsd_reset_metric(m);
 
     if (unlikely(!m->dictionary.dict))
-        m->dictionary.dict = dictionary_create_advanced(STATSD_DICTIONARY_OPTIONS, &dictionary_stats_category_collectors, 0);
+        m->dictionary.dict = dictionary_create_advanced(STATSD_DICTIONARY_OPTIONS | DICT_OPTION_FIXED_SIZE, &dictionary_stats_category_collectors, sizeof(STATSD_METRIC_DICTIONARY_ITEM));
 
     if(unlikely(value_is_zinit(value))) {
         // magic loading of metric, without affecting anything
@@ -873,12 +873,12 @@ struct statsd_udp {
 };
 
 // new TCP client connected
-static void *statsd_add_callback(POLLINFO *pi, short int *events, void *data) {
+static void *statsd_add_callback(POLLINFO *pi, nd_poll_event_t *events, void *data) {
     (void)pi;
     (void)data;
 
     worker_is_busy(WORKER_JOB_TYPE_TCP_CONNECTED);
-    *events = POLLIN;
+    *events = ND_POLL_READ;
 
     struct statsd_tcp *t = (struct statsd_tcp *)callocz(sizeof(struct statsd_tcp) + STATSD_TCP_BUFFER_SIZE, 1);
     t->type = STATSD_SOCKET_DATA_TYPE_TCP;
@@ -916,11 +916,11 @@ static void statsd_del_callback(POLLINFO *pi) {
 }
 
 // Receive data
-static int statsd_rcv_callback(POLLINFO *pi, short int *events) {
+static int statsd_rcv_callback(POLLINFO *pi, nd_poll_event_t *events) {
     int retval = -1;
     worker_is_busy(WORKER_JOB_TYPE_RCV_DATA);
 
-    *events = POLLIN;
+    *events = ND_POLL_READ;
 
     int fd = pi->fd;
 
@@ -965,6 +965,8 @@ static int statsd_rcv_callback(POLLINFO *pi, short int *events) {
                     d->len += rc;
                     statsd.tcp_socket_reads++;
                     statsd.tcp_bytes_read += rc;
+
+                    pulse_statsd_received_bytes(rc);
                 }
 
                 if(likely(d->len > 0)) {
@@ -1016,12 +1018,15 @@ static int statsd_rcv_callback(POLLINFO *pi, short int *events) {
                     statsd.udp_socket_reads++;
                     statsd.udp_packets_received += rc;
 
-                    size_t i;
+                    size_t i, total_size = 0;
                     for (i = 0; i < (size_t)rc; ++i) {
                         size_t len = (size_t)d->msgs[i].msg_len;
                         statsd.udp_bytes_read += len;
+                        total_size += len;
                         statsd_process(d->msgs[i].msg_hdr.msg_iov->iov_base, len, 0);
                     }
+
+                    pulse_statsd_received_bytes(total_size);
                 }
             } while (rc != -1);
 
@@ -1043,6 +1048,8 @@ static int statsd_rcv_callback(POLLINFO *pi, short int *events) {
                     statsd.udp_packets_received++;
                     statsd.udp_bytes_read += rc;
                     statsd_process(d->buffer, (size_t) rc, 0);
+
+                    pulse_statsd_received_bytes(rc);
                 }
             } while (rc != -1);
 #endif
@@ -1064,10 +1071,7 @@ cleanup:
     return retval;
 }
 
-static int statsd_snd_callback(POLLINFO *pi, short int *events) {
-    (void)pi;
-    (void)events;
-
+static int statsd_snd_callback(POLLINFO *pi __maybe_unused, nd_poll_event_t *events __maybe_unused) {
     worker_is_busy(WORKER_JOB_TYPE_SND_DATA);
     netdata_log_error("STATSD: snd_callback() called, but we never requested to send data to statsd clients.");
     worker_is_idle();
@@ -1085,8 +1089,6 @@ void statsd_collector_thread_cleanup(void *pptr) {
     spinlock_lock(&d->status->spinlock);
     d->status->running = false;
     spinlock_unlock(&d->status->spinlock);
-
-    collector_info("cleaning up...");
 
 #ifdef HAVE_RECVMMSG
     size_t i;
@@ -1283,7 +1285,7 @@ static int statsd_readfile(const char *filename, STATSD_APP *app, STATSD_APP_CHA
                     // find the directory name from the file we already read
                     char *filename2 = strdupz(filename); // copy filename, since dirname() will change it
                     char *dir = dirname(filename2);      // find the directory part of the filename
-                    tmp = strdupz_path_subpath(dir, s);  // compose the new filename to read;
+                    tmp = filename_from_path_entry_strdupz(dir, s);  // compose the new filename to read;
                     freez(filename2);                    // free the filename we copied
                 }
                 statsd_readfile(tmp, app, chart, dict);
@@ -1869,7 +1871,7 @@ static inline void metric_check_obsoletion(STATSD_METRIC *m) {
     if(statsd.set_obsolete_after &&
        !rrdset_flag_check(m->st, RRDSET_FLAG_OBSOLETE) &&
        m->options & STATSD_METRIC_OPTION_PRIVATE_CHART_ENABLED &&
-       m->last_collected + statsd.set_obsolete_after < now_realtime_sec()) {
+       m->last_collected + (time_t)statsd.set_obsolete_after < now_realtime_sec()) {
         rrdset_is_obsolete___safe_from_collector_thread(m->st);
         m->options |= STATSD_METRIC_OPTION_OBSOLETE;
     }
@@ -1981,15 +1983,10 @@ static inline void statsd_flush_timer_or_histogram(STATSD_METRIC *m, const char 
         m->histogram.ext->last_min = (collected_number)roundndd(series[0] * statsd.decimal_detail);
         m->histogram.ext->last_max = (collected_number)roundndd(series[len - 1] * statsd.decimal_detail);
         m->last = (collected_number)roundndd(average(series, len) * statsd.decimal_detail);
-        m->histogram.ext->last_median = (collected_number)roundndd(median_on_sorted_series(series, len) * statsd.decimal_detail);
         m->histogram.ext->last_stddev = (collected_number)roundndd(standard_deviation(series, len) * statsd.decimal_detail);
         m->histogram.ext->last_sum = (collected_number)roundndd(sum(series, len) * statsd.decimal_detail);
-
-        size_t pct_len = (size_t)floor((double)len * statsd.histogram_percentile / 100.0);
-        if(pct_len < 1)
-            m->histogram.ext->last_percentile = (collected_number)(series[0] * statsd.decimal_detail);
-        else
-            m->histogram.ext->last_percentile = (collected_number)roundndd(series[pct_len - 1] * statsd.decimal_detail);
+        m->histogram.ext->last_median = (collected_number)roundndd(median_on_sorted_series(series, len) * statsd.decimal_detail);
+        m->histogram.ext->last_percentile = (collected_number)roundndd(percentile_on_sorted_series(series, len,  statsd.histogram_percentile / 100) * statsd.decimal_detail);
 
         netdata_mutex_unlock(&m->histogram.ext->mutex);
 
@@ -2399,7 +2396,6 @@ static void statsd_main_cleanup(void *pptr) {
     if(!static_thread) return;
 
     static_thread->enabled = NETDATA_MAIN_THREAD_EXITING;
-    collector_info("cleaning up...");
 
     if (statsd.collection_threads_status) {
         int i;
@@ -2461,13 +2457,13 @@ void *statsd_main(void *ptr) {
     worker_register_job_name(WORKER_STATSD_FLUSH_DICTIONARIES, "dictionaries");
     worker_register_job_name(WORKER_STATSD_FLUSH_STATS, "statistics");
 
-    statsd.gauges.dict = dictionary_create_advanced(STATSD_DICTIONARY_OPTIONS, &dictionary_stats_category_collectors, 0);
-    statsd.meters.dict = dictionary_create_advanced(STATSD_DICTIONARY_OPTIONS, &dictionary_stats_category_collectors, 0);
-    statsd.counters.dict = dictionary_create_advanced(STATSD_DICTIONARY_OPTIONS, &dictionary_stats_category_collectors, 0);
-    statsd.histograms.dict = dictionary_create_advanced(STATSD_DICTIONARY_OPTIONS, &dictionary_stats_category_collectors, 0);
-    statsd.dictionaries.dict = dictionary_create_advanced(STATSD_DICTIONARY_OPTIONS, &dictionary_stats_category_collectors, 0);
-    statsd.sets.dict = dictionary_create_advanced(STATSD_DICTIONARY_OPTIONS, &dictionary_stats_category_collectors, 0);
-    statsd.timers.dict = dictionary_create_advanced(STATSD_DICTIONARY_OPTIONS, &dictionary_stats_category_collectors, 0);
+    statsd.gauges.dict = dictionary_create_advanced(STATSD_DICTIONARY_OPTIONS | DICT_OPTION_FIXED_SIZE, &dictionary_stats_category_collectors, sizeof(STATSD_METRIC));
+    statsd.meters.dict = dictionary_create_advanced(STATSD_DICTIONARY_OPTIONS | DICT_OPTION_FIXED_SIZE, &dictionary_stats_category_collectors, sizeof(STATSD_METRIC));
+    statsd.counters.dict = dictionary_create_advanced(STATSD_DICTIONARY_OPTIONS | DICT_OPTION_FIXED_SIZE, &dictionary_stats_category_collectors, sizeof(STATSD_METRIC));
+    statsd.histograms.dict = dictionary_create_advanced(STATSD_DICTIONARY_OPTIONS | DICT_OPTION_FIXED_SIZE, &dictionary_stats_category_collectors, sizeof(STATSD_METRIC));
+    statsd.dictionaries.dict = dictionary_create_advanced(STATSD_DICTIONARY_OPTIONS | DICT_OPTION_FIXED_SIZE, &dictionary_stats_category_collectors, sizeof(STATSD_METRIC));
+    statsd.sets.dict = dictionary_create_advanced(STATSD_DICTIONARY_OPTIONS | DICT_OPTION_FIXED_SIZE, &dictionary_stats_category_collectors, sizeof(STATSD_METRIC));
+    statsd.timers.dict = dictionary_create_advanced(STATSD_DICTIONARY_OPTIONS | DICT_OPTION_FIXED_SIZE, &dictionary_stats_category_collectors, sizeof(STATSD_METRIC));
 
     dictionary_register_insert_callback(statsd.gauges.dict, dictionary_metric_insert_callback, &statsd.gauges);
     dictionary_register_insert_callback(statsd.meters.dict, dictionary_metric_insert_callback, &statsd.meters);
@@ -2488,29 +2484,44 @@ void *statsd_main(void *ptr) {
     // ----------------------------------------------------------------------------------------------------------------
     // statsd configuration
 
-    statsd.enabled = config_get_boolean(CONFIG_SECTION_PLUGINS, "statsd", statsd.enabled);
+    statsd.enabled = inicfg_get_boolean(&netdata_config, CONFIG_SECTION_PLUGINS, "statsd", statsd.enabled);
 
-    statsd.update_every = default_rrd_update_every;
-    statsd.update_every = (int)config_get_number(CONFIG_SECTION_STATSD, "update every (flushInterval)", statsd.update_every);
-    if(statsd.update_every < default_rrd_update_every) {
-        collector_error("STATSD: minimum flush interval %d given, but the minimum is the update every of netdata. Using %d", statsd.update_every, default_rrd_update_every);
-        statsd.update_every = default_rrd_update_every;
+    statsd.update_every = nd_profile.update_every;
+    statsd.update_every = (int)inicfg_get_duration_seconds(&netdata_config, CONFIG_SECTION_STATSD, "update every (flushInterval)", statsd.update_every);
+    if(statsd.update_every < nd_profile.update_every) {
+        collector_error("STATSD: minimum flush interval %d given, but the minimum is the update every of netdata. Using %d",
+                        (int)statsd.update_every, (int)nd_profile.update_every);
+        statsd.update_every = nd_profile.update_every;
+        inicfg_set_duration_seconds(&netdata_config, CONFIG_SECTION_STATSD, "update every (flushInterval)", statsd.update_every);
     }
 
 #ifdef HAVE_RECVMMSG
-    statsd.recvmmsg_size = (size_t)config_get_number(CONFIG_SECTION_STATSD, "udp messages to process at once", (long long)statsd.recvmmsg_size);
+    statsd.recvmmsg_size = (size_t)inicfg_get_number(&netdata_config, CONFIG_SECTION_STATSD, "udp messages to process at once", (long long)statsd.recvmmsg_size);
 #endif
 
     statsd.charts_for = simple_pattern_create(
-            config_get(CONFIG_SECTION_STATSD, "create private charts for metrics matching", "*"), NULL,
+            inicfg_get(&netdata_config, CONFIG_SECTION_STATSD, "create private charts for metrics matching", "*"), NULL,
             SIMPLE_PATTERN_EXACT, true);
-    statsd.max_private_charts_hard = (size_t)config_get_number(CONFIG_SECTION_STATSD, "max private charts hard limit", (long long)statsd.max_private_charts_hard);
-    statsd.set_obsolete_after = (size_t)config_get_number(CONFIG_SECTION_STATSD, "set charts as obsolete after secs", (long long)statsd.set_obsolete_after);
-    statsd.decimal_detail = (collected_number)config_get_number(CONFIG_SECTION_STATSD, "decimal detail", (long long int)statsd.decimal_detail);
-    statsd.tcp_idle_timeout = (size_t) config_get_number(CONFIG_SECTION_STATSD, "disconnect idle tcp clients after seconds", (long long int)statsd.tcp_idle_timeout);
-    statsd.private_charts_hidden = (unsigned int)config_get_boolean(CONFIG_SECTION_STATSD, "private charts hidden", statsd.private_charts_hidden);
 
-    statsd.histogram_percentile = (double)config_get_float(CONFIG_SECTION_STATSD, "histograms and timers percentile (percentThreshold)", statsd.histogram_percentile);
+    statsd.max_private_charts_hard =
+        (size_t)inicfg_get_number(&netdata_config, CONFIG_SECTION_STATSD, "max private charts hard limit", (long long)statsd.max_private_charts_hard);
+
+    statsd.set_obsolete_after =
+        (size_t)inicfg_get_duration_seconds(&netdata_config, CONFIG_SECTION_STATSD, "set charts as obsolete after", (long long)statsd.set_obsolete_after);
+
+    statsd.decimal_detail =
+        (collected_number)inicfg_get_number(&netdata_config, CONFIG_SECTION_STATSD, "decimal detail", (long long int)statsd.decimal_detail);
+
+    statsd.tcp_idle_timeout =
+        (size_t) inicfg_get_duration_seconds(&netdata_config, CONFIG_SECTION_STATSD, "disconnect idle tcp clients after", (long long int)statsd.tcp_idle_timeout);
+
+    statsd.private_charts_hidden =
+        (unsigned int)inicfg_get_boolean(&netdata_config, CONFIG_SECTION_STATSD, "private charts hidden", statsd.private_charts_hidden);
+
+    statsd.histogram_percentile =
+        (double)inicfg_get_double(&netdata_config, 
+        CONFIG_SECTION_STATSD, "histograms and timers percentile (percentThreshold)", statsd.histogram_percentile);
+
     if(isless(statsd.histogram_percentile, 0) || isgreater(statsd.histogram_percentile, 100)) {
         collector_error("STATSD: invalid histograms and timers percentile %0.5f given", statsd.histogram_percentile);
         statsd.histogram_percentile = 95.0;
@@ -2521,9 +2532,10 @@ void *statsd_main(void *ptr) {
         statsd.histogram_percentile_str = strdupz(buffer);
     }
 
-    statsd.dictionary_max_unique = config_get_number(CONFIG_SECTION_STATSD, "dictionaries max unique dimensions", statsd.dictionary_max_unique);
+    statsd.dictionary_max_unique =
+        inicfg_get_number(&netdata_config, CONFIG_SECTION_STATSD, "dictionaries max unique dimensions", statsd.dictionary_max_unique);
 
-    if(config_get_boolean(CONFIG_SECTION_STATSD, "add dimension for number of events received", 0)) {
+    if(inicfg_get_boolean(&netdata_config, CONFIG_SECTION_STATSD, "add dimension for number of events received", 0)) {
         statsd.gauges.default_options |= STATSD_METRIC_OPTION_CHART_DIMENSION_COUNT;
         statsd.counters.default_options |= STATSD_METRIC_OPTION_CHART_DIMENSION_COUNT;
         statsd.meters.default_options |= STATSD_METRIC_OPTION_CHART_DIMENSION_COUNT;
@@ -2533,35 +2545,35 @@ void *statsd_main(void *ptr) {
         statsd.dictionaries.default_options |= STATSD_METRIC_OPTION_CHART_DIMENSION_COUNT;
     }
 
-    if(config_get_boolean(CONFIG_SECTION_STATSD, "gaps on gauges (deleteGauges)", 0))
+    if(inicfg_get_boolean(&netdata_config, CONFIG_SECTION_STATSD, "gaps on gauges (deleteGauges)", 0))
         statsd.gauges.default_options |= STATSD_METRIC_OPTION_SHOW_GAPS_WHEN_NOT_COLLECTED;
 
-    if(config_get_boolean(CONFIG_SECTION_STATSD, "gaps on counters (deleteCounters)", 0))
+    if(inicfg_get_boolean(&netdata_config, CONFIG_SECTION_STATSD, "gaps on counters (deleteCounters)", 0))
         statsd.counters.default_options |= STATSD_METRIC_OPTION_SHOW_GAPS_WHEN_NOT_COLLECTED;
 
-    if(config_get_boolean(CONFIG_SECTION_STATSD, "gaps on meters (deleteMeters)", 0))
+    if(inicfg_get_boolean(&netdata_config, CONFIG_SECTION_STATSD, "gaps on meters (deleteMeters)", 0))
         statsd.meters.default_options |= STATSD_METRIC_OPTION_SHOW_GAPS_WHEN_NOT_COLLECTED;
 
-    if(config_get_boolean(CONFIG_SECTION_STATSD, "gaps on sets (deleteSets)", 0))
+    if(inicfg_get_boolean(&netdata_config, CONFIG_SECTION_STATSD, "gaps on sets (deleteSets)", 0))
         statsd.sets.default_options |= STATSD_METRIC_OPTION_SHOW_GAPS_WHEN_NOT_COLLECTED;
 
-    if(config_get_boolean(CONFIG_SECTION_STATSD, "gaps on histograms (deleteHistograms)", 0))
+    if(inicfg_get_boolean(&netdata_config, CONFIG_SECTION_STATSD, "gaps on histograms (deleteHistograms)", 0))
         statsd.histograms.default_options |= STATSD_METRIC_OPTION_SHOW_GAPS_WHEN_NOT_COLLECTED;
 
-    if(config_get_boolean(CONFIG_SECTION_STATSD, "gaps on timers (deleteTimers)", 0))
+    if(inicfg_get_boolean(&netdata_config, CONFIG_SECTION_STATSD, "gaps on timers (deleteTimers)", 0))
         statsd.timers.default_options |= STATSD_METRIC_OPTION_SHOW_GAPS_WHEN_NOT_COLLECTED;
 
-    if(config_get_boolean(CONFIG_SECTION_STATSD, "gaps on dictionaries (deleteDictionaries)", 0))
+    if(inicfg_get_boolean(&netdata_config, CONFIG_SECTION_STATSD, "gaps on dictionaries (deleteDictionaries)", 0))
         statsd.dictionaries.default_options |= STATSD_METRIC_OPTION_SHOW_GAPS_WHEN_NOT_COLLECTED;
 
-    size_t max_sockets = (size_t)config_get_number(CONFIG_SECTION_STATSD, "statsd server max TCP sockets", (long long int)(rlimit_nofile.rlim_cur / 4));
+    size_t max_sockets = (size_t)inicfg_get_number(&netdata_config, CONFIG_SECTION_STATSD, "statsd server max TCP sockets", (long long int)(rlimit_nofile.rlim_cur / 4));
 
 #ifdef STATSD_MULTITHREADED
-    statsd.threads = (int)config_get_number(CONFIG_SECTION_STATSD, "threads", processors);
+    statsd.threads = (int)inicfg_get_number(&netdata_config, CONFIG_SECTION_STATSD, "threads", processors);
     if(statsd.threads < 1) {
         collector_error("STATSD: Invalid number of threads %d, using %d", statsd.threads, processors);
         statsd.threads = processors;
-        config_set_number(CONFIG_SECTION_STATSD, "collector threads", statsd.threads);
+        inicfg_set_number(&netdata_config, CONFIG_SECTION_STATSD, "collector threads", statsd.threads);
     }
 #else
     statsd.threads = 1;
@@ -2639,7 +2651,7 @@ void *statsd_main(void *ptr) {
     RRDSET *st_pcharts = NULL;
     RRDDIM *rd_pcharts = NULL;
 
-    if(global_statistics_enabled) {
+    if(pulse_enabled) {
         st_metrics = rrdset_create_localhost(
             "netdata",
             "statsd_metrics",
@@ -2758,7 +2770,7 @@ void *statsd_main(void *ptr) {
             "tcp_connects",
             NULL,
             "statsd",
-            NULL,
+            "netdata.statsd_tcp_connects",
             "statsd server TCP connects and disconnects",
             "events",
             PLUGIN_STATSD_NAME,
@@ -2774,7 +2786,7 @@ void *statsd_main(void *ptr) {
             "tcp_connected",
             NULL,
             "statsd",
-            NULL,
+            "netdata.statsd_tcp_connected",
             "statsd server TCP connected sockets",
             "sockets",
             PLUGIN_STATSD_NAME,
@@ -2789,7 +2801,7 @@ void *statsd_main(void *ptr) {
             "private_charts",
             NULL,
             "statsd",
-            NULL,
+            "netdata.statsd_private_charts",
             "Private metric charts created by the netdata statsd server",
             "charts",
             PLUGIN_STATSD_NAME,
@@ -2803,12 +2815,11 @@ void *statsd_main(void *ptr) {
     // ----------------------------------------------------------------------------------------------------------------
     // statsd thread to turn metrics into charts
 
-    usec_t step = statsd.update_every * USEC_PER_SEC;
     heartbeat_t hb;
-    heartbeat_init(&hb);
+    heartbeat_init(&hb, statsd.update_every * USEC_PER_SEC);
     while(service_running(SERVICE_COLLECTORS)) {
         worker_is_idle();
-        heartbeat_next(&hb, step);
+        heartbeat_next(&hb);
 
         worker_is_busy(WORKER_STATSD_FLUSH_GAUGES);
         statsd_flush_index_metrics(&statsd.gauges,     statsd_flush_gauge);
@@ -2837,7 +2848,7 @@ void *statsd_main(void *ptr) {
         if(unlikely(!service_running(SERVICE_COLLECTORS)))
             break;
 
-        if(global_statistics_enabled) {
+        if(pulse_enabled) {
             rrddim_set_by_pointer(st_metrics, rd_metrics_gauge,        (collected_number)statsd.gauges.metrics);
             rrddim_set_by_pointer(st_metrics, rd_metrics_counter,      (collected_number)statsd.counters.metrics);
             rrddim_set_by_pointer(st_metrics, rd_metrics_timer,        (collected_number)statsd.timers.metrics);

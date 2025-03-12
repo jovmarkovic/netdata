@@ -41,7 +41,7 @@ jobs:
           submodules: recursive
       - name: Check files
         id: check-files
-        uses: tj-actions/changed-files@v44
+        uses: tj-actions/changed-files@v45
         with:
           since_last_remote_commit: ${{ github.event_name != 'pull_request' }}
           files: |
@@ -190,7 +190,7 @@ jobs:
 
   build:
     name: Build
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     env:
       DOCKER_CLI_EXPERIMENTAL: enabled
     needs:
@@ -230,15 +230,11 @@ jobs:
           fi
       - name: Setup QEMU
         id: qemu
-        if: matrix.platform != 'linux/amd64' && matrix.platform != 'linux/i386' && needs.file-check.outputs.run == 'true'
-        uses: docker/setup-qemu-action@v3
-      - name: Prepare Docker Environment
-        id: docker-config
-        if: needs.file-check.outputs.run == 'true'
-        shell: bash
+        if: matrix.qemu && needs.file-check.outputs.run == 'true'
         run: |
-          echo '{"cgroup-parent": "actions-job.slice", "experimental": true}' | sudo tee /etc/docker/daemon.json 2>/dev/null
-          sudo service docker restart
+          sudo apt-get update
+          sudo apt-get upgrade -y
+          sudo apt-get install -y qemu-user-static
       - name: Fetch images
         id: fetch-images
         if: needs.file-check.outputs.run == 'true'
@@ -256,15 +252,16 @@ jobs:
         shell: bash
         run: |
           docker run --security-opt seccomp=unconfined -e DISABLE_TELEMETRY=1 -e VERSION=${{ needs.version-check.outputs.version }} \
-                    -e ENABLE_SENTRY=${{ matrix.bundle_sentry }} -e RELEASE_PIPELINE=${{ env.RELEASE_PIPELINE }} \
-                    -e BUILD_DESTINATION=${{ matrix.distro }}${{ matrix.version }}_${{ matrix.arch }} -e UPLOAD_SENTRY=${{ env.UPLOAD_SENTRY }} \
-                    -e SENTRY_AUTH_TOKEN=${{ secrets.SENTRY_CLI_TOKEN }} -e NETDATA_SENTRY_DSN=${{ secrets.SENTRY_DSN }} \
+                     -e ENABLE_SENTRY=${{ matrix.bundle_sentry }} -e RELEASE_PIPELINE=${{ env.RELEASE_PIPELINE }} \
+                     -e BUILD_DESTINATION=${{ matrix.distro }}${{ matrix.version }}_${{ matrix.arch }} -e UPLOAD_SENTRY=${{ env.UPLOAD_SENTRY }} \
+                     -e SENTRY_AUTH_TOKEN=${{ secrets.SENTRY_CLI_TOKEN }} -e NETDATA_SENTRY_DSN=${{ secrets.SENTRY_DSN }} \
+                     -e GOOS=$(echo ${{ matrix.platform }} | cut -f 1 -d '/') -e GOARCH=$(echo ${{ matrix.platform }} | cut -f 2 -d '/') \
                      --platform=${{ matrix.platform }} -v "$PWD":/netdata netdata/package-builders:${{ matrix.distro }}${{ matrix.version }}-${{ matrix.builder_rev }}
       - name: Save Packages
         id: artifacts
         if: needs.file-check.outputs.run == 'true'
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.1
         with:
           name: ${{ matrix.distro }}-${{ matrix.version }}-${{ matrix.arch }}-packages
           path: ${{ github.workspace }}/artifacts/*
@@ -277,20 +274,17 @@ jobs:
                      -e VERSION=${{ needs.version-check.outputs.version }} -e DISTRO_VERSION=${{ matrix.version }} \
                      --platform=${{ matrix.platform }} -v "$PWD":/netdata ${{ matrix.base_image }} \
                      /netdata/.github/scripts/pkg-test.sh
-      - name: Upload to PackageCloud
-        id: upload
-        if: github.event_name == 'workflow_dispatch' && github.repository == 'netdata/netdata' && needs.file-check.outputs.run == 'true'
-        continue-on-error: true
+      - name: Import GPG Keys
+        id: import-keys
+        if: needs.file-check.outputs.run == 'true' && matrix.format == 'deb' && github.event_name != 'pull_request'
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.NETDATABOT_PACKAGE_SIGNING_KEY }}
+      - name: Sign DEB Packages
+        id: sign-deb
+        if: needs.file-check.outputs.run == 'true' && matrix.format == 'deb' && github.event_name != 'pull_request'
         shell: bash
-        env:
-          PKG_CLOUD_TOKEN: ${{ secrets.PACKAGE_CLOUD_API_KEY }}
-        run: |
-          printf "Packages to upload:\n%s" "$(ls artifacts/*.${{ matrix.format }})"
-          for pkgfile in artifacts/*.${{ matrix.format }} ; do
-            .github/scripts/package_cloud_wrapper.sh yank ${{ needs.version-check.outputs.repo }}/${{ matrix.repo_distro }} \
-            "$(basename "${pkgfile}")" || true
-            .github/scripts/package_cloud_wrapper.sh push ${{ needs.version-check.outputs.repo }}/${{ matrix.repo_distro }} "${pkgfile}"
-          done
+        run: .github/scripts/deb-sign.sh artifacts ${{ steps.import-keys.outputs.fingerprint }}
       - name: SSH setup
         id: ssh-setup
         if: github.event_name == 'workflow_dispatch' && github.repository == 'netdata/netdata' && needs.file-check.outputs.run == 'true'
@@ -310,17 +304,6 @@ jobs:
           ${{ matrix.arch }} \
           ${{ matrix.format }} \
           ${{ needs.version-check.outputs.repo }}
-      - name: Import GPG Keys
-        id: import-keys
-        if: needs.file-check.outputs.run == 'true' && matrix.format == 'deb' && github.event_name != 'pull_request'
-        uses: crazy-max/ghaction-import-gpg@v6
-        with:
-          gpg_private_key: ${{ secrets.NETDATABOT_PACKAGE_SIGNING_KEY }}
-      - name: Sign DEB Packages
-        id: sign-deb
-        if: needs.file-check.outputs.run == 'true' && matrix.format == 'deb' && github.event_name != 'pull_request'
-        shell: bash
-        run: .github/scripts/deb-sign.sh artifacts ${{ steps.import-keys.outputs.fingerprint }}
       - name: Upload to packages2.netdata.cloud
         id: package2-upload
         if: github.event_name == 'workflow_dispatch' && github.repository == 'netdata/netdata' && needs.file-check.outputs.run == 'true'
@@ -342,15 +325,13 @@ jobs:
               ${{ github.repository }}: ${{ matrix.repo_distro }} ${{ matrix.version }} package build for ${{ matrix.arch }} failed.
               Checkout: ${{ steps.checkout.outcome }}
               Setup QEMU: ${{ steps.qemu.outcome }}
-              Setup Docker: ${{ steps.docker-config.outcome }}
               Fetch images: ${{ steps.fetch-images.outcome }}
               Build: ${{ steps.build.outcome }}
               Test: ${{ steps.test.outcome }}
-              Publish to PackageCloud: ${{ steps.upload.outcome }}
-              Import SSH Key: ${{ steps.ssh-setup.outcome }}
-              Publish to packages.netdata.cloud: ${{ steps.package-upload.outcome }}
               Import GPG Keys: ${{ steps.import-keys.outcome }}
               Sign DEB Packages: ${{ steps.sign-deb.outcome }}
+              Import SSH Key: ${{ steps.ssh-setup.outcome }}
+              Publish to packages.netdata.cloud: ${{ steps.package-upload.outcome }}
               Publish to packages2.netdata.cloud: ${{ steps.package2-upload.outcome }}
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
         if: >-

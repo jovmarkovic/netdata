@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -10,13 +11,13 @@ import (
 	"os"
 	"path"
 
+	"github.com/jessevdk/go-flags"
+
 	"github.com/netdata/netdata/go/plugins/logger"
+	"github.com/netdata/netdata/go/plugins/pkg/multipath"
 	"github.com/netdata/netdata/go/plugins/plugin/go.d/agent"
 	"github.com/netdata/netdata/go/plugins/plugin/go.d/agent/module"
 	"github.com/netdata/netdata/go/plugins/plugin/go.d/cli"
-	"github.com/netdata/netdata/go/plugins/plugin/go.d/pkg/multipath"
-
-	"github.com/jessevdk/go-flags"
 )
 
 var version = "v0.0.1-example"
@@ -25,11 +26,11 @@ type example struct {
 	module.Base
 }
 
-func (e *example) Cleanup() {}
+func (e *example) Cleanup(context.Context) {}
 
-func (e *example) Init() error { return nil }
+func (e *example) Init(context.Context) error { return nil }
 
-func (e *example) Check() error { return nil }
+func (e *example) Check(context.Context) error { return nil }
 
 func (e *example) Charts() *module.Charts {
 	return &module.Charts{
@@ -45,7 +46,7 @@ func (e *example) Charts() *module.Charts {
 }
 func (e *example) Configuration() any { return nil }
 
-func (e *example) Collect() map[string]int64 {
+func (e *example) Collect(context.Context) map[string]int64 {
 	return map[string]int64{
 		"random0": rand.Int63n(100),
 		"random1": rand.Int63n(100),
@@ -107,12 +108,12 @@ func main() {
 	)
 
 	p := agent.New(agent.Config{
-		Name:                 name,
-		ConfDir:              confDir(opt.ConfDir),
-		ModulesConfDir:       modulesConfDir(opt.ConfDir),
-		ModulesConfWatchPath: opt.WatchPath,
-		RunModule:            opt.Module,
-		MinUpdateEvery:       opt.UpdateEvery,
+		Name:                      name,
+		PluginConfigDir:           confDir(opt.ConfDir),
+		CollectorsConfigDir:       modulesConfDir(opt.ConfDir),
+		CollectorsConfigWatchPath: opt.WatchPath,
+		RunModule:                 opt.Module,
+		MinUpdateEvery:            opt.UpdateEvery,
 	})
 
 	p.Run()

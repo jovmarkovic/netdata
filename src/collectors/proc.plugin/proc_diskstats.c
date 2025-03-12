@@ -81,29 +81,24 @@ static struct disk {
     usec_t bcache_priority_stats_elapsed_usec;
 
     ND_DISK_IO disk_io;
+    ND_DISK_OPS disk_ops;
+    ND_DISK_QOPS disk_qops;
+    ND_DISK_UTIL disk_util;
+    ND_DISK_BUSY disk_busy;
+    ND_DISK_IOTIME disk_iotime;
+    ND_DISK_AWAIT disk_await;
+    ND_DISK_SVCTM disk_svctm;
+    ND_DISK_AVGSZ disk_avgsz;
 
     RRDSET *st_ext_io;
     RRDDIM *rd_io_discards;
-
-    RRDSET *st_ops;
-    RRDDIM *rd_ops_reads;
-    RRDDIM *rd_ops_writes;
 
     RRDSET *st_ext_ops;
     RRDDIM *rd_ops_discards;
     RRDDIM *rd_ops_flushes;
 
-    RRDSET *st_qops;
-    RRDDIM *rd_qops_operations;
-
     RRDSET *st_backlog;
     RRDDIM *rd_backlog_backlog;
-
-    RRDSET *st_busy;
-    RRDDIM *rd_busy_busy;
-
-    RRDSET *st_util;
-    RRDDIM *rd_util_utilization;
 
     RRDSET *st_mops;
     RRDDIM *rd_mops_reads;
@@ -112,31 +107,16 @@ static struct disk {
     RRDSET *st_ext_mops;
     RRDDIM *rd_mops_discards;
 
-    RRDSET *st_iotime;
-    RRDDIM *rd_iotime_reads;
-    RRDDIM *rd_iotime_writes;
-
     RRDSET *st_ext_iotime;
     RRDDIM *rd_iotime_discards;
     RRDDIM *rd_iotime_flushes;
-
-    RRDSET *st_await;
-    RRDDIM *rd_await_reads;
-    RRDDIM *rd_await_writes;
 
     RRDSET *st_ext_await;
     RRDDIM *rd_await_discards;
     RRDDIM *rd_await_flushes;
 
-    RRDSET *st_avgsz;
-    RRDDIM *rd_avgsz_reads;
-    RRDDIM *rd_avgsz_writes;
-
     RRDSET *st_ext_avgsz;
     RRDDIM *rd_avgsz_discards;
-
-    RRDSET *st_svctm;
-    RRDDIM *rd_svctm_svctm;
 
     RRDSET *st_bcache_size;
     RRDDIM *rd_bcache_dirty_size;
@@ -180,16 +160,16 @@ static struct disk {
 
 #define rrdset_obsolete_and_pointer_null(st) do { if(st) { rrdset_is_obsolete___safe_from_collector_thread(st); (st) = NULL; } } while(st)
 
-static char *path_to_sys_dev_block_major_minor_string = NULL;
-static char *path_to_sys_block_device = NULL;
-static char *path_to_sys_block_device_bcache = NULL;
-static char *path_to_sys_devices_virtual_block_device = NULL;
-static char *path_to_device_mapper = NULL;
-static char *path_to_dev_disk = NULL;
-static char *path_to_sys_block = NULL;
-static char *path_to_device_label = NULL;
-static char *path_to_device_id = NULL;
-static char *path_to_veritas_volume_groups = NULL;
+static const char *path_to_sys_dev_block_major_minor_string = NULL;
+static const char *path_to_sys_block_device = NULL;
+static const char *path_to_sys_block_device_bcache = NULL;
+static const char *path_to_sys_devices_virtual_block_device = NULL;
+static const char *path_to_device_mapper = NULL;
+static const char *path_to_dev_disk = NULL;
+static const char *path_to_sys_block = NULL;
+static const char *path_to_device_label = NULL;
+static const char *path_to_device_id = NULL;
+static const char *path_to_veritas_volume_groups = NULL;
 static int name_disks_by_id = CONFIG_BOOLEAN_NO;
 static int global_bcache_priority_stats_update_every = 0; // disabled by default
 
@@ -352,7 +332,7 @@ static inline int is_major_enabled(int major) {
     if(major_configs[major] == -1) {
         char buffer[CONFIG_MAX_NAME + 1];
         snprintfz(buffer, CONFIG_MAX_NAME, "performance metrics for disks with major %d", major);
-        major_configs[major] = (char)config_get_boolean(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, buffer, 1);
+        major_configs[major] = (char)inicfg_get_boolean(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, buffer, 1);
     }
 
     return (int)major_configs[major];
@@ -360,7 +340,6 @@ static inline int is_major_enabled(int major) {
 
 static inline int get_disk_name_from_path(const char *path, char *result, size_t result_size, unsigned long major, unsigned long minor, char *disk, char *prefix, int depth) {
     //collector_info("DEVICE-MAPPER ('%s', %lu:%lu): examining directory '%s' (allowed depth %d).", disk, major, minor, path, depth);
-
     int found = 0, preferred = 0;
 
     char *first_result = mallocz(result_size + 1);
@@ -421,9 +400,8 @@ static inline int get_disk_name_from_path(const char *path, char *result, size_t
                 else
                     strncpyz(filename, result, FILENAME_MAX);
             }
-            else {
+            else
                 snprintfz(filename, FILENAME_MAX, "%s/%s", path, de->d_name);
-            }
 
             struct stat sb;
             if(stat(filename, &sb) == -1) {
@@ -446,10 +424,11 @@ static inline int get_disk_name_from_path(const char *path, char *result, size_t
             snprintfz(result, result_size - 1, "%s%s%s", (prefix)?prefix:"", (prefix)?"_":"", de->d_name);
 
             if(!found) {
-                strncpyz(first_result, result, result_size);
+                strncpyz(first_result, result, result_size - 1);
                 found = 1;
             }
 
+            result[result_size - 1] = '\0';
             if(simple_pattern_matches(preferred_ids, result)) {
                 preferred = 1;
                 break;
@@ -458,13 +437,11 @@ static inline int get_disk_name_from_path(const char *path, char *result, size_t
     }
     closedir(dir);
 
-
 failed:
-
     if(!found)
         result[0] = '\0';
     else if(!preferred)
-        strncpyz(result, first_result, result_size);
+        strncpyz(result, first_result, result_size - 1);
 
     freez(first_result);
 
@@ -605,8 +582,8 @@ static void get_disk_config(struct disk *d) {
     char var_name[4096 + 1];
     snprintfz(var_name, 4096, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS ":%s", d->disk);
 
-    if (config_exists(var_name, "enable"))
-        def_enable = config_get_boolean_ondemand(var_name, "enable", def_enable);
+    if (inicfg_exists(&netdata_config, var_name, "enable"))
+        def_enable = inicfg_get_boolean_ondemand(&netdata_config, var_name, "enable", def_enable);
 
     if(unlikely(def_enable == CONFIG_BOOLEAN_NO)) {
         // the user does not want any metrics for this disk
@@ -659,8 +636,8 @@ static void get_disk_config(struct disk *d) {
 
         // def_performance
         // check the user configuration (this will also show our 'on demand' decision)
-        if (config_exists(var_name, "enable performance metrics"))
-            def_performance = config_get_boolean_ondemand(var_name, "enable performance metrics", def_performance);
+        if (inicfg_exists(&netdata_config, var_name, "enable performance metrics"))
+            def_performance = inicfg_get_boolean_ondemand(&netdata_config, var_name, "enable performance metrics", def_performance);
 
         int ddo_io = CONFIG_BOOLEAN_NO,
                 ddo_ops = CONFIG_BOOLEAN_NO,
@@ -696,28 +673,28 @@ static void get_disk_config(struct disk *d) {
         d->do_ext = ddo_ext;
         d->do_backlog = ddo_backlog;
 
-        if (config_exists(var_name, "bandwidth"))
-            d->do_io = config_get_boolean_ondemand(var_name, "bandwidth", ddo_io);
-        if (config_exists(var_name, "operations"))
-            d->do_ops = config_get_boolean_ondemand(var_name, "operations", ddo_ops);
-        if (config_exists(var_name, "merged operations"))
-            d->do_mops = config_get_boolean_ondemand(var_name, "merged operations", ddo_mops);
-        if (config_exists(var_name, "i/o time"))
-            d->do_iotime = config_get_boolean_ondemand(var_name, "i/o time", ddo_iotime);
-        if (config_exists(var_name, "queued operations"))
-            d->do_qops = config_get_boolean_ondemand(var_name, "queued operations", ddo_qops);
-        if (config_exists(var_name, "utilization percentage"))
-            d->do_util = config_get_boolean_ondemand(var_name, "utilization percentage", ddo_util);
-        if (config_exists(var_name, "extended operations"))
-            d->do_ext = config_get_boolean_ondemand(var_name, "extended operations", ddo_ext);
-        if (config_exists(var_name, "backlog"))
-            d->do_backlog = config_get_boolean_ondemand(var_name, "backlog", ddo_backlog);
+        if (inicfg_exists(&netdata_config, var_name, "bandwidth"))
+            d->do_io = inicfg_get_boolean_ondemand(&netdata_config, var_name, "bandwidth", ddo_io);
+        if (inicfg_exists(&netdata_config, var_name, "operations"))
+            d->do_ops = inicfg_get_boolean_ondemand(&netdata_config, var_name, "operations", ddo_ops);
+        if (inicfg_exists(&netdata_config, var_name, "merged operations"))
+            d->do_mops = inicfg_get_boolean_ondemand(&netdata_config, var_name, "merged operations", ddo_mops);
+        if (inicfg_exists(&netdata_config, var_name, "i/o time"))
+            d->do_iotime = inicfg_get_boolean_ondemand(&netdata_config, var_name, "i/o time", ddo_iotime);
+        if (inicfg_exists(&netdata_config, var_name, "queued operations"))
+            d->do_qops = inicfg_get_boolean_ondemand(&netdata_config, var_name, "queued operations", ddo_qops);
+        if (inicfg_exists(&netdata_config, var_name, "utilization percentage"))
+            d->do_util = inicfg_get_boolean_ondemand(&netdata_config, var_name, "utilization percentage", ddo_util);
+        if (inicfg_exists(&netdata_config, var_name, "extended operations"))
+            d->do_ext = inicfg_get_boolean_ondemand(&netdata_config, var_name, "extended operations", ddo_ext);
+        if (inicfg_exists(&netdata_config, var_name, "backlog"))
+            d->do_backlog = inicfg_get_boolean_ondemand(&netdata_config, var_name, "backlog", ddo_backlog);
 
         d->do_bcache = ddo_bcache;
 
         if (d->device_is_bcache) {
-            if (config_exists(var_name, "bcache"))
-                d->do_bcache = config_get_boolean_ondemand(var_name, "bcache", ddo_bcache);
+            if (inicfg_exists(&netdata_config, var_name, "bcache"))
+                d->do_bcache = inicfg_get_boolean_ondemand(&netdata_config, var_name, "bcache", ddo_bcache);
         } else {
             d->do_bcache = 0;
         }
@@ -998,7 +975,7 @@ static void disk_labels_cb(RRDSET *st, void *data) {
     add_labels_to_disk(data, st);
 }
 
-static int diskstats_function_block_devices(BUFFER *wb, const char *function __maybe_unused) {
+static int diskstats_function_block_devices(BUFFER *wb, const char *function __maybe_unused, BUFFER *payload __maybe_unused, const char *source __maybe_unused) {
     buffer_flush(wb);
     wb->content_type = CT_APPLICATION_JSON;
     buffer_json_initialize(wb, "\"", "\"", 0, true, BUFFER_JSON_OPTIONS_DEFAULT);
@@ -1049,21 +1026,21 @@ static int diskstats_function_block_devices(BUFFER *wb, const char *function __m
             max_io = MAX(max_io, io_total);
         }
         // Backlog and Busy Time
-        double busy_perc = rrddim_get_last_stored_value(d->rd_util_utilization, &max_busy_perc, 1);
-        double busy_time = rrddim_get_last_stored_value(d->rd_busy_busy, &max_busy_time, 1);
+        double busy_perc = rrddim_get_last_stored_value(d->disk_util.rd_util, &max_busy_perc, 1);
+        double busy_time = rrddim_get_last_stored_value(d->disk_busy.rd_busy, &max_busy_time, 1);
         double backlog_time = rrddim_get_last_stored_value(d->rd_backlog_backlog, &max_backlog_time, 1);
         // IOPS
-        double iops_reads = rrddim_get_last_stored_value(d->rd_ops_reads, &max_iops_reads, 1);
-        double iops_writes = rrddim_get_last_stored_value(d->rd_ops_writes, &max_iops_writes, 1);
+        double iops_reads = rrddim_get_last_stored_value(d->disk_ops.rd_ops_reads, &max_iops_reads, 1);
+        double iops_writes = rrddim_get_last_stored_value(d->disk_ops.rd_ops_writes, &max_iops_writes, 1);
         // IO Time
-        double iops_time_reads = rrddim_get_last_stored_value(d->rd_iotime_reads, &max_iops_time_reads, 1);
-        double iops_time_writes = rrddim_get_last_stored_value(d->rd_iotime_writes, &max_iops_time_writes, 1);
+        double iops_time_reads = rrddim_get_last_stored_value(d->disk_iotime.rd_reads_ms, &max_iops_time_reads, 1);
+        double iops_time_writes = rrddim_get_last_stored_value(d->disk_iotime.rd_writes_ms, &max_iops_time_writes, 1);
         // Avg IO Time
-        double iops_avg_time_read = rrddim_get_last_stored_value(d->rd_await_reads, &max_iops_avg_time_read, 1);
-        double iops_avg_time_write = rrddim_get_last_stored_value(d->rd_await_writes, &max_iops_avg_time_write, 1);
+        double iops_avg_time_read = rrddim_get_last_stored_value(d->disk_await.rd_await_reads, &max_iops_avg_time_read, 1);
+        double iops_avg_time_write = rrddim_get_last_stored_value(d->disk_await.rd_await_writes, &max_iops_avg_time_write, 1);
         // Avg IO Size
-        double iops_avg_size_read = rrddim_get_last_stored_value(d->rd_avgsz_reads, &max_iops_avg_size_read, 1);
-        double iops_avg_size_write = rrddim_get_last_stored_value(d->rd_avgsz_writes, &max_iops_avg_size_write, 1);
+        double iops_avg_size_read = rrddim_get_last_stored_value(d->disk_avgsz.rd_avgsz_reads, &max_iops_avg_size_read, 1);
+        double iops_avg_size_write = rrddim_get_last_stored_value(d->disk_avgsz.rd_avgsz_writes, &max_iops_avg_size_write, 1);
 
 
         buffer_json_add_array_item_double(wb, io_reads);
@@ -1287,23 +1264,25 @@ static void diskstats_cleanup_disks() {
         if (unlikely(global_cleanup_removed_disks && !d->updated)) {
             struct disk *t = d;
 
-            rrdset_obsolete_and_pointer_null(d->st_avgsz);
+            rrdset_obsolete_and_pointer_null(d->disk_io.st_io);
+            rrdset_obsolete_and_pointer_null(d->disk_ops.st_ops);
+            rrdset_obsolete_and_pointer_null(d->disk_qops.st_qops);
+            rrdset_obsolete_and_pointer_null(d->disk_util.st_util);
+            rrdset_obsolete_and_pointer_null(d->disk_busy.st_busy);
+            rrdset_obsolete_and_pointer_null(d->disk_iotime.st_iotime);
+            rrdset_obsolete_and_pointer_null(d->disk_await.st_await);
+            rrdset_obsolete_and_pointer_null(d->disk_svctm.st_svctm);
+
+            rrdset_obsolete_and_pointer_null(d->disk_avgsz.st_avgsz);
             rrdset_obsolete_and_pointer_null(d->st_ext_avgsz);
-            rrdset_obsolete_and_pointer_null(d->st_await);
             rrdset_obsolete_and_pointer_null(d->st_ext_await);
             rrdset_obsolete_and_pointer_null(d->st_backlog);
-            rrdset_obsolete_and_pointer_null(d->st_busy);
             rrdset_obsolete_and_pointer_null(d->disk_io.st_io);
             rrdset_obsolete_and_pointer_null(d->st_ext_io);
-            rrdset_obsolete_and_pointer_null(d->st_iotime);
             rrdset_obsolete_and_pointer_null(d->st_ext_iotime);
             rrdset_obsolete_and_pointer_null(d->st_mops);
             rrdset_obsolete_and_pointer_null(d->st_ext_mops);
-            rrdset_obsolete_and_pointer_null(d->st_ops);
             rrdset_obsolete_and_pointer_null(d->st_ext_ops);
-            rrdset_obsolete_and_pointer_null(d->st_qops);
-            rrdset_obsolete_and_pointer_null(d->st_svctm);
-            rrdset_obsolete_and_pointer_null(d->st_util);
             rrdset_obsolete_and_pointer_null(d->st_bcache);
             rrdset_obsolete_and_pointer_null(d->st_bcache_bypass);
             rrdset_obsolete_and_pointer_null(d->st_bcache_rates);
@@ -1360,68 +1339,69 @@ int do_proc_diskstats(int update_every, usec_t dt) {
     if(unlikely(!globals_initialized)) {
         globals_initialized = 1;
 
-        global_enable_new_disks_detected_at_runtime = config_get_boolean(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "enable new disks detected at runtime", global_enable_new_disks_detected_at_runtime);
-        global_enable_performance_for_physical_disks = config_get_boolean_ondemand(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "performance metrics for physical disks", global_enable_performance_for_physical_disks);
-        global_enable_performance_for_virtual_disks = config_get_boolean_ondemand(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "performance metrics for virtual disks", global_enable_performance_for_virtual_disks);
-        global_enable_performance_for_partitions = config_get_boolean_ondemand(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "performance metrics for partitions", global_enable_performance_for_partitions);
+        global_enable_new_disks_detected_at_runtime = inicfg_get_boolean(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "enable new disks detected at runtime", global_enable_new_disks_detected_at_runtime);
+        global_enable_performance_for_physical_disks = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "performance metrics for physical disks", global_enable_performance_for_physical_disks);
+        global_enable_performance_for_virtual_disks = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "performance metrics for virtual disks", global_enable_performance_for_virtual_disks);
+        global_enable_performance_for_partitions = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "performance metrics for partitions", global_enable_performance_for_partitions);
 
-        global_do_io      = config_get_boolean_ondemand(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "bandwidth for all disks", global_do_io);
-        global_do_ops     = config_get_boolean_ondemand(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "operations for all disks", global_do_ops);
-        global_do_mops    = config_get_boolean_ondemand(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "merged operations for all disks", global_do_mops);
-        global_do_iotime  = config_get_boolean_ondemand(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "i/o time for all disks", global_do_iotime);
-        global_do_qops    = config_get_boolean_ondemand(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "queued operations for all disks", global_do_qops);
-        global_do_util    = config_get_boolean_ondemand(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "utilization percentage for all disks", global_do_util);
-        global_do_ext     = config_get_boolean_ondemand(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "extended operations for all disks", global_do_ext);
-        global_do_backlog = config_get_boolean_ondemand(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "backlog for all disks", global_do_backlog);
-        global_do_bcache  = config_get_boolean_ondemand(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "bcache for all disks", global_do_bcache);
-        global_bcache_priority_stats_update_every = (int)config_get_number(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "bcache priority stats update every", global_bcache_priority_stats_update_every);
+        global_do_io      = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "bandwidth for all disks", global_do_io);
+        global_do_ops     = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "operations for all disks", global_do_ops);
+        global_do_mops    = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "merged operations for all disks", global_do_mops);
+        global_do_iotime  = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "i/o time for all disks", global_do_iotime);
+        global_do_qops    = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "queued operations for all disks", global_do_qops);
+        global_do_util    = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "utilization percentage for all disks", global_do_util);
+        global_do_ext     = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "extended operations for all disks", global_do_ext);
+        global_do_backlog = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "backlog for all disks", global_do_backlog);
+        global_do_bcache  = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "bcache for all disks", global_do_bcache);
+        global_bcache_priority_stats_update_every = (int)inicfg_get_duration_seconds(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "bcache priority stats update every", global_bcache_priority_stats_update_every);
 
-        global_cleanup_removed_disks = config_get_boolean(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "remove charts of removed disks" , global_cleanup_removed_disks);
+        global_cleanup_removed_disks = inicfg_get_boolean(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "remove charts of removed disks" , global_cleanup_removed_disks);
 
         char buffer[FILENAME_MAX + 1];
 
         snprintfz(buffer, FILENAME_MAX, "%s%s", netdata_configured_host_prefix, "/sys/block/%s");
-        path_to_sys_block_device = config_get(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "path to get block device", buffer);
+        path_to_sys_block_device = inicfg_get(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "path to get block device", buffer);
 
         snprintfz(buffer, FILENAME_MAX, "%s%s", netdata_configured_host_prefix, "/sys/block/%s/bcache");
-        path_to_sys_block_device_bcache = config_get(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "path to get block device bcache", buffer);
+        path_to_sys_block_device_bcache = inicfg_get(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "path to get block device bcache", buffer);
 
         snprintfz(buffer, FILENAME_MAX, "%s%s", netdata_configured_host_prefix, "/sys/devices/virtual/block/%s");
-        path_to_sys_devices_virtual_block_device = config_get(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "path to get virtual block device", buffer);
+        path_to_sys_devices_virtual_block_device = inicfg_get(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "path to get virtual block device", buffer);
 
         snprintfz(buffer, FILENAME_MAX, "%s%s", netdata_configured_host_prefix, "/sys/dev/block/%lu:%lu/%s");
-        path_to_sys_dev_block_major_minor_string = config_get(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "path to get block device infos", buffer);
+        path_to_sys_dev_block_major_minor_string = inicfg_get(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "path to get block device infos", buffer);
 
         snprintfz(buffer, FILENAME_MAX, "%s/dev/mapper", netdata_configured_host_prefix);
-        path_to_device_mapper = config_get(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "path to device mapper", buffer);
+        path_to_device_mapper = inicfg_get(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "path to device mapper", buffer);
 
         snprintfz(buffer, FILENAME_MAX, "%s/dev/disk", netdata_configured_host_prefix);
-        path_to_dev_disk = config_get(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "path to /dev/disk", buffer);
+        path_to_dev_disk = inicfg_get(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "path to /dev/disk", buffer);
 
         snprintfz(buffer, FILENAME_MAX, "%s/sys/block", netdata_configured_host_prefix);
-        path_to_sys_block = config_get(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "path to /sys/block", buffer);
+        path_to_sys_block = inicfg_get(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "path to /sys/block", buffer);
 
         snprintfz(buffer, FILENAME_MAX, "%s/dev/disk/by-label", netdata_configured_host_prefix);
-        path_to_device_label = config_get(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "path to /dev/disk/by-label", buffer);
+        path_to_device_label = inicfg_get(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "path to /dev/disk/by-label", buffer);
 
         snprintfz(buffer, FILENAME_MAX, "%s/dev/disk/by-id", netdata_configured_host_prefix);
-        path_to_device_id = config_get(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "path to /dev/disk/by-id", buffer);
+        path_to_device_id = inicfg_get(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "path to /dev/disk/by-id", buffer);
 
         snprintfz(buffer, FILENAME_MAX, "%s/dev/vx/dsk", netdata_configured_host_prefix);
-        path_to_veritas_volume_groups = config_get(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "path to /dev/vx/dsk", buffer);
+        path_to_veritas_volume_groups = inicfg_get(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "path to /dev/vx/dsk", buffer);
 
-        name_disks_by_id = config_get_boolean(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "name disks by id", name_disks_by_id);
+        name_disks_by_id = inicfg_get_boolean(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "name disks by id", name_disks_by_id);
 
         preferred_ids = simple_pattern_create(
-                config_get(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "preferred disk ids", DEFAULT_PREFERRED_IDS), NULL,
+                inicfg_get(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "preferred disk ids", DEFAULT_PREFERRED_IDS), NULL,
                 SIMPLE_PATTERN_EXACT, true);
 
         excluded_disks = simple_pattern_create(
-                config_get(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "exclude disks", DEFAULT_EXCLUDED_DISKS), NULL,
+                inicfg_get(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "exclude disks", DEFAULT_EXCLUDED_DISKS), NULL,
                 SIMPLE_PATTERN_EXACT, true);
 
         rrd_function_add_inline(localhost, NULL, "block-devices", 10,
-                                RRDFUNCTIONS_PRIORITY_DEFAULT, RRDFUNCTIONS_DISKSTATS_HELP,
+                                RRDFUNCTIONS_PRIORITY_DEFAULT, RRDFUNCTIONS_VERSION_DEFAULT,
+                                RRDFUNCTIONS_DISKSTATS_HELP,
                                 "top", HTTP_ACCESS_ANONYMOUS_DATA,
                                 diskstats_function_block_devices);
     }
@@ -1431,7 +1411,7 @@ int do_proc_diskstats(int update_every, usec_t dt) {
     if(unlikely(!ff)) {
         char filename[FILENAME_MAX + 1];
         snprintfz(filename, FILENAME_MAX, "%s%s", netdata_configured_host_prefix, "/proc/diskstats");
-        ff = procfile_open(config_get(CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "filename to monitor", filename), " \t", PROCFILE_FLAG_DEFAULT);
+        ff = procfile_open(inicfg_get(&netdata_config, CONFIG_SECTION_PLUGIN_PROC_DISKSTATS, "filename to monitor", filename), " \t", PROCFILE_FLAG_DEFAULT);
     }
     if(unlikely(!ff)) return 0;
 
@@ -1453,18 +1433,17 @@ int do_proc_diskstats(int update_every, usec_t dt) {
         char *disk;
         unsigned long       major = 0, minor = 0;
 
-        collected_number    reads = 0,  mreads = 0,  readsectors = 0,  readms = 0,
-                            writes = 0, mwrites = 0, writesectors = 0, writems = 0,
+        collected_number rd_ios = 0,  mreads = 0,  readsectors = 0,  readms = 0, wr_ios = 0, mwrites = 0, writesectors = 0, writems = 0,
                             queued_ios = 0, busy_ms = 0, backlog_ms = 0,
                             discards = 0, mdiscards = 0, discardsectors = 0, discardms = 0,
                             flushes = 0, flushms = 0;
 
 
-        collected_number    last_reads = 0,  last_readsectors = 0,  last_readms = 0,
-                            last_writes = 0, last_writesectors = 0, last_writems = 0,
-                            last_busy_ms = 0,
-                            last_discards = 0, last_discardsectors = 0, last_discardms = 0,
-                            last_flushes = 0, last_flushms = 0;
+        collected_number last_rd_ios = 0,  last_readsectors = 0,  last_readms = 0,
+                         last_wr_ios = 0, last_writesectors = 0, last_writems = 0,
+                         last_busy_ms = 0,
+                         last_discards = 0, last_discardsectors = 0, last_discardms = 0,
+                         last_flushes = 0, last_flushms = 0;
 
         size_t words = procfile_linewords(ff, l);
         if(unlikely(words < 14)) continue;
@@ -1475,8 +1454,8 @@ int do_proc_diskstats(int update_every, usec_t dt) {
 
         // # of reads completed # of writes completed
         // This is the total number of reads or writes completed successfully.
-        reads           = str2ull(procfile_lineword(ff, l, 3), NULL);  // rd_ios
-        writes          = str2ull(procfile_lineword(ff, l, 7), NULL);  // wr_ios
+        rd_ios = str2ull(procfile_lineword(ff, l, 3), NULL);  // rd_ios
+        wr_ios = str2ull(procfile_lineword(ff, l, 7), NULL);  // wr_ios
 
         // # of reads merged # of writes merged
         // Reads and writes which are adjacent to each other may be merged for
@@ -1615,33 +1594,15 @@ int do_proc_diskstats(int update_every, usec_t dt) {
         if (d->do_ops == CONFIG_BOOLEAN_YES || d->do_ops == CONFIG_BOOLEAN_AUTO) {
             d->do_ops = CONFIG_BOOLEAN_YES;
 
-            if(unlikely(!d->st_ops)) {
-                d->st_ops = rrdset_create_localhost(
-                        "disk_ops"
-                        , d->chart_id
-                        , d->disk
-                        , family
-                        , "disk.ops"
-                        , "Disk Completed I/O Operations"
-                        , "operations/s"
-                        , PLUGIN_PROC_NAME
-                        , PLUGIN_PROC_MODULE_DISKSTATS_NAME
-                        , NETDATA_CHART_PRIO_DISK_OPS
-                        , update_every
-                        , RRDSET_TYPE_LINE
-                );
+            last_rd_ios = d->disk_ops.rd_ops_reads ? d->disk_ops.rd_ops_reads->collector.last_collected_value : 0;
+            last_wr_ios = d->disk_ops.rd_ops_writes ? d->disk_ops.rd_ops_writes->collector.last_collected_value : 0;
 
-                rrdset_flag_set(d->st_ops, RRDSET_FLAG_DETAIL);
-
-                d->rd_ops_reads  = rrddim_add(d->st_ops, "reads",  NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
-                d->rd_ops_writes = rrddim_add(d->st_ops, "writes", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
-
-                add_labels_to_disk(d, d->st_ops);
-            }
-
-            last_reads  = rrddim_set_by_pointer(d->st_ops, d->rd_ops_reads, reads);
-            last_writes = rrddim_set_by_pointer(d->st_ops, d->rd_ops_writes, writes);
-            rrdset_done(d->st_ops);
+            common_disk_ops(&d->disk_ops,
+                           d->chart_id,
+                           d->disk, rd_ios, wr_ios,
+                           update_every,
+                           disk_labels_cb,
+                           d);
         }
 
         if (do_dc_stats && d->do_ops == CONFIG_BOOLEAN_YES && d->do_ext != CONFIG_BOOLEAN_NO) {
@@ -1661,8 +1622,6 @@ int do_proc_diskstats(int update_every, usec_t dt) {
                         , RRDSET_TYPE_LINE
                 );
 
-                rrdset_flag_set(d->st_ext_ops, RRDSET_FLAG_DETAIL);
-
                 d->rd_ops_discards = rrddim_add(d->st_ext_ops, "discards", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
                 if (do_fl_stats)
                     d->rd_ops_flushes = rrddim_add(d->st_ext_ops, "flushes", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
@@ -1679,31 +1638,14 @@ int do_proc_diskstats(int update_every, usec_t dt) {
         if (d->do_qops == CONFIG_BOOLEAN_YES || d->do_qops == CONFIG_BOOLEAN_AUTO) {
             d->do_qops = CONFIG_BOOLEAN_YES;
 
-            if(unlikely(!d->st_qops)) {
-                d->st_qops = rrdset_create_localhost(
-                        "disk_qops"
-                        , d->chart_id
-                        , d->disk
-                        , family
-                        , "disk.qops"
-                        , "Disk Current I/O Operations"
-                        , "operations"
-                        , PLUGIN_PROC_NAME
-                        , PLUGIN_PROC_MODULE_DISKSTATS_NAME
-                        , NETDATA_CHART_PRIO_DISK_QOPS
-                        , update_every
-                        , RRDSET_TYPE_LINE
-                );
-
-                rrdset_flag_set(d->st_qops, RRDSET_FLAG_DETAIL);
-
-                d->rd_qops_operations = rrddim_add(d->st_qops, "operations", NULL, 1, 1, RRD_ALGORITHM_ABSOLUTE);
-
-                add_labels_to_disk(d, d->st_qops);
-            }
-
-            rrddim_set_by_pointer(d->st_qops, d->rd_qops_operations, queued_ios);
-            rrdset_done(d->st_qops);
+            common_disk_qops(
+                    &d->disk_qops,
+                    d->chart_id,
+                    d->disk,
+                    queued_ios,
+                    update_every,
+                    disk_labels_cb,
+                    d);
         }
 
         if (d->do_backlog == CONFIG_BOOLEAN_YES || d->do_backlog == CONFIG_BOOLEAN_AUTO) {
@@ -1725,8 +1667,6 @@ int do_proc_diskstats(int update_every, usec_t dt) {
                         , RRDSET_TYPE_AREA
                 );
 
-                rrdset_flag_set(d->st_backlog, RRDSET_FLAG_DETAIL);
-
                 d->rd_backlog_backlog = rrddim_add(d->st_backlog, "backlog", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
 
                 add_labels_to_disk(d, d->st_backlog);
@@ -1739,61 +1679,28 @@ int do_proc_diskstats(int update_every, usec_t dt) {
         if (d->do_util == CONFIG_BOOLEAN_YES || d->do_util == CONFIG_BOOLEAN_AUTO) {
             d->do_util = CONFIG_BOOLEAN_YES;
 
-            if(unlikely(!d->st_busy)) {
-                d->st_busy = rrdset_create_localhost(
-                        "disk_busy"
-                        , d->chart_id
-                        , d->disk
-                        , family
-                        , "disk.busy"
-                        , "Disk Busy Time"
-                        , "milliseconds"
-                        , PLUGIN_PROC_NAME
-                        , PLUGIN_PROC_MODULE_DISKSTATS_NAME
-                        , NETDATA_CHART_PRIO_DISK_BUSY
-                        , update_every
-                        , RRDSET_TYPE_AREA
-                );
+            last_busy_ms = d->disk_busy.rd_busy ? d->disk_busy.rd_busy->collector.last_collected_value : 0;
 
-                rrdset_flag_set(d->st_busy, RRDSET_FLAG_DETAIL);
-
-                d->rd_busy_busy = rrddim_add(d->st_busy, "busy", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
-
-                add_labels_to_disk(d, d->st_busy);
-            }
-
-            last_busy_ms = rrddim_set_by_pointer(d->st_busy, d->rd_busy_busy, busy_ms);
-            rrdset_done(d->st_busy);
-
-            if(unlikely(!d->st_util)) {
-                d->st_util = rrdset_create_localhost(
-                        "disk_util"
-                        , d->chart_id
-                        , d->disk
-                        , family
-                        , "disk.util"
-                        , "Disk Utilization Time"
-                        , "% of time working"
-                        , PLUGIN_PROC_NAME
-                        , PLUGIN_PROC_MODULE_DISKSTATS_NAME
-                        , NETDATA_CHART_PRIO_DISK_UTIL
-                        , update_every
-                        , RRDSET_TYPE_AREA
-                );
-
-                rrdset_flag_set(d->st_util, RRDSET_FLAG_DETAIL);
-
-                d->rd_util_utilization = rrddim_add(d->st_util, "utilization", NULL, 1, 1, RRD_ALGORITHM_ABSOLUTE);
-
-                add_labels_to_disk(d, d->st_util);
-            }
+            common_disk_busy(&d->disk_busy,
+                             d->chart_id,
+                             d->disk,
+                             busy_ms,
+                             update_every,
+                             disk_labels_cb,
+                             d);
 
             collected_number disk_utilization = (busy_ms - last_busy_ms) / (10 * update_every);
             if (disk_utilization > 100)
                 disk_utilization = 100;
 
-            rrddim_set_by_pointer(d->st_util, d->rd_util_utilization, disk_utilization);
-            rrdset_done(d->st_util);
+            common_disk_util(&d->disk_util,
+                             d->chart_id,
+                             d->disk,
+                             disk_utilization,
+                             update_every,
+                             disk_labels_cb,
+                             d);
+
         }
 
         if (d->do_mops == CONFIG_BOOLEAN_YES || d->do_mops == CONFIG_BOOLEAN_AUTO) {
@@ -1814,8 +1721,6 @@ int do_proc_diskstats(int update_every, usec_t dt) {
                         , update_every
                         , RRDSET_TYPE_LINE
                 );
-
-                rrdset_flag_set(d->st_mops, RRDSET_FLAG_DETAIL);
 
                 d->rd_mops_reads  = rrddim_add(d->st_mops, "reads",  NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
                 d->rd_mops_writes = rrddim_add(d->st_mops, "writes", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
@@ -1847,8 +1752,6 @@ int do_proc_diskstats(int update_every, usec_t dt) {
                         , RRDSET_TYPE_LINE
                 );
 
-                rrdset_flag_set(d->st_ext_mops, RRDSET_FLAG_DETAIL);
-
                 d->rd_mops_discards = rrddim_add(d->st_ext_mops, "discards", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
 
                 add_labels_to_disk(d, d->st_ext_mops);
@@ -1861,33 +1764,18 @@ int do_proc_diskstats(int update_every, usec_t dt) {
         if (d->do_iotime == CONFIG_BOOLEAN_YES || d->do_iotime == CONFIG_BOOLEAN_AUTO) {
             d->do_iotime = CONFIG_BOOLEAN_YES;
 
-            if(unlikely(!d->st_iotime)) {
-                d->st_iotime = rrdset_create_localhost(
-                        "disk_iotime"
-                        , d->chart_id
-                        , d->disk
-                        , family
-                        , "disk.iotime"
-                        , "Disk Total I/O Time"
-                        , "milliseconds/s"
-                        , PLUGIN_PROC_NAME
-                        , PLUGIN_PROC_MODULE_DISKSTATS_NAME
-                        , NETDATA_CHART_PRIO_DISK_IOTIME
-                        , update_every
-                        , RRDSET_TYPE_LINE
-                );
+            last_readms  = d->disk_iotime.rd_reads_ms ? d->disk_iotime.rd_reads_ms->collector.last_collected_value : 0;
+            last_writems = d->disk_iotime.rd_writes_ms ? d->disk_iotime.rd_writes_ms->collector.last_collected_value : 0;
 
-                rrdset_flag_set(d->st_iotime, RRDSET_FLAG_DETAIL);
-
-                d->rd_iotime_reads  = rrddim_add(d->st_iotime, "reads",  NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
-                d->rd_iotime_writes = rrddim_add(d->st_iotime, "writes", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
-
-                add_labels_to_disk(d, d->st_iotime);
-            }
-
-            last_readms  = rrddim_set_by_pointer(d->st_iotime, d->rd_iotime_reads, readms);
-            last_writems = rrddim_set_by_pointer(d->st_iotime, d->rd_iotime_writes, writems);
-            rrdset_done(d->st_iotime);
+            common_disk_iotime(
+                    &d->disk_iotime,
+                    d->chart_id,
+                    d->disk,
+                    readms,
+                    writems,
+                    update_every,
+                    disk_labels_cb,
+                    d);
         }
 
         if(do_dc_stats && d->do_iotime == CONFIG_BOOLEAN_YES && d->do_ext != CONFIG_BOOLEAN_NO) {
@@ -1906,8 +1794,6 @@ int do_proc_diskstats(int update_every, usec_t dt) {
                         , update_every
                         , RRDSET_TYPE_LINE
                 );
-
-                rrdset_flag_set(d->st_ext_iotime, RRDSET_FLAG_DETAIL);
 
                 d->rd_iotime_discards = rrddim_add(d->st_ext_iotime, "discards", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
                 if (do_fl_stats)
@@ -1928,36 +1814,19 @@ int do_proc_diskstats(int update_every, usec_t dt) {
         if(likely(dt)) {
             if ((d->do_iotime == CONFIG_BOOLEAN_YES || d->do_iotime == CONFIG_BOOLEAN_AUTO) &&
                 (d->do_ops == CONFIG_BOOLEAN_YES || d->do_ops == CONFIG_BOOLEAN_AUTO)) {
-                if(unlikely(!d->st_await)) {
-                    d->st_await = rrdset_create_localhost(
-                            "disk_await"
-                            , d->chart_id
-                            , d->disk
-                            , family
-                            , "disk.await"
-                            , "Average Completed I/O Operation Time"
-                            , "milliseconds/operation"
-                            , PLUGIN_PROC_NAME
-                            , PLUGIN_PROC_MODULE_DISKSTATS_NAME
-                            , NETDATA_CHART_PRIO_DISK_AWAIT
-                            , update_every
-                            , RRDSET_TYPE_LINE
-                    );
 
-                    rrdset_flag_set(d->st_await, RRDSET_FLAG_DETAIL);
+                double read_ms_avg = (rd_ios - last_rd_ios) ? (double)(readms - last_readms) / (rd_ios - last_rd_ios) : 0;
+                double write_ms_avg = (wr_ios - last_wr_ios) ? (double)(writems - last_writems) / (wr_ios - last_wr_ios) : 0;
 
-                    d->rd_await_reads  = rrddim_add(d->st_await, "reads",  NULL,  1, 1000, RRD_ALGORITHM_ABSOLUTE);
-                    d->rd_await_writes = rrddim_add(d->st_await, "writes", NULL, -1, 1000, RRD_ALGORITHM_ABSOLUTE);
-
-                    add_labels_to_disk(d, d->st_await);
-                }
-
-                double read_avg = (reads - last_reads) ? (double)(readms - last_readms) / (reads - last_reads) : 0;
-                double write_avg = (writes - last_writes) ? (double)(writems - last_writems) / (writes - last_writes) : 0;
-
-                rrddim_set_by_pointer(d->st_await, d->rd_await_reads, (collected_number)(read_avg * 1000));
-                rrddim_set_by_pointer(d->st_await, d->rd_await_writes, (collected_number)(write_avg * 1000));
-                rrdset_done(d->st_await);
+                common_disk_await(
+                        &d->disk_await,
+                        d->chart_id,
+                        d->disk,
+                        read_ms_avg,
+                        write_ms_avg,
+                        update_every,
+                        disk_labels_cb,
+                        d);
             }
 
             if (do_dc_stats && d->do_iotime == CONFIG_BOOLEAN_YES && d->do_ops == CONFIG_BOOLEAN_YES && d->do_ext != CONFIG_BOOLEAN_NO) {
@@ -1976,8 +1845,6 @@ int do_proc_diskstats(int update_every, usec_t dt) {
                             , update_every
                             , RRDSET_TYPE_LINE
                     );
-
-                    rrdset_flag_set(d->st_ext_await, RRDSET_FLAG_DETAIL);
 
                     d->rd_await_discards = rrddim_add(d->st_ext_await, "discards", NULL, 1, 1000, RRD_ALGORITHM_ABSOLUTE);
                     if (do_fl_stats)
@@ -2001,33 +1868,19 @@ int do_proc_diskstats(int update_every, usec_t dt) {
 
             if ((d->do_io == CONFIG_BOOLEAN_YES || d->do_io == CONFIG_BOOLEAN_AUTO) &&
                 (d->do_ops == CONFIG_BOOLEAN_YES || d->do_ops == CONFIG_BOOLEAN_AUTO)) {
-                if(unlikely(!d->st_avgsz)) {
-                    d->st_avgsz = rrdset_create_localhost(
-                            "disk_avgsz"
-                            , d->chart_id
-                            , d->disk
-                            , family
-                            , "disk.avgsz"
-                            , "Average Completed I/O Operation Bandwidth"
-                            , "KiB/operation"
-                            , PLUGIN_PROC_NAME
-                            , PLUGIN_PROC_MODULE_DISKSTATS_NAME
-                            , NETDATA_CHART_PRIO_DISK_AVGSZ
-                            , update_every
-                            , RRDSET_TYPE_AREA
-                    );
 
-                    rrdset_flag_set(d->st_avgsz, RRDSET_FLAG_DETAIL);
+                kernel_uint_t avg_read_bytes = SECTOR_SIZE * ((rd_ios - last_rd_ios)  ? (readsectors  - last_readsectors)  / (rd_ios - last_rd_ios) : 0);
+                kernel_uint_t avg_write_bytes = SECTOR_SIZE * ((wr_ios - last_wr_ios) ? (writesectors - last_writesectors) / (wr_ios - last_wr_ios) : 0);
 
-                    d->rd_avgsz_reads  = rrddim_add(d->st_avgsz, "reads",  NULL, SECTOR_SIZE, 1024,      RRD_ALGORITHM_ABSOLUTE);
-                    d->rd_avgsz_writes = rrddim_add(d->st_avgsz, "writes", NULL, SECTOR_SIZE * -1, 1024, RRD_ALGORITHM_ABSOLUTE);
-
-                    add_labels_to_disk(d, d->st_avgsz);
-                }
-
-                rrddim_set_by_pointer(d->st_avgsz, d->rd_avgsz_reads,  (reads  - last_reads)  ? (readsectors  - last_readsectors)  / (reads  - last_reads)  : 0);
-                rrddim_set_by_pointer(d->st_avgsz, d->rd_avgsz_writes, (writes - last_writes) ? (writesectors - last_writesectors) / (writes - last_writes) : 0);
-                rrdset_done(d->st_avgsz);
+                common_disk_avgsz(
+                        &d->disk_avgsz,
+                        d->chart_id,
+                        d->disk,
+                        avg_read_bytes,
+                        avg_write_bytes,
+                        update_every,
+                        disk_labels_cb,
+                        d);
             }
 
             if(do_dc_stats && d->do_io  == CONFIG_BOOLEAN_YES && d->do_ops == CONFIG_BOOLEAN_YES && d->do_ext != CONFIG_BOOLEAN_NO) {
@@ -2047,8 +1900,6 @@ int do_proc_diskstats(int update_every, usec_t dt) {
                             , RRDSET_TYPE_AREA
                     );
 
-                    rrdset_flag_set(d->st_ext_avgsz, RRDSET_FLAG_DETAIL);
-
                     d->rd_avgsz_discards = rrddim_add(d->st_ext_avgsz, "discards", NULL, SECTOR_SIZE, 1024, RRD_ALGORITHM_ABSOLUTE);
 
                     add_labels_to_disk(d, d->st_ext_avgsz);
@@ -2063,36 +1914,20 @@ int do_proc_diskstats(int update_every, usec_t dt) {
 
             if ((d->do_util == CONFIG_BOOLEAN_YES || d->do_util == CONFIG_BOOLEAN_AUTO) &&
                 (d->do_ops == CONFIG_BOOLEAN_YES || d->do_ops == CONFIG_BOOLEAN_AUTO)) {
-                if(unlikely(!d->st_svctm)) {
-                    d->st_svctm = rrdset_create_localhost(
-                            "disk_svctm"
-                            , d->chart_id
-                            , d->disk
-                            , family
-                            , "disk.svctm"
-                            , "Average Service Time"
-                            , "milliseconds/operation"
-                            , PLUGIN_PROC_NAME
-                            , PLUGIN_PROC_MODULE_DISKSTATS_NAME
-                            , NETDATA_CHART_PRIO_DISK_SVCTM
-                            , update_every
-                            , RRDSET_TYPE_LINE
-                    );
-
-                    rrdset_flag_set(d->st_svctm, RRDSET_FLAG_DETAIL);
-
-                    d->rd_svctm_svctm = rrddim_add(d->st_svctm, "svctm", NULL, 1, 1000, RRD_ALGORITHM_ABSOLUTE);
-
-                    add_labels_to_disk(d, d->st_svctm);
-                }
 
                 double svctm_avg =
-                    ((reads - last_reads) + (writes - last_writes)) ?
-                        (double)(busy_ms - last_busy_ms) / ((reads - last_reads) + (writes - last_writes)) :
+                        ((rd_ios - last_rd_ios) + (wr_ios - last_wr_ios)) ?
+                        (double) (busy_ms - last_busy_ms) / ((rd_ios - last_rd_ios) + (wr_ios - last_wr_ios)) :
                         0;
 
-                rrddim_set_by_pointer(d->st_svctm, d->rd_svctm_svctm, (collected_number)(svctm_avg * 1000));
-                rrdset_done(d->st_svctm);
+                common_disk_svctm(
+                        &d->disk_svctm,
+                        d->chart_id,
+                        d->disk,
+                        svctm_avg,
+                        update_every,
+                        disk_labels_cb,
+                        d);
             }
         }
 
@@ -2331,8 +2166,6 @@ int do_proc_diskstats(int update_every, usec_t dt) {
                             , RRDSET_TYPE_LINE
                     );
 
-                    rrdset_flag_set(d->st_bcache, RRDSET_FLAG_DETAIL);
-
                     d->rd_bcache_hits            = rrddim_add(d->st_bcache, "hits",       NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
                     d->rd_bcache_misses          = rrddim_add(d->st_bcache, "misses",     NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
                     d->rd_bcache_miss_collisions = rrddim_add(d->st_bcache, "collisions", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
@@ -2364,8 +2197,6 @@ int do_proc_diskstats(int update_every, usec_t dt) {
                             , update_every
                             , RRDSET_TYPE_LINE
                     );
-
-                    rrdset_flag_set(d->st_bcache_bypass, RRDSET_FLAG_DETAIL);
 
                     d->rd_bcache_bypass_hits   = rrddim_add(d->st_bcache_bypass, "hits",   NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
                     d->rd_bcache_bypass_misses = rrddim_add(d->st_bcache_bypass, "misses", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);

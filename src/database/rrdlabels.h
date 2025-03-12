@@ -3,7 +3,7 @@
 #ifndef NETDATA_RRDLABELS_H
 #define NETDATA_RRDLABELS_H
 
-#include "rrd.h"
+#include "libnetdata/libnetdata.h"
 
 struct pattern_array_item {
     Word_t size;
@@ -30,7 +30,8 @@ typedef enum __attribute__ ((__packed__)) rrdlabel_source {
 
 #define RRDLABEL_FLAG_INTERNAL (RRDLABEL_FLAG_OLD | RRDLABEL_FLAG_NEW | RRDLABEL_FLAG_DONT_DELETE)
 
-size_t text_sanitize(unsigned char *dst, const unsigned char *src, size_t dst_size, const unsigned char *char_map, bool utf, const char *empty, size_t *multibyte_length);
+struct rrdlabels;
+typedef struct rrdlabels RRDLABELS;
 
 RRDLABELS *rrdlabels_create(void);
 void rrdlabels_destroy(RRDLABELS *labels_dict);
@@ -77,6 +78,7 @@ pattern_array_add_key_simple_pattern(struct pattern_array *pa, const char *key, 
 void pattern_array_free(struct pattern_array *pa);
 
 int rrdlabels_unittest(void);
+size_t rrdlabels_sanitize_name(char *dst, const char *src, size_t dst_size);
 
 // unfortunately this break when defined in exporting_engine.h
 bool exporting_labels_filter_callback(const char *name, const char *value, RRDLABEL_SRC ls, void *data);

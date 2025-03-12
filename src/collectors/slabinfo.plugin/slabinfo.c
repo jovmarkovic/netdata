@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include "daemon/common.h"
+#include "database/rrd.h"
 #include "libnetdata/required_dummies.h"
 
 #define PLUGIN_SLABINFO_NAME "slabinfo.plugin"
@@ -167,7 +167,7 @@ struct slabinfo *read_file_slabinfo() {
     slabdebug("   Read %lu lines from procfile", (unsigned long)lines);
     for(l = 2; l < lines; l++) {
         if (unlikely(procfile_linewords(ff, l) < 14)) {
-            slabdebug("    Line %zu has only %zu words, skipping", l, procfile_linewords(ff,l));
+            slabdebug("    Line %zu has only %zu words, skipping", l, (size_t)procfile_linewords(ff,l));
             continue;
         }
 
@@ -318,6 +318,12 @@ unsigned int do_slab_stats(int update_every) {
         }
         printf("END\n");
 
+        fprintf(stdout, "\n");
+        fflush(stdout);
+        if (ferror(stdout) && errno == EPIPE) {
+            netdata_log_error("error writing to stdout: EPIPE. Exiting...");
+            return loops;
+        }
 
         loops++;
 
@@ -339,8 +345,8 @@ void usage(void) {
 }
 
 int main(int argc, char **argv) {
-    clocks_init();
     nd_log_initialize_for_external_plugins("slabinfo.plugin");
+    netdata_threads_init_for_external_plugins(0);
 
     program_name = argv[0];
     int update_every = 1, i, n, freq = 0;

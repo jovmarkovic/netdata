@@ -21,21 +21,21 @@
 // ----------------------------------------------------------------------------
 // mutex
 
-int __netdata_mutex_init(netdata_mutex_t *mutex) {
+ALWAYS_INLINE int __netdata_mutex_init(netdata_mutex_t *mutex) {
     int ret = pthread_mutex_init(mutex, NULL);
     if(unlikely(ret != 0))
         netdata_log_error("MUTEX_LOCK: failed to initialize (code %d).", ret);
     return ret;
 }
 
-int __netdata_mutex_destroy(netdata_mutex_t *mutex) {
+ALWAYS_INLINE int __netdata_mutex_destroy(netdata_mutex_t *mutex) {
     int ret = pthread_mutex_destroy(mutex);
     if(unlikely(ret != 0))
         netdata_log_error("MUTEX_LOCK: failed to destroy (code %d).", ret);
     return ret;
 }
 
-int __netdata_mutex_lock(netdata_mutex_t *mutex) {
+ALWAYS_INLINE int __netdata_mutex_lock(netdata_mutex_t *mutex) {
     int ret = pthread_mutex_lock(mutex);
     if(unlikely(ret != 0)) {
         netdata_log_error("MUTEX_LOCK: failed to get lock (code %d)", ret);
@@ -46,7 +46,7 @@ int __netdata_mutex_lock(netdata_mutex_t *mutex) {
     return ret;
 }
 
-int __netdata_mutex_trylock(netdata_mutex_t *mutex) {
+ALWAYS_INLINE int __netdata_mutex_trylock(netdata_mutex_t *mutex) {
     int ret = pthread_mutex_trylock(mutex);
     if(ret != 0)
         ;
@@ -56,7 +56,7 @@ int __netdata_mutex_trylock(netdata_mutex_t *mutex) {
     return ret;
 }
 
-int __netdata_mutex_unlock(netdata_mutex_t *mutex) {
+ALWAYS_INLINE int __netdata_mutex_unlock(netdata_mutex_t *mutex) {
     int ret = pthread_mutex_unlock(mutex);
     if(unlikely(ret != 0))
         netdata_log_error("MUTEX_LOCK: failed to unlock (code %d).", ret);
@@ -146,21 +146,21 @@ int netdata_mutex_unlock_debug(const char *file __maybe_unused, const char *func
 // ----------------------------------------------------------------------------
 // rwlock
 
-int __netdata_rwlock_destroy(netdata_rwlock_t *rwlock) {
+ALWAYS_INLINE int __netdata_rwlock_destroy(netdata_rwlock_t *rwlock) {
     int ret = pthread_rwlock_destroy(&rwlock->rwlock_t);
     if(unlikely(ret != 0))
         netdata_log_error("RW_LOCK: failed to destroy lock (code %d)", ret);
     return ret;
 }
 
-int __netdata_rwlock_init(netdata_rwlock_t *rwlock) {
+ALWAYS_INLINE int __netdata_rwlock_init(netdata_rwlock_t *rwlock) {
     int ret = pthread_rwlock_init(&rwlock->rwlock_t, NULL);
     if(unlikely(ret != 0))
         netdata_log_error("RW_LOCK: failed to initialize lock (code %d)", ret);
     return ret;
 }
 
-int __netdata_rwlock_rdlock(netdata_rwlock_t *rwlock) {
+ALWAYS_INLINE int __netdata_rwlock_rdlock(netdata_rwlock_t *rwlock) {
     int ret = pthread_rwlock_rdlock(&rwlock->rwlock_t);
     if(unlikely(ret != 0))
         netdata_log_error("RW_LOCK: failed to obtain read lock (code %d)", ret);
@@ -170,7 +170,7 @@ int __netdata_rwlock_rdlock(netdata_rwlock_t *rwlock) {
     return ret;
 }
 
-int __netdata_rwlock_wrlock(netdata_rwlock_t *rwlock) {
+ALWAYS_INLINE int __netdata_rwlock_wrlock(netdata_rwlock_t *rwlock) {
     int ret = pthread_rwlock_wrlock(&rwlock->rwlock_t);
     if(unlikely(ret != 0))
         netdata_log_error("RW_LOCK: failed to obtain write lock (code %d)", ret);
@@ -180,7 +180,7 @@ int __netdata_rwlock_wrlock(netdata_rwlock_t *rwlock) {
     return ret;
 }
 
-int __netdata_rwlock_rdunlock(netdata_rwlock_t *rwlock) {
+ALWAYS_INLINE int __netdata_rwlock_rdunlock(netdata_rwlock_t *rwlock) {
     int ret = pthread_rwlock_unlock(&rwlock->rwlock_t);
     if(unlikely(ret != 0))
         netdata_log_error("RW_LOCK: failed to release lock (code %d)", ret);
@@ -190,7 +190,7 @@ int __netdata_rwlock_rdunlock(netdata_rwlock_t *rwlock) {
     return ret;
 }
 
-int __netdata_rwlock_wrunlock(netdata_rwlock_t *rwlock) {
+ALWAYS_INLINE int __netdata_rwlock_wrunlock(netdata_rwlock_t *rwlock) {
     int ret = pthread_rwlock_unlock(&rwlock->rwlock_t);
     if(unlikely(ret != 0))
         netdata_log_error("RW_LOCK: failed to release lock (code %d)", ret);
@@ -200,7 +200,7 @@ int __netdata_rwlock_wrunlock(netdata_rwlock_t *rwlock) {
     return ret;
 }
 
-int __netdata_rwlock_tryrdlock(netdata_rwlock_t *rwlock) {
+ALWAYS_INLINE int __netdata_rwlock_tryrdlock(netdata_rwlock_t *rwlock) {
     int ret = pthread_rwlock_tryrdlock(&rwlock->rwlock_t);
     if(ret != 0)
         ;
@@ -210,7 +210,7 @@ int __netdata_rwlock_tryrdlock(netdata_rwlock_t *rwlock) {
     return ret;
 }
 
-int __netdata_rwlock_trywrlock(netdata_rwlock_t *rwlock) {
+ALWAYS_INLINE int __netdata_rwlock_trywrlock(netdata_rwlock_t *rwlock) {
     int ret = pthread_rwlock_trywrlock(&rwlock->rwlock_t);
     if(ret != 0)
         ;
@@ -219,234 +219,6 @@ int __netdata_rwlock_trywrlock(netdata_rwlock_t *rwlock) {
 
     return ret;
 }
-
-// ----------------------------------------------------------------------------
-// spinlock implementation
-// https://www.youtube.com/watch?v=rmGJc9PXpuE&t=41s
-
-#ifdef SPINLOCK_IMPL_WITH_MUTEX
-void spinlock_init(SPINLOCK *spinlock)
-{
-    netdata_mutex_init(&spinlock->inner);
-}
-#else
-void spinlock_init(SPINLOCK *spinlock)
-{
-    memset(spinlock, 0, sizeof(SPINLOCK));
-}
-#endif
-
-#ifndef SPINLOCK_IMPL_WITH_MUTEX
-static inline void spinlock_lock_internal(SPINLOCK *spinlock)
-{
-    #ifdef NETDATA_INTERNAL_CHECKS
-    size_t spins = 0;
-    #endif
-
-    for(int i = 1;
-        __atomic_load_n(&spinlock->locked, __ATOMIC_RELAXED) ||
-        __atomic_test_and_set(&spinlock->locked, __ATOMIC_ACQUIRE)
-        ; i++
-        ) {
-
-        #ifdef NETDATA_INTERNAL_CHECKS
-        spins++;
-        #endif
-
-        if(unlikely(i == 8)) {
-            i = 0;
-            tinysleep();
-        }
-    }
-
-    // we have the lock
-
-    #ifdef NETDATA_INTERNAL_CHECKS
-    spinlock->spins += spins;
-    spinlock->locker_pid = gettid_cached();
-    #endif
-
-    nd_thread_spinlock_locked();
-}
-#endif // SPINLOCK_IMPL_WITH_MUTEX
-
-#ifndef SPINLOCK_IMPL_WITH_MUTEX
-static inline void spinlock_unlock_internal(SPINLOCK *spinlock)
-{
-    #ifdef NETDATA_INTERNAL_CHECKS
-    spinlock->locker_pid = 0;
-    #endif
-
-    __atomic_clear(&spinlock->locked, __ATOMIC_RELEASE);
-
-    nd_thread_spinlock_unlocked();
-}
-#endif // SPINLOCK_IMPL_WITH_MUTEX
-
-#ifndef SPINLOCK_IMPL_WITH_MUTEX
-static inline bool spinlock_trylock_internal(SPINLOCK *spinlock) {
-    if(!__atomic_load_n(&spinlock->locked, __ATOMIC_RELAXED) &&
-        !__atomic_test_and_set(&spinlock->locked, __ATOMIC_ACQUIRE)) {
-        // we got the lock
-        nd_thread_spinlock_locked();
-        return true;
-    }
-
-    return false;
-}
-#endif // SPINLOCK_IMPL_WITH_MUTEX
-
-#ifdef SPINLOCK_IMPL_WITH_MUTEX
-void spinlock_lock(SPINLOCK *spinlock)
-{
-    netdata_mutex_lock(&spinlock->inner);
-}
-#else
-void spinlock_lock(SPINLOCK *spinlock)
-{
-    spinlock_lock_internal(spinlock);
-}
-#endif
-
-#ifdef SPINLOCK_IMPL_WITH_MUTEX
-void spinlock_unlock(SPINLOCK *spinlock)
-{
-    netdata_mutex_unlock(&spinlock->inner);
-}
-#else
-void spinlock_unlock(SPINLOCK *spinlock)
-{
-    spinlock_unlock_internal(spinlock);
-}
-#endif
-
-#ifdef SPINLOCK_IMPL_WITH_MUTEX
-bool spinlock_trylock(SPINLOCK *spinlock)
-{
-    return netdata_mutex_trylock(&spinlock->inner) == 0;
-}
-#else
-bool spinlock_trylock(SPINLOCK *spinlock)
-{
-    return spinlock_trylock_internal(spinlock);
-}
-#endif
-
-#ifdef SPINLOCK_IMPL_WITH_MUTEX
-void spinlock_lock_cancelable(SPINLOCK *spinlock)
-{
-    netdata_mutex_lock(&spinlock->inner);
-}
-#else
-void spinlock_lock_cancelable(SPINLOCK *spinlock)
-{
-    spinlock_lock_internal(spinlock);
-}
-#endif
-
-#ifdef SPINLOCK_IMPL_WITH_MUTEX
-void spinlock_unlock_cancelable(SPINLOCK *spinlock)
-{
-    netdata_mutex_unlock(&spinlock->inner);
-}
-#else
-void spinlock_unlock_cancelable(SPINLOCK *spinlock)
-{
-    spinlock_unlock_internal(spinlock);
-}
-#endif
-
-#ifdef SPINLOCK_IMPL_WITH_MUTEX
-bool spinlock_trylock_cancelable(SPINLOCK *spinlock)
-{
-    return netdata_mutex_trylock(&spinlock->inner) == 0;
-}
-#else
-bool spinlock_trylock_cancelable(SPINLOCK *spinlock)
-{
-    return spinlock_trylock_internal(spinlock);
-}
-#endif
-
-// ----------------------------------------------------------------------------
-// rw_spinlock implementation
-
-void rw_spinlock_init(RW_SPINLOCK *rw_spinlock) {
-    rw_spinlock->readers = 0;
-    spinlock_init(&rw_spinlock->spinlock);
-}
-
-void rw_spinlock_read_lock(RW_SPINLOCK *rw_spinlock) {
-    spinlock_lock(&rw_spinlock->spinlock);
-    __atomic_add_fetch(&rw_spinlock->readers, 1, __ATOMIC_RELAXED);
-    spinlock_unlock(&rw_spinlock->spinlock);
-
-    nd_thread_rwspinlock_read_locked();
-}
-
-void rw_spinlock_read_unlock(RW_SPINLOCK *rw_spinlock) {
-#ifndef NETDATA_INTERNAL_CHECKS
-    __atomic_sub_fetch(&rw_spinlock->readers, 1, __ATOMIC_RELAXED);
-#else
-    int32_t x = __atomic_sub_fetch(&rw_spinlock->readers, 1, __ATOMIC_RELAXED);
-    if(x < 0)
-        fatal("RW_SPINLOCK: readers is negative %d", x);
-#endif
-
-    nd_thread_rwspinlock_read_unlocked();
-}
-
-void rw_spinlock_write_lock(RW_SPINLOCK *rw_spinlock) {
-    size_t spins = 0;
-    while(1) {
-        spins++;
-        spinlock_lock(&rw_spinlock->spinlock);
-
-        if(__atomic_load_n(&rw_spinlock->readers, __ATOMIC_RELAXED) == 0)
-            break;
-
-        // Busy wait until all readers have released their locks.
-        spinlock_unlock(&rw_spinlock->spinlock);
-        tinysleep();
-    }
-
-    (void)spins;
-
-    nd_thread_rwspinlock_write_locked();
-}
-
-void rw_spinlock_write_unlock(RW_SPINLOCK *rw_spinlock) {
-    spinlock_unlock(&rw_spinlock->spinlock);
-    nd_thread_rwspinlock_write_unlocked();
-}
-
-bool rw_spinlock_tryread_lock(RW_SPINLOCK *rw_spinlock) {
-    if(spinlock_trylock(&rw_spinlock->spinlock)) {
-        __atomic_add_fetch(&rw_spinlock->readers, 1, __ATOMIC_RELAXED);
-        spinlock_unlock(&rw_spinlock->spinlock);
-        nd_thread_rwspinlock_read_locked();
-        return true;
-    }
-
-    return false;
-}
-
-bool rw_spinlock_trywrite_lock(RW_SPINLOCK *rw_spinlock) {
-    if(spinlock_trylock(&rw_spinlock->spinlock)) {
-        if (__atomic_load_n(&rw_spinlock->readers, __ATOMIC_RELAXED) == 0) {
-            // No readers, we've successfully acquired the write lock
-            nd_thread_rwspinlock_write_locked();
-            return true;
-        }
-        else {
-            // There are readers, unlock the spinlock and return false
-            spinlock_unlock(&rw_spinlock->spinlock);
-        }
-    }
-
-    return false;
-}
-
 
 #ifdef NETDATA_TRACE_RWLOCKS
 

@@ -21,6 +21,8 @@ static struct proc_module {
     {.name = "/proc/sys/fs/file-nr",         .dim = "file-nr",      .func = do_proc_sys_fs_file_nr},
     {.name = "/proc/sys/kernel/random/entropy_avail", .dim = "entropy", .func = do_proc_sys_kernel_random_entropy_avail},
 
+    {.name = "/run/reboot_required",         .dim = "reboot-required", .func = do_run_reboot_required},
+
     // pressure metrics
     {.name = "/proc/pressure",               .dim = "pressure",     .func = do_proc_pressure},
 
@@ -62,7 +64,6 @@ static struct proc_module {
 
     // ZFS metrics
     {.name = "/proc/spl/kstat/zfs/arcstats", .dim = "zfs_arcstats", .func = do_proc_spl_kstat_zfs_arcstats},
-    {.name = "/proc/spl/kstat/zfs/pool/state",.dim = "zfs_pool_state",.func = do_proc_spl_kstat_zfs_pool_state},
 
     // BTRFS metrics
     {.name = "/sys/fs/btrfs",                .dim = "btrfs",        .func = do_sys_fs_btrfs},
@@ -92,8 +93,6 @@ static void proc_main_cleanup(void *pptr)
     if(!static_thread) return;
 
     static_thread->enabled = NETDATA_MAIN_THREAD_EXITING;
-
-    collector_info("cleaning up...");
 
     nd_thread_join(netdev_thread);
     worker_unregister();
@@ -208,28 +207,26 @@ void *proc_main(void *ptr)
 
     rrd_collector_started();
 
-    if (config_get_boolean("plugin:proc", "/proc/net/dev", CONFIG_BOOLEAN_YES)) {
+    if (inicfg_get_boolean(&netdata_config, "plugin:proc", "/proc/net/dev", CONFIG_BOOLEAN_YES)) {
         netdata_log_debug(D_SYSTEM, "Starting thread %s.", THREAD_NETDEV_NAME);
         netdev_thread = nd_thread_create(THREAD_NETDEV_NAME, NETDATA_THREAD_OPTION_JOINABLE, netdev_main, NULL);
     }
 
-    config_get_boolean("plugin:proc", "/proc/pagetypeinfo", CONFIG_BOOLEAN_NO);
-    config_get_boolean("plugin:proc", "/proc/spl/kstat/zfs/pool/state", CONFIG_BOOLEAN_NO);
+    inicfg_get_boolean(&netdata_config, "plugin:proc", "/proc/pagetypeinfo", CONFIG_BOOLEAN_NO);
 
     // check the enabled status for each module
     int i;
     for(i = 0; proc_modules[i].name; i++) {
         struct proc_module *pm = &proc_modules[i];
 
-        pm->enabled = config_get_boolean("plugin:proc", pm->name, CONFIG_BOOLEAN_YES);
+        pm->enabled = inicfg_get_boolean(&netdata_config, "plugin:proc", pm->name, CONFIG_BOOLEAN_YES);
         pm->rd = NULL;
 
         worker_register_job_name(i, proc_modules[i].dim);
     }
 
-    usec_t step = localhost->rrd_update_every * USEC_PER_SEC;
     heartbeat_t hb;
-    heartbeat_init(&hb);
+    heartbeat_init(&hb, localhost->rrd_update_every * USEC_PER_SEC);
 
     inside_lxc_container = is_lxcfs_proc_mounted();
     is_mem_swap_enabled = is_swap_enabled();
@@ -246,7 +243,7 @@ void *proc_main(void *ptr)
 
     while(service_running(SERVICE_COLLECTORS)) {
         worker_is_idle();
-        usec_t hb_dt = heartbeat_next(&hb, step);
+        usec_t hb_dt = heartbeat_next(&hb);
 
         if(unlikely(!service_running(SERVICE_COLLECTORS)))
             break;
@@ -280,7 +277,7 @@ int get_numa_node_count(void)
 
     char name[FILENAME_MAX + 1];
     snprintfz(name, FILENAME_MAX, "%s%s", netdata_configured_host_prefix, "/sys/devices/system/node");
-    char *dirname = config_get("plugin:proc:/sys/devices/system/node", "directory to monitor", name);
+    const char *dirname = inicfg_get(&netdata_config, "plugin:proc:/sys/devices/system/node", "directory to monitor", name);
 
     DIR *dir = opendir(dirname);
     if (dir) {

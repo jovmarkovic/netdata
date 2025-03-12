@@ -1,8 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Macros and functions to assist in working with Go
-#
-# Copyright (c) 2024 Netdata Inc
-#
-# SPDX-License-Identifier: GPL
 
 if(CMAKE_BUILD_TYPE STREQUAL Debug)
     set(GO_LDFLAGS "-X github.com/netdata/netdata/go/plugins/pkg/buildinfo.Version=${NETDATA_VERSION_STRING}")
@@ -33,7 +30,7 @@ macro(add_go_target target output build_src build_dir)
 
     add_custom_command(
         OUTPUT ${output}
-        COMMAND "${CMAKE_COMMAND}" -E env CGO_ENABLED=0 "${GO_EXECUTABLE}" build -buildvcs=false -ldflags "${GO_LDFLAGS}" -o "${CMAKE_BINARY_DIR}/${output}" "./${build_dir}"
+        COMMAND "${CMAKE_COMMAND}" -E env GOROOT=${GO_ROOT} CGO_ENABLED=0 GOPROXY=https://proxy.golang.org,direct "${GO_EXECUTABLE}" build -buildvcs=false -ldflags "${GO_LDFLAGS}" -o "${CMAKE_BINARY_DIR}/${output}" "./${build_dir}"
         DEPENDS ${${target}_DEPS}
         COMMENT "Building Go component ${output}"
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/${build_src}"
@@ -52,9 +49,6 @@ endmacro()
 # All files found will be checked for a `go` directive, and the
 # MIN_GO_VERSION variable will be set to the highest version
 # number found among these directives.
-#
-# Only works on UNIX-like systems, because it has to process the go.mod
-# files in ways that CMake can't do on it's own.
 function(find_min_go_version src_tree)
     message(STATUS "Determining minimum required version of Go for this build")
 
@@ -64,14 +58,10 @@ function(find_min_go_version src_tree)
 
     foreach(f IN ITEMS ${go_mod_files})
         message(VERBOSE "Checking Go version specified in ${f}")
-        execute_process(
-            COMMAND grep -E "^go .*$" ${f}
-            COMMAND cut -f 2 -d " "
-            RESULT_VARIABLE version_check_result
-            OUTPUT_VARIABLE go_mod_version
-        )
+        file(STRINGS "${f}" match_line REGEX "^go .*$")
 
-        if(version_check_result EQUAL 0)
+        if(match_line)
+            list(GET match_line 0 go_mod_version)
             string(REGEX MATCH "([0-9]+\\.[0-9]+(\\.[0-9]+)?)" go_mod_version "${go_mod_version}")
 
             if(go_mod_version VERSION_GREATER result)

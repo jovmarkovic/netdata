@@ -3,10 +3,12 @@
 package module
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
 	"github.com/netdata/netdata/go/plugins/logger"
+	"github.com/netdata/netdata/go/plugins/plugin/go.d/agent/vnodes"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,24 +19,26 @@ import (
 type Module interface {
 	// Init does initialization.
 	// If it returns error, the job will be disabled.
-	Init() error
+	Init(context.Context) error
 
 	// Check is called after Init.
 	// If it returns error, the job will be disabled.
-	Check() error
+	Check(context.Context) error
 
 	// Charts returns the chart definition.
 	Charts() *Charts
 
 	// Collect collects metrics.
-	Collect() map[string]int64
+	Collect(context.Context) map[string]int64
 
 	// Cleanup Cleanup
-	Cleanup()
+	Cleanup(context.Context)
 
 	GetBase() *Base
 
 	Configuration() any
+
+	VirtualNode() *vnodes.VirtualNode
 }
 
 // Base is a helper struct. All modules should embed this struct.
@@ -44,12 +48,14 @@ type Base struct {
 
 func (b *Base) GetBase() *Base { return b }
 
+func (b *Base) VirtualNode() *vnodes.VirtualNode { return nil }
+
 func TestConfigurationSerialize(t *testing.T, mod Module, cfgJSON, cfgYAML []byte) {
 	t.Helper()
 	tests := map[string]struct {
 		config    []byte
-		unmarshal func(in []byte, out interface{}) (err error)
-		marshal   func(in interface{}) (out []byte, err error)
+		unmarshal func(in []byte, out any) (err error)
+		marshal   func(in any) (out []byte, err error)
 	}{
 		"json": {config: cfgJSON, marshal: json.Marshal, unmarshal: json.Unmarshal},
 		"yaml": {config: cfgYAML, marshal: yaml.Marshal, unmarshal: yaml.Unmarshal},

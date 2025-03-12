@@ -8,7 +8,6 @@
 #include <Judy.h>
 #include <openssl/sha.h>
 #include <openssl/evp.h>
-#include "daemon/common.h"
 #include "../rrd.h"
 #include "rrddiskprotocol.h"
 #include "rrdenginelib.h"
@@ -28,7 +27,10 @@ struct rrdengine_instance;
 struct rrdeng_cmd;
 
 #define MAX_PAGES_PER_EXTENT (109) /* TODO: can go higher only when journal supports bigger than 4KiB transactions */
-#define DEFAULT_PAGES_PER_EXTENT (64)
+#define DEFAULT_PAGES_PER_EXTENT (109)
+
+#define MAX_EXTENT_UNCOMPRESSED_SIZE (MAX_PAGES_PER_EXTENT * (RRDENG_BLOCK_SIZE + RRDENG_GORILLA_32BIT_BUFFER_SIZE))
+
 
 #define RRDENG_FILE_NUMBER_SCAN_TMPL "%1u-%10u"
 #define RRDENG_FILE_NUMBER_PRINT_TMPL "%1.1u-%10.10u"
@@ -167,7 +169,11 @@ struct jv2_page_info {
 };
 
 typedef enum __attribute__ ((__packed__)) {
-    RRDENG_1ST_METRIC_WRITER    = (1 << 0),
+    RRDENG_COLLECT_HANDLE_OPTION_NONE   = 0,
+
+#ifdef NETDATA_INTERNAL_CHECKS
+    RRDENG_1ST_METRIC_WRITER            = (1 << 0),
+#endif
 } RRDENG_COLLECT_HANDLE_OPTIONS;
 
 typedef enum __attribute__ ((__packed__)) {
@@ -198,7 +204,6 @@ struct rrdeng_collect_handle {
     struct metric *metric;
     struct pgc_page *pgc_page;
     struct pgd *page_data;
-    size_t page_data_size;
     struct pg_alignment *alignment;
     uint32_t page_entries_max;
     uint32_t page_position;                   // keep track of the current page size, to make sure we don't exceed it
@@ -243,12 +248,14 @@ enum rrdeng_opcode {
     RRDENG_OPCODE_QUERY,
     RRDENG_OPCODE_EXTENT_WRITE,
     RRDENG_OPCODE_EXTENT_READ,
-    RRDENG_OPCODE_FLUSHED_TO_OPEN,
     RRDENG_OPCODE_DATABASE_ROTATE,
     RRDENG_OPCODE_JOURNAL_INDEX,
-    RRDENG_OPCODE_FLUSH_INIT,
-    RRDENG_OPCODE_EVICT_INIT,
+    RRDENG_OPCODE_FLUSH_MAIN,
+    RRDENG_OPCODE_EVICT_MAIN,
+    RRDENG_OPCODE_EVICT_OPEN,
+    RRDENG_OPCODE_EVICT_EXTENT,
     RRDENG_OPCODE_CTX_SHUTDOWN,
+    RRDENG_OPCODE_CTX_FLUSH_DIRTY,
     RRDENG_OPCODE_CTX_QUIESCE,
     RRDENG_OPCODE_CTX_POPULATE_MRG,
     RRDENG_OPCODE_SHUTDOWN_EVLOOP,
@@ -262,10 +269,10 @@ enum rrdeng_opcode {
 // RRDENG_MAX_OPCODE + opcode            : reserved for the callbacks of each opcode
 // RRDENG_MAX_OPCODE + RRDENG_MAX_OPCODE : reserved for the timer
 #define RRDENG_TIMER_CB (RRDENG_OPCODE_MAX + RRDENG_OPCODE_MAX)
-#define RRDENG_FLUSH_TRANSACTION_BUFFER_CB (RRDENG_TIMER_CB + 1)
-#define RRDENG_OPCODES_WAITING             (RRDENG_TIMER_CB + 2)
-#define RRDENG_WORKS_DISPATCHED            (RRDENG_TIMER_CB + 3)
-#define RRDENG_WORKS_EXECUTING             (RRDENG_TIMER_CB + 4)
+#define RRDENG_OPCODES_WAITING             (RRDENG_TIMER_CB + 1)
+#define RRDENG_WORKS_DISPATCHED            (RRDENG_TIMER_CB + 2)
+#define RRDENG_WORKS_EXECUTING             (RRDENG_TIMER_CB + 3)
+#define RRDENG_RETENTION_TIMER_CB          (RRDENG_TIMER_CB + 4)
 
 struct extent_io_data {
     unsigned fileno;
@@ -277,29 +284,14 @@ struct extent_io_data {
 
 struct extent_io_descriptor {
     struct rrdengine_instance *ctx;
-    uv_fs_t uv_fs_request;
-    uv_buf_t iov;
-    uv_file file;
     void *buf;
-    struct wal *wal;
     uint64_t pos;
-    unsigned bytes;
-    struct completion *completion;
     unsigned descr_count;
+    unsigned bytes;
+    struct wal *wal;
+    uv_file file;
     struct page_descr_with_data *descr_array[MAX_PAGES_PER_EXTENT];
     struct rrdengine_datafile *datafile;
-    struct extent_io_descriptor *next; /* multiple requests to be served by the same cached extent */
-};
-
-struct generic_io_descriptor {
-    struct rrdengine_instance *ctx;
-    uv_fs_t req;
-    uv_buf_t iov;
-    void *buf;
-    void *data;
-    uint64_t pos;
-    unsigned bytes;
-    struct completion *completion;
 };
 
 typedef struct wal {
@@ -307,7 +299,6 @@ typedef struct wal {
     void *buf;
     size_t size;
     size_t buf_size;
-    struct generic_io_descriptor io_descr;
 
     struct {
         struct wal *prev;
@@ -323,34 +314,41 @@ void wal_release(WAL *wal);
  * They only describe operations since DB engine instance load time.
  */
 struct rrdengine_statistics {
-    rrdeng_stats_t before_decompress_bytes;
-    rrdeng_stats_t after_decompress_bytes;
-    rrdeng_stats_t before_compress_bytes;
-    rrdeng_stats_t after_compress_bytes;
+    PAD64(rrdeng_stats_t) before_decompress_bytes;
+    PAD64(rrdeng_stats_t) after_decompress_bytes;
+    PAD64(rrdeng_stats_t) before_compress_bytes;
+    PAD64(rrdeng_stats_t) after_compress_bytes;
 
-    rrdeng_stats_t io_write_bytes;
-    rrdeng_stats_t io_write_requests;
-    rrdeng_stats_t io_read_bytes;
-    rrdeng_stats_t io_read_requests;
+    PAD64(rrdeng_stats_t) io_write_bytes;
+    PAD64(rrdeng_stats_t) io_write_requests;
+    PAD64(rrdeng_stats_t) io_read_bytes;
+    PAD64(rrdeng_stats_t) io_read_requests;
 
-    rrdeng_stats_t datafile_creations;
-    rrdeng_stats_t datafile_deletions;
-    rrdeng_stats_t journalfile_creations;
-    rrdeng_stats_t journalfile_deletions;
+    PAD64(rrdeng_stats_t) datafile_creations;
+    PAD64(rrdeng_stats_t) datafile_deletions;
+    PAD64(rrdeng_stats_t) journalfile_creations;
+    PAD64(rrdeng_stats_t) journalfile_deletions;
 
-    rrdeng_stats_t io_errors;
-    rrdeng_stats_t fs_errors;
+    PAD64(rrdeng_stats_t) io_errors;
+    PAD64(rrdeng_stats_t) fs_errors;
 };
 
-/* I/O errors global counter */
-extern rrdeng_stats_t global_io_errors;
-/* File-System errors global counter */
-extern rrdeng_stats_t global_fs_errors;
-/* number of File-Descriptors that have been reserved by dbengine */
-extern rrdeng_stats_t rrdeng_reserved_file_descriptors;
-/* inability to flush global counters */
-extern rrdeng_stats_t global_pg_cache_over_half_dirty_events;
-extern rrdeng_stats_t global_flushing_pressure_page_deletions; /* number of deleted pages */
+struct rrdeng_global_stats {
+    /* I/O errors global counter */
+    PAD64(rrdeng_stats_t) global_io_errors;
+
+    /* File-System errors global counter */
+    PAD64(rrdeng_stats_t) global_fs_errors;
+
+    /* number of File-Descriptors that have been reserved by dbengine */
+    PAD64(rrdeng_stats_t) rrdeng_reserved_file_descriptors;
+
+    /* inability to flush global counters */
+    PAD64(rrdeng_stats_t) global_pg_cache_over_half_dirty_events;
+    PAD64(rrdeng_stats_t) global_flushing_pressure_page_deletions; /* number of deleted pages */
+};
+
+extern struct rrdeng_global_stats global_stats;
 
 typedef struct tier_config_prototype {
     int tier;                                   // the tier of this ctx
@@ -383,29 +381,28 @@ struct rrdengine_instance {
     } njfv2idx;
 
     struct {
-        unsigned last_fileno;                       // newest index of datafile and journalfile
-        unsigned last_flush_fileno;                 // newest index of datafile received data
+        PAD64(unsigned) last_fileno;                       // newest index of datafile and journalfile
+        PAD64(unsigned) last_flush_fileno;                 // newest index of datafile received data
 
-        size_t collectors_running;
-        size_t collectors_running_duplicate;
-        size_t inflight_queries;                    // the number of queries currently running
-        uint64_t current_disk_space;                // the current disk space size used
+        PAD64(size_t) collectors_running;
+        PAD64(size_t) collectors_running_duplicate;
+        PAD64(size_t) inflight_queries;                    // the number of queries currently running
+        PAD64(uint64_t) current_disk_space;                // the current disk space size used
 
-        uint64_t transaction_id;                    // the transaction id of the next extent flushing
+        PAD64(uint64_t) transaction_id;                    // the transaction id of the next extent flushing
 
-        bool migration_to_v2_running;
-        bool now_deleting_files;
-        unsigned extents_currently_being_flushed;   // non-zero until we commit data to disk (both datafile and journal file)
+        PAD64(bool) migration_to_v2_running;
+        PAD64(bool) now_deleting_files;
+        PAD64(unsigned) extents_currently_being_flushed;   // non-zero until we commit data to disk (both datafile and journal file)
 
-        time_t first_time_s;
-        uint64_t metrics;
-        uint64_t samples;
+        PAD64(time_t) first_time_s;
+        PAD64(uint64_t) metrics;
+        PAD64(uint64_t) samples;
     } atomic;
 
     struct {
         bool exit_mode;
         bool enabled;                               // when set (before shutdown), queries are prohibited
-        struct completion completion;
     } quiesce;
 
     struct {
@@ -436,12 +433,12 @@ static inline void ctx_io_write_op_bytes(struct rrdengine_instance *ctx, size_t 
 
 static inline void ctx_io_error(struct rrdengine_instance *ctx) {
     __atomic_add_fetch(&ctx->stats.io_errors, 1, __ATOMIC_RELAXED);
-    rrd_stat_atomic_add(&global_io_errors, 1);
+    rrd_stat_atomic_add(&global_stats.global_io_errors, 1);
 }
 
 static inline void ctx_fs_error(struct rrdengine_instance *ctx) {
     __atomic_add_fetch(&ctx->stats.fs_errors, 1, __ATOMIC_RELAXED);
-    rrd_stat_atomic_add(&global_fs_errors, 1);
+    rrd_stat_atomic_add(&global_stats.global_fs_errors, 1);
 }
 
 #define ctx_last_fileno_get(ctx) __atomic_load_n(&(ctx)->atomic.last_fileno, __ATOMIC_RELAXED)
@@ -459,9 +456,6 @@ static inline void ctx_last_flush_fileno_set(struct rrdengine_instance *ctx, uns
 }
 
 #define ctx_is_available_for_queries(ctx) (__atomic_load_n(&(ctx)->quiesce.enabled, __ATOMIC_RELAXED) == false && __atomic_load_n(&(ctx)->quiesce.exit_mode, __ATOMIC_RELAXED) == false)
-
-void *dbengine_extent_alloc(size_t size);
-void dbengine_extent_free(void *extent, size_t size);
 
 bool rrdeng_ctx_tier_cap_exceeded(struct rrdengine_instance *ctx);
 int init_rrd_files(struct rrdengine_instance *ctx);
@@ -484,6 +478,7 @@ void rrdeng_enq_cmd(struct rrdengine_instance *ctx, enum rrdeng_opcode opcode, v
 
 void pdc_route_asynchronously(struct rrdengine_instance *ctx, struct page_details_control *pdc);
 void pdc_route_synchronously(struct rrdengine_instance *ctx, struct page_details_control *pdc);
+void pdc_route_synchronously_first(struct rrdengine_instance *ctx, struct page_details_control *pdc);
 
 void pdc_acquire(PDC *pdc);
 bool pdc_release_and_destroy_if_unreferenced(PDC *pdc, bool worker, bool router);
@@ -551,9 +546,8 @@ static inline int journal_metric_uuid_compare(const void *key, const void *metri
 }
 
 // --------------------------------------------------------------------------------------------------------------------
-uint64_t get_used_disk_space(struct rrdengine_instance *ctx);
-void calculate_tier_disk_space_percentage(void);
-void dbengine_retention_statistics(void);
-uint64_t get_directory_free_bytes_space(struct rrdengine_instance *ctx);
+uint64_t rrdeng_get_used_disk_space(struct rrdengine_instance *ctx);
+void rrdeng_calculate_tier_disk_space_percentage(void);
+uint64_t rrdeng_get_directory_free_bytes_space(struct rrdengine_instance *ctx);
 
 #endif /* NETDATA_RRDENGINE_H */

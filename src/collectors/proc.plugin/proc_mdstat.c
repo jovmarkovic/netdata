@@ -89,7 +89,7 @@ int do_proc_mdstat(int update_every, usec_t dt)
     static int do_health = -1, do_nonredundant = -1, do_disks = -1, do_operations = -1, do_mismatch = -1,
                do_mismatch_config = -1;
     static int make_charts_obsolete = -1;
-    static char *mdstat_filename = NULL, *mismatch_cnt_filename = NULL;
+    static const char *mdstat_filename = NULL, *mismatch_cnt_filename = NULL;
     static struct raid *raids = NULL;
     static size_t raids_allocated = 0;
     size_t raids_num = 0, raid_idx = 0, redundant_num = 0;
@@ -99,26 +99,26 @@ int do_proc_mdstat(int update_every, usec_t dt)
 
     if (unlikely(do_health == -1)) {
         do_health =
-            config_get_boolean("plugin:proc:/proc/mdstat", "faulty devices", CONFIG_BOOLEAN_YES);
+            inicfg_get_boolean(&netdata_config, "plugin:proc:/proc/mdstat", "faulty devices", CONFIG_BOOLEAN_YES);
         do_nonredundant =
-            config_get_boolean("plugin:proc:/proc/mdstat", "nonredundant arrays availability", CONFIG_BOOLEAN_YES);
+            inicfg_get_boolean(&netdata_config, "plugin:proc:/proc/mdstat", "nonredundant arrays availability", CONFIG_BOOLEAN_YES);
         do_mismatch_config =
-            config_get_boolean_ondemand("plugin:proc:/proc/mdstat", "mismatch count", CONFIG_BOOLEAN_AUTO);
+            inicfg_get_boolean_ondemand(&netdata_config, "plugin:proc:/proc/mdstat", "mismatch count", CONFIG_BOOLEAN_AUTO);
         do_disks =
-            config_get_boolean("plugin:proc:/proc/mdstat", "disk stats", CONFIG_BOOLEAN_YES);
+            inicfg_get_boolean(&netdata_config, "plugin:proc:/proc/mdstat", "disk stats", CONFIG_BOOLEAN_YES);
         do_operations =
-            config_get_boolean("plugin:proc:/proc/mdstat", "operation status", CONFIG_BOOLEAN_YES);
+            inicfg_get_boolean(&netdata_config, "plugin:proc:/proc/mdstat", "operation status", CONFIG_BOOLEAN_YES);
 
         make_charts_obsolete =
-            config_get_boolean("plugin:proc:/proc/mdstat", "make charts obsolete", CONFIG_BOOLEAN_YES);
+            inicfg_get_boolean(&netdata_config, "plugin:proc:/proc/mdstat", "make charts obsolete", CONFIG_BOOLEAN_YES);
 
         char filename[FILENAME_MAX + 1];
 
         snprintfz(filename, FILENAME_MAX, "%s%s", netdata_configured_host_prefix, "/proc/mdstat");
-        mdstat_filename = config_get("plugin:proc:/proc/mdstat", "filename to monitor", filename);
+        mdstat_filename = inicfg_get(&netdata_config, "plugin:proc:/proc/mdstat", "filename to monitor", filename);
 
         snprintfz(filename, FILENAME_MAX, "%s%s", netdata_configured_host_prefix, "/sys/block/%s/md/mismatch_cnt");
-        mismatch_cnt_filename = config_get("plugin:proc:/proc/mdstat", "mismatch_cnt filename to monitor", filename);
+        mismatch_cnt_filename = inicfg_get(&netdata_config, "plugin:proc:/proc/mdstat", "mismatch_cnt filename to monitor", filename);
     }
 
     if (unlikely(!ff)) {

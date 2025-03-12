@@ -11,7 +11,7 @@ int do_proc_net_stat_conntrack(int update_every, usec_t dt) {
     static int do_sockets = -1, do_new = -1, do_changes = -1, do_expect = -1, do_search = -1, do_errors = -1;
     static usec_t get_max_every = 10 * USEC_PER_SEC, usec_since_last_max = 0;
     static int read_full = 1;
-    static char *nf_conntrack_filename, *nf_conntrack_count_filename, *nf_conntrack_max_filename;
+    static const char *nf_conntrack_filename, *nf_conntrack_count_filename, *nf_conntrack_max_filename;
     static const RRDVAR_ACQUIRED *rrdvar_max = NULL;
 
     unsigned long long aentries = 0, asearched = 0, afound = 0, anew = 0, ainvalid = 0, aignore = 0, adelete = 0, adelete_list = 0,
@@ -20,32 +20,32 @@ int do_proc_net_stat_conntrack(int update_every, usec_t dt) {
     if(unlikely(do_sockets == -1)) {
         char filename[FILENAME_MAX + 1];
         snprintfz(filename, FILENAME_MAX, "%s%s", netdata_configured_host_prefix, "/proc/net/stat/nf_conntrack");
-        nf_conntrack_filename = config_get("plugin:proc:/proc/net/stat/nf_conntrack", "filename to monitor", filename);
+        nf_conntrack_filename = inicfg_get(&netdata_config, "plugin:proc:/proc/net/stat/nf_conntrack", "filename to monitor", filename);
 
         snprintfz(filename, FILENAME_MAX, "%s%s", netdata_configured_host_prefix, "/proc/sys/net/netfilter/nf_conntrack_max");
-        nf_conntrack_max_filename = config_get("plugin:proc:/proc/sys/net/netfilter/nf_conntrack_max", "filename to monitor", filename);
-        usec_since_last_max = get_max_every = config_get_number("plugin:proc:/proc/sys/net/netfilter/nf_conntrack_max", "read every seconds", 10) * USEC_PER_SEC;
+        nf_conntrack_max_filename = inicfg_get(&netdata_config, "plugin:proc:/proc/sys/net/netfilter/nf_conntrack_max", "filename to monitor", filename);
+        usec_since_last_max = get_max_every = inicfg_get_number(&netdata_config, "plugin:proc:/proc/sys/net/netfilter/nf_conntrack_max", "read every seconds", 10) * USEC_PER_SEC;
 
         read_full = 1;
         ff = procfile_open(nf_conntrack_filename, " \t:", PROCFILE_FLAG_DEFAULT);
         if(!ff) read_full = 0;
 
-        do_new = config_get_boolean("plugin:proc:/proc/net/stat/nf_conntrack", "netfilter new connections", read_full);
-        do_changes = config_get_boolean("plugin:proc:/proc/net/stat/nf_conntrack", "netfilter connection changes", read_full);
-        do_expect = config_get_boolean("plugin:proc:/proc/net/stat/nf_conntrack", "netfilter connection expectations", read_full);
-        do_search = config_get_boolean("plugin:proc:/proc/net/stat/nf_conntrack", "netfilter connection searches", read_full);
-        do_errors = config_get_boolean("plugin:proc:/proc/net/stat/nf_conntrack", "netfilter errors", read_full);
+        do_new = inicfg_get_boolean(&netdata_config, "plugin:proc:/proc/net/stat/nf_conntrack", "netfilter new connections", read_full);
+        do_changes = inicfg_get_boolean(&netdata_config, "plugin:proc:/proc/net/stat/nf_conntrack", "netfilter connection changes", read_full);
+        do_expect = inicfg_get_boolean(&netdata_config, "plugin:proc:/proc/net/stat/nf_conntrack", "netfilter connection expectations", read_full);
+        do_search = inicfg_get_boolean(&netdata_config, "plugin:proc:/proc/net/stat/nf_conntrack", "netfilter connection searches", read_full);
+        do_errors = inicfg_get_boolean(&netdata_config, "plugin:proc:/proc/net/stat/nf_conntrack", "netfilter errors", read_full);
 
         do_sockets = 1;
         if(!read_full) {
             snprintfz(filename, FILENAME_MAX, "%s%s", netdata_configured_host_prefix, "/proc/sys/net/netfilter/nf_conntrack_count");
-            nf_conntrack_count_filename = config_get("plugin:proc:/proc/sys/net/netfilter/nf_conntrack_count", "filename to monitor", filename);
+            nf_conntrack_count_filename = inicfg_get(&netdata_config, "plugin:proc:/proc/sys/net/netfilter/nf_conntrack_count", "filename to monitor", filename);
 
             if(read_single_number_file(nf_conntrack_count_filename, &aentries))
                 do_sockets = 0;
         }
 
-        do_sockets = config_get_boolean("plugin:proc:/proc/net/stat/nf_conntrack", "netfilter connections", do_sockets);
+        do_sockets = inicfg_get_boolean(&netdata_config, "plugin:proc:/proc/net/stat/nf_conntrack", "netfilter connections", do_sockets);
 
         if(!do_sockets && !read_full)
             return 1;
@@ -217,7 +217,6 @@ int do_proc_net_stat_conntrack(int update_every, usec_t dt) {
                     , update_every
                     , RRDSET_TYPE_LINE
             );
-            rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
 
             rd_inserted = rrddim_add(st, "inserted", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
             rd_deleted = rrddim_add(st, "deleted", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
@@ -253,7 +252,6 @@ int do_proc_net_stat_conntrack(int update_every, usec_t dt) {
                     , update_every
                     , RRDSET_TYPE_LINE
             );
-            rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
 
             rd_created = rrddim_add(st, "created", NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
             rd_deleted = rrddim_add(st, "deleted", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
@@ -289,7 +287,6 @@ int do_proc_net_stat_conntrack(int update_every, usec_t dt) {
                     , update_every
                     , RRDSET_TYPE_LINE
             );
-            rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
 
             rd_searched  = rrddim_add(st, "searched",  NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
             rd_restarted = rrddim_add(st, "restarted", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
@@ -326,7 +323,6 @@ int do_proc_net_stat_conntrack(int update_every, usec_t dt) {
                     , update_every
                     , RRDSET_TYPE_LINE
             );
-            rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
 
             rd_icmp_error    = rrddim_add(st, "icmp_error",    NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
             rd_insert_failed = rrddim_add(st, "insert_failed", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);

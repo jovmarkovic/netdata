@@ -5,7 +5,8 @@
 
 // Module name & description
 #define NETDATA_EBPF_MODULE_NAME_VFS "vfs"
-#define NETDATA_EBPF_VFS_MODULE_DESC "Monitor VFS (Virtual File System) functions. This thread is integrated with apps and cgroup."
+#define NETDATA_EBPF_VFS_MODULE_DESC                                                                                   \
+    "Monitor VFS (Virtual File System) functions. This thread is integrated with apps and cgroup."
 
 #define NETDATA_DIRECTORY_VFS_CONFIG_FILE "vfs.conf"
 
@@ -55,19 +56,19 @@
 #define NETDATA_CGROUP_VFS_FSYNC_CONTEXT "cgroup.vfs_fsync"
 #define NETDATA_CGROUP_VFS_FSYNC_ERROR_CONTEXT "cgroup.vfs_fsync_error"
 
-#define NETDATA_SYSTEMD_VFS_UNLINK_CONTEXT "systemd.services.vfs_unlink"
-#define NETDATA_SYSTEMD_VFS_WRITE_CONTEXT "systemd.services.vfs_write"
-#define NETDATA_SYSTEMD_VFS_WRITE_ERROR_CONTEXT "systemd.services.vfs_write_error"
-#define NETDATA_SYSTEMD_VFS_READ_CONTEXT "systemd.services.vfs_read"
-#define NETDATA_SYSTEMD_VFS_READ_ERROR_CONTEXT "systemd.services.vfs_read_error"
-#define NETDATA_SYSTEMD_VFS_WRITE_BYTES_CONTEXT "systemd.services.vfs_write_bytes"
-#define NETDATA_SYSTEMD_VFS_READ_BYTES_CONTEXT "systemd.services.vfs_read_bytes"
-#define NETDATA_SYSTEMD_VFS_CREATE_CONTEXT "systemd.services.vfs_create"
-#define NETDATA_SYSTEMD_VFS_CREATE_ERROR_CONTEXT "systemd.services.vfs_create_error"
-#define NETDATA_SYSTEMD_VFS_OPEN_CONTEXT "systemd.services.vfs_open"
-#define NETDATA_SYSTEMD_VFS_OPEN_ERROR_CONTEXT "systemd.services.vfs_open_error"
-#define NETDATA_SYSTEMD_VFS_FSYNC_CONTEXT "systemd.services.vfs_fsync"
-#define NETDATA_SYSTEMD_VFS_FSYNC_ERROR_CONTEXT "systemd.services.vfs_fsync_error"
+#define NETDATA_SYSTEMD_VFS_UNLINK_CONTEXT "systemd.service.vfs_unlink"
+#define NETDATA_SYSTEMD_VFS_WRITE_CONTEXT "systemd.service.vfs_write"
+#define NETDATA_SYSTEMD_VFS_WRITE_ERROR_CONTEXT "systemd.service.vfs_write_error"
+#define NETDATA_SYSTEMD_VFS_READ_CONTEXT "systemd.service.vfs_read"
+#define NETDATA_SYSTEMD_VFS_READ_ERROR_CONTEXT "systemd.service.vfs_read_error"
+#define NETDATA_SYSTEMD_VFS_WRITE_BYTES_CONTEXT "systemd.service.vfs_write_bytes"
+#define NETDATA_SYSTEMD_VFS_READ_BYTES_CONTEXT "systemd.service.vfs_read_bytes"
+#define NETDATA_SYSTEMD_VFS_CREATE_CONTEXT "systemd.service.vfs_create"
+#define NETDATA_SYSTEMD_VFS_CREATE_ERROR_CONTEXT "systemd.service.vfs_create_error"
+#define NETDATA_SYSTEMD_VFS_OPEN_CONTEXT "systemd.service.vfs_open"
+#define NETDATA_SYSTEMD_VFS_OPEN_ERROR_CONTEXT "systemd.service.vfs_open_error"
+#define NETDATA_SYSTEMD_VFS_FSYNC_CONTEXT "systemd.service.vfs_fsync"
+#define NETDATA_SYSTEMD_VFS_FSYNC_ERROR_CONTEXT "systemd.service.vfs_fsync_error"
 
 // ARAL name
 #define NETDATA_EBPF_VFS_ARAL_NAME "ebpf_vfs"
@@ -75,12 +76,8 @@
 // dimension
 #define EBPF_COMMON_UNITS_BYTES "bytes/s"
 
-typedef struct netdata_publish_vfs {
+typedef struct __attribute__((packed)) netdata_publish_vfs {
     uint64_t ct;
-    uint32_t tgid;
-    uint32_t uid;
-    uint32_t gid;
-    char name[TASK_COMM_LEN];
 
     //Counter
     uint32_t write_call;
@@ -107,6 +104,7 @@ typedef struct netdata_publish_vfs {
     uint32_t fsync_err;
     uint32_t open_err;
     uint32_t create_err;
+
 } netdata_publish_vfs_t;
 
 enum netdata_publish_vfs_list {
@@ -153,11 +151,7 @@ enum vfs_counters {
     NETDATA_VFS_COUNTER
 };
 
-enum netdata_vfs_tables {
-    NETDATA_VFS_PID,
-    NETDATA_VFS_ALL,
-    NETDATA_VFS_CTRL
-};
+enum netdata_vfs_tables { NETDATA_VFS_PID, NETDATA_VFS_ALL, NETDATA_VFS_CTRL };
 
 enum netdata_vfs_calls_name {
     NETDATA_EBPF_VFS_WRITE,

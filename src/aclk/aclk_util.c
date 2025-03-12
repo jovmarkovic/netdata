@@ -2,17 +2,13 @@
 
 #include "aclk_util.h"
 
-#ifdef ENABLE_ACLK
-
 #include "aclk_proxy.h"
 
-#include "daemon/common.h"
+#include "database/rrd.h"
 
 usec_t aclk_session_newarch = 0;
 
 aclk_env_t *aclk_env = NULL;
-
-int chart_batch_id;
 
 aclk_encoding_type_t aclk_encoding_type_t_from_str(const char *str) {
     if (!strcmp(str, "json")) {
@@ -186,20 +182,18 @@ static void topic_generate_final(struct aclk_topic *t) {
     if (!replace_tag)
         return;
 
-    rrdhost_aclk_state_lock(localhost);
-    if (unlikely(!localhost->aclk_state.claimed_id)) {
+    CLAIM_ID claim_id = claim_id_get();
+    if (unlikely(!claim_id_is_set(claim_id))) {
         netdata_log_error("This should never be called if agent not claimed");
-        rrdhost_aclk_state_unlock(localhost);
         return;
     }
 
-    t->topic = mallocz(strlen(t->topic_recvd) + 1 - strlen(CLAIM_ID_REPLACE_TAG) + strlen(localhost->aclk_state.claimed_id));
+    t->topic = mallocz(strlen(t->topic_recvd) + 1 - strlen(CLAIM_ID_REPLACE_TAG) + strlen(claim_id.str));
     memcpy(t->topic, t->topic_recvd, replace_tag - t->topic_recvd);
     dest = t->topic + (replace_tag - t->topic_recvd);
 
-    memcpy(dest, localhost->aclk_state.claimed_id, strlen(localhost->aclk_state.claimed_id));
-    dest += strlen(localhost->aclk_state.claimed_id);
-    rrdhost_aclk_state_unlock(localhost);
+    memcpy(dest, claim_id.str, strlen(claim_id.str));
+    dest += strlen(claim_id.str);
     replace_tag += strlen(CLAIM_ID_REPLACE_TAG);
     strcpy(dest, replace_tag);
     dest += strlen(replace_tag);
@@ -315,7 +309,7 @@ const char *aclk_get_topic(enum aclk_topics topic)
  * having to resort to callbacks. 
  */
 
-const char *aclk_topic_cache_iterate(aclk_topic_cache_iter_t *iter)
+const char *aclk_topic_cache_iterate(size_t *iter)
 {
     if (!aclk_topic_cache) {
         netdata_log_error("Topic cache not initialized when %s was called.", __FUNCTION__);
@@ -348,15 +342,13 @@ unsigned long int aclk_tbeb_delay(int reset, int base, unsigned long int min, un
 
     attempt++;
 
-    if (attempt == 0) {
-        srandom(time(NULL));
+    if (attempt == 0)
         return 0;
-    }
 
     unsigned long int delay = pow(base, attempt - 1);
     delay *= MSEC_PER_SEC;
 
-    delay += (random() % (MAX(1000, delay/2)));
+    delay += (os_random32() % (MAX(1000, delay/2)));
 
     if (delay <= min * MSEC_PER_SEC)
         return min;
@@ -367,20 +359,25 @@ unsigned long int aclk_tbeb_delay(int reset, int base, unsigned long int min, un
     return delay;
 }
 
-static inline int aclk_parse_pair(const char *src, const char c, char **a, char **b)
+static inline int aclk_parse_userpass_pair(const char *src, const char c, char **a, char **b)
 {
     const char *ptr = strchr(src, c);
     if (ptr == NULL)
         return 1;
 
-//  allow empty string
-/*    if (!*(ptr+1))
-        return 1;*/
+    char *tmp_a = callocz(1, ptr - src + 1);
+    memcpy(tmp_a, src, ptr - src);
 
-    *a = callocz(1, ptr - src + 1);
-    memcpy (*a, src, ptr - src);
+    char *decoded_a = callocz(1, ptr - src + 1);
+    url_decode_r(decoded_a, tmp_a, ptr - src + 1);
+    freez(tmp_a);
+    *a = decoded_a;
 
-    *b = strdupz(ptr+1);
+    char *tmp_b = strdupz(ptr+1);
+    char *decoded_b = callocz(1, strlen(tmp_b) + 1);
+    url_decode_r(decoded_b, tmp_b, strlen(tmp_b) + 1);
+    freez(tmp_b);
+    *b = decoded_b;
 
     return 0;
 }
@@ -407,7 +404,7 @@ void aclk_set_proxy(char **ohost, int *port, char **uname, char **pwd, enum mqtt
 
     if ((tmp = strchr(ptr, '@'))) {
         *tmp = 0;
-        if(aclk_parse_pair(ptr, ':', uname, pwd)) {
+        if(aclk_parse_userpass_pair(ptr, ':', uname, pwd)) {
             error_report("Failed to get username and password for proxy. Will attempt connection without authentication");
         }
         ptr = tmp+1;
@@ -439,46 +436,4 @@ void aclk_set_proxy(char **ohost, int *port, char **uname, char **pwd, enum mqtt
     }
 
     freez(proxy);
-}
-#endif /* ENABLE_ACLK */
-
-#if defined(OPENSSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER < OPENSSL_VERSION_110
-static EVP_ENCODE_CTX *EVP_ENCODE_CTX_new(void)
-{
-	EVP_ENCODE_CTX *ctx = OPENSSL_malloc(sizeof(*ctx));
-
-	if (ctx != NULL) {
-		memset(ctx, 0, sizeof(*ctx));
-	}
-	return ctx;
-}
-static void EVP_ENCODE_CTX_free(EVP_ENCODE_CTX *ctx)
-{
-	OPENSSL_free(ctx);
-	return;
-}
-#endif
-
-int base64_encode_helper(unsigned char *out, int *outl, const unsigned char *in, int in_len)
-{
-    int len;
-    unsigned char *str = out;
-    EVP_ENCODE_CTX *ctx = EVP_ENCODE_CTX_new();
-    EVP_EncodeInit(ctx);
-    EVP_EncodeUpdate(ctx, str, outl, in, in_len);
-    str += *outl;
-    EVP_EncodeFinal(ctx, str, &len);
-    *outl += len;
-
-    str = out;
-    while(*str) {
-        if (*str != 0x0D && *str != 0x0A)
-            *out++ = *str++;
-        else
-            str++;
-    }
-    *out = 0;
-
-    EVP_ENCODE_CTX_free(ctx);
-    return 0;
 }

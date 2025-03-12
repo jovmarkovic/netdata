@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-#define NETDATA_RRD_INTERNALS
 
 #include "rrdengine.h"
 
@@ -47,9 +46,6 @@ static void main_cache_flush_dirty_page_callback(PGC *cache __maybe_unused, PGC_
         descr->page_length = pgd_disk_footprint(descr->pgd);
 
         DOUBLE_LINKED_LIST_APPEND_ITEM_UNSAFE(base, descr, link.prev, link.next);
-
-        // TODO: ask @stelfrag/@ktsaou about this.
-        // internal_fatal(descr->page_length > RRDENG_BLOCK_SIZE, "DBENGINE: faulty page length calculation");
     }
 
     struct completion completion;
@@ -63,6 +59,7 @@ static void open_cache_free_clean_page_callback(PGC *cache __maybe_unused, PGC_E
 {
     struct rrdengine_datafile *datafile = entry.data;
     datafile_release(datafile, DATAFILE_ACQUIRE_OPEN_CACHE);
+    timing_dbengine_evict_step(TIMING_STEP_DBENGINE_EVICT_FREE_OPEN);
 }
 
 static void open_cache_flush_dirty_page_callback(PGC *cache __maybe_unused, PGC_ENTRY *entries_array __maybe_unused, PGC_PAGE **pages_array __maybe_unused, size_t entries __maybe_unused)
@@ -73,6 +70,7 @@ static void open_cache_flush_dirty_page_callback(PGC *cache __maybe_unused, PGC_
 static void extent_cache_free_clean_page_callback(PGC *cache __maybe_unused, PGC_ENTRY entry __maybe_unused)
 {
     dbengine_extent_free(entry.data, entry.size);
+    timing_dbengine_evict_step(TIMING_STEP_DBENGINE_EVICT_FREE_EXTENT);
 }
 
 static void extent_cache_flush_dirty_page_callback(PGC *cache __maybe_unused, PGC_ENTRY *entries_array __maybe_unused, PGC_PAGE **pages_array __maybe_unused, size_t entries __maybe_unused)
@@ -80,7 +78,7 @@ static void extent_cache_flush_dirty_page_callback(PGC *cache __maybe_unused, PG
     ;
 }
 
-inline TIME_RANGE_COMPARE is_page_in_time_range(time_t page_first_time_s, time_t page_last_time_s, time_t wanted_start_time_s, time_t wanted_end_time_s) {
+ALWAYS_INLINE_HOT TIME_RANGE_COMPARE is_page_in_time_range(time_t page_first_time_s, time_t page_last_time_s, time_t wanted_start_time_s, time_t wanted_end_time_s) {
     // page_first_time_s <= wanted_end_time_s && page_last_time_s >= wanted_start_time_s
 
     if(page_last_time_s < wanted_start_time_s)
@@ -92,7 +90,7 @@ inline TIME_RANGE_COMPARE is_page_in_time_range(time_t page_first_time_s, time_t
     return PAGE_IS_IN_RANGE;
 }
 
-static inline struct page_details *pdc_find_page_for_time(
+static ALWAYS_INLINE_HOT struct page_details *pdc_find_page_for_time(
         Pcvoid_t PArray,
         time_t wanted_time_s,
         size_t *gaps,
@@ -213,7 +211,7 @@ static inline struct page_details *pdc_find_page_for_time(
     return NULL;
 }
 
-static size_t get_page_list_from_pgc(PGC *cache, METRIC *metric, struct rrdengine_instance *ctx,
+static ALWAYS_INLINE_HOT size_t get_page_list_from_pgc(PGC *cache, METRIC *metric, struct rrdengine_instance *ctx,
         time_t wanted_start_time_s, time_t wanted_end_time_s,
         Pvoid_t *JudyL_page_array, size_t *cache_gaps,
         bool open_cache_mode, PDC_PAGE_STATUS tags) {
@@ -225,7 +223,7 @@ static size_t get_page_list_from_pgc(PGC *cache, METRIC *metric, struct rrdengin
     uint32_t dt_s = mrg_metric_get_update_every_s(main_mrg, metric);
 
     if(!dt_s)
-        dt_s = default_rrd_update_every;
+        dt_s = nd_profile.update_every;
 
     time_t previous_page_end_time_s = now_s - dt_s;
     bool first = true;
@@ -262,7 +260,7 @@ static size_t get_page_list_from_pgc(PGC *cache, METRIC *metric, struct rrdengin
             break;
         }
 
-        if (page_start_time_s - previous_page_end_time_s > dt_s)
+        if (page_start_time_s - previous_page_end_time_s > (time_t)dt_s)
             (*cache_gaps)++;
 
         Pvoid_t *PValue = PDCJudyLIns(JudyL_page_array, (Word_t) page_start_time_s, PJE0);
@@ -356,7 +354,7 @@ static void pgc_inject_gap(struct rrdengine_instance *ctx, METRIC *metric, time_
     pgc_page_release(main_cache, page);
 }
 
-static size_t list_has_time_gaps(
+static ALWAYS_INLINE_HOT size_t list_has_time_gaps(
         struct rrdengine_instance *ctx,
         METRIC *metric,
         Pvoid_t JudyL_page_array,
@@ -400,7 +398,7 @@ static size_t list_has_time_gaps(
     time_t now_s = wanted_start_time_s;
     time_t dt_s = mrg_metric_get_update_every_s(main_mrg, metric);
     if(!dt_s)
-        dt_s = default_rrd_update_every;
+        dt_s = nd_profile.update_every;
 
     size_t pages_pass2 = 0, pages_pass3 = 0;
     while((pd = pdc_find_page_for_time(
@@ -490,7 +488,7 @@ static size_t list_has_time_gaps(
 // ----------------------------------------------------------------------------
 
 typedef void (*page_found_callback_t)(PGC_PAGE *page, void *data);
-static size_t get_page_list_from_journal_v2(struct rrdengine_instance *ctx, METRIC *metric, usec_t start_time_ut, usec_t end_time_ut, page_found_callback_t callback, void *callback_data) {
+static ALWAYS_INLINE_HOT size_t get_page_list_from_journal_v2(struct rrdengine_instance *ctx, METRIC *metric, usec_t start_time_ut, usec_t end_time_ut, page_found_callback_t callback, void *callback_data) {
     nd_uuid_t *uuid = mrg_metric_uuid(main_mrg, metric);
     Word_t metric_id = mrg_metric_id(main_mrg, metric);
 
@@ -628,7 +626,7 @@ void add_page_details_from_journal_v2(PGC_PAGE *page, void *JudyL_pptr) {
 // Pvalue of the judy will be the end time for that page
 // DBENGINE2:
 #define time_delta(finish, pass) do { if(pass) { usec_t t = pass; (pass) = (finish) - (pass); (finish) = t; } } while(0)
-static Pvoid_t get_page_list(
+static ALWAYS_INLINE_HOT Pvoid_t get_page_list(
         struct rrdengine_instance *ctx,
         METRIC *metric,
         usec_t start_time_ut,
@@ -654,7 +652,7 @@ static Pvoid_t get_page_list(
             pages_total = 0;
 
     size_t cache_gaps = 0, query_gaps = 0;
-    bool done_v2 = false, done_open = false;
+    bool done_v2 = false, done_open = false, done_pass4 = false;
 
     usec_t pass1_ut = 0, pass2_ut = 0, pass3_ut = 0, pass4_ut = 0, finish_ut = 0;
 
@@ -719,44 +717,52 @@ static Pvoid_t get_page_list(
     query_gaps = list_has_time_gaps(ctx, metric, JudyL_page_array, wanted_start_time_s, wanted_end_time_s,
                                     &pages_total, &pages_found_pass4, pages_to_load_from_disk, &pages_overlapping,
                                     optimal_end_time_s, true, common_status);
+    done_pass4 = true;
 
 we_are_done:
     finish_ut = now_monotonic_usec();
-    time_delta(finish_ut, pass4_ut);
-    time_delta(finish_ut, pass3_ut);
-    time_delta(finish_ut, pass2_ut);
-    time_delta(finish_ut, pass1_ut);
-    __atomic_add_fetch(&rrdeng_cache_efficiency_stats.prep_time_in_main_cache_lookup, pass1_ut, __ATOMIC_RELAXED);
-    __atomic_add_fetch(&rrdeng_cache_efficiency_stats.prep_time_in_open_cache_lookup, pass2_ut, __ATOMIC_RELAXED);
-    __atomic_add_fetch(&rrdeng_cache_efficiency_stats.prep_time_in_journal_v2_lookup, pass3_ut, __ATOMIC_RELAXED);
-    __atomic_add_fetch(&rrdeng_cache_efficiency_stats.prep_time_in_pass4_lookup, pass4_ut, __ATOMIC_RELAXED);
+    time_delta(finish_ut, pass4_ut); // do not change the order
+    time_delta(finish_ut, pass3_ut); // do not change the order
+    time_delta(finish_ut, pass2_ut); // do not change the order
+    time_delta(finish_ut, pass1_ut); // do not change the order
 
-    __atomic_add_fetch(&rrdeng_cache_efficiency_stats.queries, 1, __ATOMIC_RELAXED);
+    time_and_count_add(&rrdeng_cache_efficiency_stats.prep_time_in_main_cache_lookup, pass1_ut);
+
+    if(done_open) {
+        time_and_count_add(&rrdeng_cache_efficiency_stats.prep_time_in_open_cache_lookup, pass2_ut);
+        __atomic_add_fetch(&rrdeng_cache_efficiency_stats.pages_meta_source_open_cache, pages_found_in_open_cache, __ATOMIC_RELAXED);
+    }
+
+    if(done_v2) {
+        time_and_count_add(&rrdeng_cache_efficiency_stats.prep_time_in_journal_v2_lookup, pass3_ut);
+        __atomic_add_fetch(&rrdeng_cache_efficiency_stats.pages_meta_source_journal_v2, pages_found_in_journals_v2, __ATOMIC_RELAXED);
+    }
+
+    if(done_pass4) {
+        time_and_count_add(&rrdeng_cache_efficiency_stats.prep_time_in_pass4_lookup, pass4_ut);
+        __atomic_add_fetch(&rrdeng_cache_efficiency_stats.pages_data_source_main_cache_at_pass4, pages_found_pass4, __ATOMIC_RELAXED);
+    }
+
     __atomic_add_fetch(&rrdeng_cache_efficiency_stats.queries_planned_with_gaps, (query_gaps) ? 1 : 0, __ATOMIC_RELAXED);
-    __atomic_add_fetch(&rrdeng_cache_efficiency_stats.queries_open, done_open ? 1 : 0, __ATOMIC_RELAXED);
-    __atomic_add_fetch(&rrdeng_cache_efficiency_stats.queries_journal_v2, done_v2 ? 1 : 0, __ATOMIC_RELAXED);
     __atomic_add_fetch(&rrdeng_cache_efficiency_stats.pages_total, pages_total, __ATOMIC_RELAXED);
     __atomic_add_fetch(&rrdeng_cache_efficiency_stats.pages_meta_source_main_cache, pages_found_in_main_cache, __ATOMIC_RELAXED);
-    __atomic_add_fetch(&rrdeng_cache_efficiency_stats.pages_meta_source_open_cache, pages_found_in_open_cache, __ATOMIC_RELAXED);
-    __atomic_add_fetch(&rrdeng_cache_efficiency_stats.pages_meta_source_journal_v2, pages_found_in_journals_v2, __ATOMIC_RELAXED);
     __atomic_add_fetch(&rrdeng_cache_efficiency_stats.pages_data_source_main_cache, pages_found_in_main_cache, __ATOMIC_RELAXED);
-    __atomic_add_fetch(&rrdeng_cache_efficiency_stats.pages_data_source_main_cache_at_pass4, pages_found_pass4, __ATOMIC_RELAXED);
     __atomic_add_fetch(&rrdeng_cache_efficiency_stats.pages_to_load_from_disk, *pages_to_load_from_disk, __ATOMIC_RELAXED);
     __atomic_add_fetch(&rrdeng_cache_efficiency_stats.pages_overlapping_skipped, pages_overlapping, __ATOMIC_RELAXED);
 
     return JudyL_page_array;
 }
 
-inline void rrdeng_prep_wait(PDC *pdc) {
+ALWAYS_INLINE void rrdeng_prep_wait(PDC *pdc) {
     if (unlikely(pdc && !pdc->prep_done)) {
         usec_t started_ut = now_monotonic_usec();
         completion_wait_for(&pdc->prep_completion);
         pdc->prep_done = true;
-        __atomic_add_fetch(&rrdeng_cache_efficiency_stats.query_time_wait_for_prep, now_monotonic_usec() - started_ut, __ATOMIC_RELAXED);
+        time_and_count_add(&rrdeng_cache_efficiency_stats.query_time_wait_for_prep, now_monotonic_usec() - started_ut);
     }
 }
 
-void rrdeng_prep_query(struct page_details_control *pdc, bool worker) {
+ALWAYS_INLINE_HOT void rrdeng_prep_query(struct page_details_control *pdc, bool worker) {
     if(worker)
         worker_is_busy(UV_EVENT_DBENGINE_QUERY);
 
@@ -779,11 +785,18 @@ void rrdeng_prep_query(struct page_details_control *pdc, bool worker) {
     if (pdc->pages_to_load_from_disk && pdc->page_list_JudyL) {
         pdc_acquire(pdc); // we get 1 for the 1st worker in the chain: do_read_page_list_work()
         usec_t start_ut = now_monotonic_usec();
-        if(likely(pdc->priority == STORAGE_PRIORITY_SYNCHRONOUS))
+        if(likely(pdc->priority == STORAGE_PRIORITY_SYNCHRONOUS)) {
             pdc_route_synchronously(pdc->ctx, pdc);
-        else
+            time_and_count_add(&rrdeng_cache_efficiency_stats.prep_time_to_route_sync, now_monotonic_usec() - start_ut);
+        }
+        else if(likely(pdc->priority == STORAGE_PRIORITY_SYNCHRONOUS_FIRST)) {
+            pdc_route_synchronously_first(pdc->ctx, pdc);
+            time_and_count_add(&rrdeng_cache_efficiency_stats.prep_time_to_route_syncfirst, now_monotonic_usec() - start_ut);
+        }
+        else {
             pdc_route_asynchronously(pdc->ctx, pdc);
-        __atomic_add_fetch(&rrdeng_cache_efficiency_stats.prep_time_to_route, now_monotonic_usec() - start_ut, __ATOMIC_RELAXED);
+            time_and_count_add(&rrdeng_cache_efficiency_stats.prep_time_to_route_async, now_monotonic_usec() - start_ut);
+        }
     }
     else
         completion_mark_complete(&pdc->page_completion);
@@ -804,7 +817,7 @@ void rrdeng_prep_query(struct page_details_control *pdc, bool worker) {
  * @param end_time_ut inclusive ending time in usec
  * @return 1 / 0 (pages found or not found)
  */
-void pg_cache_preload(struct rrdeng_query_handle *handle) {
+ALWAYS_INLINE_HOT void pg_cache_preload(struct rrdeng_query_handle *handle) {
     if (unlikely(!handle || !handle->metric))
         return;
 
@@ -825,7 +838,7 @@ void pg_cache_preload(struct rrdeng_query_handle *handle) {
     if(ctx_is_available_for_queries(handle->ctx)) {
         handle->pdc->refcount++; // we get 1 for the query thread and 1 for the prep thread
 
-        if(unlikely(handle->pdc->priority == STORAGE_PRIORITY_SYNCHRONOUS))
+        if(unlikely(handle->pdc->priority == STORAGE_PRIORITY_SYNCHRONOUS || handle->pdc->priority == STORAGE_PRIORITY_SYNCHRONOUS_FIRST))
             rrdeng_prep_query(handle->pdc, false);
         else
             rrdeng_enq_cmd(handle->ctx, RRDENG_OPCODE_QUERY, handle->pdc, NULL, handle->priority, NULL, NULL);
@@ -969,15 +982,15 @@ struct pgc_page *pg_cache_lookup_next(
 
     if(waited) {
         if(preloaded)
-            __atomic_add_fetch(&rrdeng_cache_efficiency_stats.query_time_to_slow_preload_next_page, now_monotonic_usec() - start_ut, __ATOMIC_RELAXED);
+            time_and_count_add(&rrdeng_cache_efficiency_stats.query_time_to_slow_preload_next_page, now_monotonic_usec() - start_ut);
         else
-            __atomic_add_fetch(&rrdeng_cache_efficiency_stats.query_time_to_slow_disk_next_page, now_monotonic_usec() - start_ut, __ATOMIC_RELAXED);
+            time_and_count_add(&rrdeng_cache_efficiency_stats.query_time_to_slow_disk_next_page, now_monotonic_usec() - start_ut);
     }
     else {
         if(preloaded)
-            __atomic_add_fetch(&rrdeng_cache_efficiency_stats.query_time_to_fast_preload_next_page, now_monotonic_usec() - start_ut, __ATOMIC_RELAXED);
+            time_and_count_add(&rrdeng_cache_efficiency_stats.query_time_to_fast_preload_next_page, now_monotonic_usec() - start_ut);
         else
-            __atomic_add_fetch(&rrdeng_cache_efficiency_stats.query_time_to_fast_disk_next_page, now_monotonic_usec() - start_ut, __ATOMIC_RELAXED);
+            time_and_count_add(&rrdeng_cache_efficiency_stats.query_time_to_fast_disk_next_page, now_monotonic_usec() - start_ut);
     }
 
     return page;
@@ -1029,88 +1042,103 @@ void pgc_open_add_hot_page(Word_t section, Word_t metric_id, time_t start_time_s
     pgc_page_release(open_cache, (PGC_PAGE *)page);
 }
 
-size_t dynamic_open_cache_size(void) {
-    size_t main_cache_size = pgc_get_wanted_cache_size(main_cache);
-    size_t target_size = main_cache_size / 100 * 5;
+int64_t dynamic_open_cache_size(void) {
+    int64_t main_wanted_cache_size = pgc_get_wanted_cache_size(main_cache);
+    int64_t target_size = main_wanted_cache_size / 100 * 5;
 
     if(target_size < 2 * 1024 * 1024)
         target_size = 2 * 1024 * 1024;
 
-    return target_size;
+    int64_t main_current_cache_size = pgc_get_current_cache_size(main_cache);
+
+    int64_t main_free_cache_size = (main_wanted_cache_size > main_current_cache_size) ?
+                                      main_wanted_cache_size - main_current_cache_size : 0;
+
+    return target_size + main_free_cache_size;
 }
 
-size_t dynamic_extent_cache_size(void) {
-    size_t main_cache_size = pgc_get_wanted_cache_size(main_cache);
-    size_t target_size = main_cache_size / 100 * 5;
+int64_t dynamic_extent_cache_size(void) {
+    int64_t main_wanted_cache_size = pgc_get_wanted_cache_size(main_cache);
+    int64_t target_size = main_wanted_cache_size / 100 * 30;
 
-    if(target_size < 3 * 1024 * 1024)
-        target_size = 3 * 1024 * 1024;
+    if(target_size < 5 * 1024 * 1024)
+        target_size = 5 * 1024 * 1024;
 
-    return target_size;
+    int64_t main_current_cache_size = pgc_get_current_cache_size(main_cache);
+
+    int64_t main_free_cache_size = (main_wanted_cache_size > main_current_cache_size) ?
+                                      main_wanted_cache_size - main_current_cache_size : 0;
+
+    return target_size + main_free_cache_size;
+}
+
+size_t pgc_main_nominal_page_size(void *data) {
+    return pgd_buffer_memory_footprint(data);
 }
 
 void pgc_and_mrg_initialize(void)
 {
-    main_mrg = mrg_create(0);
+    main_mrg = mrg_create();
 
     size_t target_cache_size = (size_t)default_rrdeng_page_cache_mb * 1024ULL * 1024ULL;
-    size_t main_cache_size = (target_cache_size / 100) * 95;
+    size_t main_cache_size = (target_cache_size / 100) * 70;
     size_t open_cache_size = 0;
-    size_t extent_cache_size = (target_cache_size / 100) * 5;
+    size_t extent_cache_size = (target_cache_size / 100) * 30;
 
-    if(extent_cache_size < 3 * 1024 * 1024) {
-        extent_cache_size = 3 * 1024 * 1024;
+    if(extent_cache_size < 5 * 1024 * 1024) {
+        extent_cache_size = 5 * 1024 * 1024;
         main_cache_size = target_cache_size - extent_cache_size;
     }
 
     extent_cache_size += (size_t)(default_rrdeng_extent_cache_mb * 1024ULL * 1024ULL);
 
     main_cache = pgc_create(
-            "main_cache",
+            "MAIN_PGC",
             main_cache_size,
             main_cache_free_clean_page_callback,
             (size_t) rrdeng_pages_per_extent,
             main_cache_flush_dirty_page_init_callback,
             main_cache_flush_dirty_page_callback,
-            10,
-            10240,                                      // if there are that many threads, evict so many at once!
-            1000,                           //
-            5,                                          // don't delay too much other threads
-            PGC_OPTIONS_AUTOSCALE,                               // AUTOSCALE = 2x max hot pages
-            0,                                                 // 0 = as many as the system cpus
+            2,
+            pgc_max_evictors(),
+            1000,
+            1,
+            PGC_OPTIONS_AUTOSCALE | PGC_OPTIONS_EVICT_PAGES_NO_INLINE,
+            0,
             0
     );
+    pgc_set_nominal_page_size_callback(main_cache, pgc_main_nominal_page_size);
 
     open_cache = pgc_create(
-            "open_cache",
-            open_cache_size,                             // the default is 1MB
+            "OPEN_PGC",
+            open_cache_size,
             open_cache_free_clean_page_callback,
-            1,
+            2,
             NULL,
             open_cache_flush_dirty_page_callback,
-            10,
-            10240,                                      // if there are that many threads, evict that many at once!
-            1000,                           //
-            3,                                          // don't delay too much other threads
-            PGC_OPTIONS_AUTOSCALE | PGC_OPTIONS_EVICT_PAGES_INLINE | PGC_OPTIONS_FLUSH_PAGES_INLINE,
-            0,                                                 // 0 = as many as the system cpus
+            1,
+            pgc_max_evictors(),
+            1000,
+            1,
+            PGC_OPTIONS_AUTOSCALE | PGC_OPTIONS_FLUSH_PAGES_NO_INLINE | PGC_OPTIONS_EVICT_PAGES_NO_INLINE,
+            0,
             sizeof(struct extent_io_data)
     );
     pgc_set_dynamic_target_cache_size_callback(open_cache, dynamic_open_cache_size);
 
     extent_cache = pgc_create(
-            "extent_cache",
+            "EXTENT_PGC",
             extent_cache_size,
             extent_cache_free_clean_page_callback,
-            1,
+            2,
             NULL,
             extent_cache_flush_dirty_page_callback,
-            5,
-            10,                                         // it will lose up to that extents at once!
-            100,                            //
-            2,                                          // don't delay too much other threads
-            PGC_OPTIONS_AUTOSCALE | PGC_OPTIONS_EVICT_PAGES_INLINE | PGC_OPTIONS_FLUSH_PAGES_INLINE,
-            0,                                                 // 0 = as many as the system cpus
+            1,
+            pgc_max_evictors(),
+            1000,
+            1,
+            PGC_OPTIONS_AUTOSCALE | PGC_OPTIONS_FLUSH_PAGES_NO_INLINE | PGC_OPTIONS_EVICT_PAGES_NO_INLINE, // no flushing needed
+            0,
             0
     );
     pgc_set_dynamic_target_cache_size_callback(extent_cache, dynamic_extent_cache_size);

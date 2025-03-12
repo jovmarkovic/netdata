@@ -1268,8 +1268,8 @@ int run_test(struct test *test)
 {
     fprintf(stderr, "\nRunning test '%s':\n%s\n", test->name, test->description);
 
-    default_rrd_memory_mode = RRD_MEMORY_MODE_ALLOC;
-    default_rrd_update_every = test->update_every;
+    default_rrd_memory_mode = RRD_DB_MODE_ALLOC;
+    nd_profile.update_every = test->update_every;
 
     char name[101];
     snprintfz(name, sizeof(name) - 1, "unittest-%s", test->name);
@@ -1437,8 +1437,8 @@ int check_strdupz_path_subpath() {
 
     size_t i;
     for(i = 0; checks[i].result ; i++) {
-        char *s = strdupz_path_subpath(checks[i].path, checks[i].subpath);
-        fprintf(stderr, "strdupz_path_subpath(\"%s\", \"%s\") = \"%s\": ", checks[i].path, checks[i].subpath, s);
+        char *s = filename_from_path_entry_strdupz(checks[i].path, checks[i].subpath);
+        fprintf(stderr, "filename_from_path_entry_strdupz(\"%s\", \"%s\") = \"%s\": ", checks[i].path, checks[i].subpath, s);
         if(!s || strcmp(s, checks[i].result) != 0) {
             freez(s);
             fprintf(stderr, "FAILED\n");
@@ -1537,8 +1537,8 @@ int unit_test(long delay, long shift)
     snprintfz(name, sizeof(name) - 1, "unittest-%d-%ld-%ld", repeat, delay, shift);
 
     //debug_flags = 0xffffffff;
-    default_rrd_memory_mode = RRD_MEMORY_MODE_ALLOC;
-    default_rrd_update_every = 1;
+    default_rrd_memory_mode = RRD_DB_MODE_ALLOC;
+    nd_profile.update_every = 1;
 
     int do_abs = 1;
     int do_inc = 1;
@@ -1674,22 +1674,7 @@ int test_sqlite(void) {
         return 1;
     }
 
-    BUFFER *sql = buffer_create(ACLK_SYNC_QUERY_SIZE, NULL);
-    char *uuid_str = "0000_000";
-
-    buffer_sprintf(sql, TABLE_ACLK_ALERT, uuid_str);
-    rc = sqlite3_exec_monitored(db_mt, buffer_tostring(sql), 0, 0, NULL);
-    if (rc != SQLITE_OK)
-        goto error;
-
-    buffer_free(sql);
     fprintf(stderr,"SQLite is OK\n");
-    rc = sqlite3_close_v2(db_mt);
+    (void) sqlite3_close_v2(db_mt);
     return 0;
-error:
-    rc = sqlite3_close_v2(db_mt);
-    fprintf(stderr,"SQLite statement failed: %s\n", buffer_tostring(sql));
-    buffer_free(sql);
-    fprintf(stderr,"SQLite tests failed\n");
-    return 1;
 }

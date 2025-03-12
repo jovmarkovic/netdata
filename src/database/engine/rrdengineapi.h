@@ -6,12 +6,15 @@
 #include "rrdengine.h"
 
 #define RRDENG_MIN_PAGE_CACHE_SIZE_MB (8)
-#define RRDENG_MIN_DISK_SPACE_MB (256)
+#define RRDENG_MIN_DISK_SPACE_MB (25)
 #define RRDENG_DEFAULT_TIER_DISK_SPACE_MB (1024)
 
 #define RRDENG_NR_STATS (38)
 
 #define RRDENG_FD_BUDGET_PER_INSTANCE (50)
+
+extern uint64_t dbengine_out_of_memory_protection;
+extern bool dbengine_use_all_ram_for_caches;
 
 extern int default_rrdeng_page_cache_mb;
 extern int default_rrdeng_extent_cache_mb;
@@ -31,7 +34,8 @@ extern uint8_t tier_page_type[];
 #define CTX_POINT_SIZE_BYTES(ctx) page_type_size[(ctx)->config.page_type]
 
 STORAGE_METRIC_HANDLE *rrdeng_metric_get_or_create(RRDDIM *rd, STORAGE_INSTANCE *si);
-STORAGE_METRIC_HANDLE *rrdeng_metric_get(STORAGE_INSTANCE *si, nd_uuid_t *uuid);
+STORAGE_METRIC_HANDLE *rrdeng_metric_get_by_id(STORAGE_INSTANCE *si, UUIDMAP_ID id);
+STORAGE_METRIC_HANDLE *rrdeng_metric_get_by_uuid(STORAGE_INSTANCE *si, nd_uuid_t *uuid);
 void rrdeng_metric_release(STORAGE_METRIC_HANDLE *smh);
 STORAGE_METRIC_HANDLE *rrdeng_metric_dup(STORAGE_METRIC_HANDLE *smh);
 
@@ -68,11 +72,13 @@ int rrdeng_init(
     time_t max_retention_s);
 
 void rrdeng_readiness_wait(struct rrdengine_instance *ctx);
-void rrdeng_exit_mode(struct rrdengine_instance *ctx);
 
 int rrdeng_exit(struct rrdengine_instance *ctx);
-void rrdeng_prepare_exit(struct rrdengine_instance *ctx);
+void rrdeng_quiesce(struct rrdengine_instance *ctx, bool dirty_only);
+
+bool rrdeng_metric_retention_by_id(STORAGE_INSTANCE *si, UUIDMAP_ID id, time_t *first_entry_s, time_t *last_entry_s);
 bool rrdeng_metric_retention_by_uuid(STORAGE_INSTANCE *si, nd_uuid_t *dim_uuid, time_t *first_entry_s, time_t *last_entry_s);
+void rrdeng_metric_retention_delete_by_id(STORAGE_INSTANCE *si, UUIDMAP_ID id);
 
 extern STORAGE_METRICS_GROUP *rrdeng_metrics_group_get(STORAGE_INSTANCE *si, nd_uuid_t *uuid);
 extern void rrdeng_metrics_group_release(STORAGE_INSTANCE *si, STORAGE_METRICS_GROUP *smg);
@@ -126,105 +132,120 @@ typedef struct rrdengine_size_statistics {
     double average_page_size_bytes;
 } RRDENG_SIZE_STATS;
 
-struct rrdeng_cache_efficiency_stats {
-    size_t queries;
-    size_t queries_planned_with_gaps;
-    size_t queries_executed_with_gaps;
-    size_t queries_open;
-    size_t queries_journal_v2;
+struct time_and_count {
+    size_t count;
+    usec_t usec;
+};
 
-    size_t currently_running_queries;
+static ALWAYS_INLINE void time_and_count_add(struct time_and_count *tc, usec_t dt) {
+    __atomic_add_fetch(&tc->count, 1, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&tc->usec, dt, __ATOMIC_RELAXED);
+}
+
+struct rrdeng_cache_efficiency_stats {
+    PAD64(size_t) queries_planned_with_gaps;
+    PAD64(size_t) queries_executed_with_gaps;
+
+    PAD64(size_t) currently_running_queries;
 
     // query planner output of the queries
-    size_t pages_total;
-    size_t pages_to_load_from_disk;
-    size_t extents_loaded_from_disk;
+    PAD64(size_t) pages_total;
+    PAD64(size_t) pages_to_load_from_disk;
+    PAD64(size_t) extents_loaded_from_disk;
 
     // pages metadata sources
-    size_t pages_meta_source_main_cache;
-    size_t pages_meta_source_open_cache;
-    size_t pages_meta_source_journal_v2;
+    PAD64(size_t) pages_meta_source_main_cache;
+    PAD64(size_t) pages_meta_source_open_cache;
+    PAD64(size_t) pages_meta_source_journal_v2;
 
     // preloading
-    size_t page_next_wait_failed;
-    size_t page_next_wait_loaded;
-    size_t page_next_nowait_failed;
-    size_t page_next_nowait_loaded;
+    PAD64(size_t) page_next_wait_failed;
+    PAD64(size_t) page_next_wait_loaded;
+    PAD64(size_t) page_next_nowait_failed;
+    PAD64(size_t) page_next_nowait_loaded;
 
     // pages data sources
-    size_t pages_data_source_main_cache;
-    size_t pages_data_source_main_cache_at_pass4;
-    size_t pages_data_source_disk;
-    size_t pages_data_source_extent_cache;              // loaded by a cached extent
+    PAD64(size_t) pages_data_source_main_cache;
+    PAD64(size_t) pages_data_source_main_cache_at_pass4;
+    PAD64(size_t) pages_data_source_disk;
+    PAD64(size_t) pages_data_source_extent_cache;              // loaded by a cached extent
 
     // cache hits at different points
-    size_t pages_load_ok_loaded_but_cache_hit_while_inserting; // found in cache while inserting it (conflict)
+    PAD64(size_t) pages_load_ok_loaded_but_cache_hit_while_inserting; // found in cache while inserting it (conflict)
 
     // loading
-    size_t pages_load_extent_merged;
-    size_t pages_load_ok_uncompressed;
-    size_t pages_load_ok_compressed;
-    size_t pages_load_fail_invalid_page_in_extent;
-    size_t pages_load_fail_cant_mmap_extent;
-    size_t pages_load_fail_datafile_not_available;
-    size_t pages_load_fail_unroutable;
-    size_t pages_load_fail_not_found;
-    size_t pages_load_fail_invalid_extent;
-    size_t pages_load_fail_cancelled;
+    PAD64(size_t) pages_load_extent_merged;
+    PAD64(size_t) pages_load_ok_uncompressed;
+    PAD64(size_t) pages_load_ok_compressed;
+    PAD64(size_t) pages_load_fail_invalid_page_in_extent;
+    PAD64(size_t) pages_load_fail_cant_mmap_extent;
+    PAD64(size_t) pages_load_fail_datafile_not_available;
+    PAD64(size_t) pages_load_fail_unroutable;
+    PAD64(size_t) pages_load_fail_not_found;
+    PAD64(size_t) pages_load_fail_invalid_extent;
+    PAD64(size_t) pages_load_fail_cancelled;
 
-    // timings for query preparation
-    size_t prep_time_to_route;
-    size_t prep_time_in_main_cache_lookup;
-    size_t prep_time_in_open_cache_lookup;
-    size_t prep_time_in_journal_v2_lookup;
-    size_t prep_time_in_pass4_lookup;
+    // count of queries and times spent in them
+    PAD64(struct time_and_count) prep_time_to_route_sync;
+    PAD64(struct time_and_count) prep_time_to_route_syncfirst;
+    PAD64(struct time_and_count) prep_time_to_route_async;
+    PAD64(struct time_and_count) prep_time_in_main_cache_lookup;
+    PAD64(struct time_and_count) prep_time_in_open_cache_lookup;
+    PAD64(struct time_and_count) prep_time_in_journal_v2_lookup;
+    PAD64(struct time_and_count) prep_time_in_pass4_lookup;
 
     // timings the query thread experiences
-    size_t query_time_init;
-    size_t query_time_wait_for_prep;
-    size_t query_time_to_slow_disk_next_page;
-    size_t query_time_to_fast_disk_next_page;
-    size_t query_time_to_slow_preload_next_page;
-    size_t query_time_to_fast_preload_next_page;
+    PAD64(struct time_and_count) query_time_init;
+    PAD64(struct time_and_count) query_time_wait_for_prep;
+    PAD64(struct time_and_count) query_time_to_slow_disk_next_page;
+    PAD64(struct time_and_count) query_time_to_fast_disk_next_page;
+    PAD64(struct time_and_count) query_time_to_slow_preload_next_page;
+    PAD64(struct time_and_count) query_time_to_fast_preload_next_page;
 
     // query issues
-    size_t pages_zero_time_skipped;
-    size_t pages_past_time_skipped;
-    size_t pages_overlapping_skipped;
-    size_t pages_invalid_size_skipped;
-    size_t pages_invalid_update_every_fixed;
-    size_t pages_invalid_entries_fixed;
+    PAD64(size_t) pages_zero_time_skipped;
+    PAD64(size_t) pages_past_time_skipped;
+    PAD64(size_t) pages_overlapping_skipped;
+    PAD64(size_t) pages_invalid_size_skipped;
+    PAD64(size_t) pages_invalid_update_every_fixed;
+    PAD64(size_t) pages_invalid_entries_fixed;
 
     // database events
-    size_t journal_v2_mapped;
-    size_t journal_v2_unmapped;
-    size_t datafile_creation_started;
-    size_t datafile_deletion_started;
-    size_t datafile_deletion_spin;
-    size_t journal_v2_indexing_started;
-    size_t metrics_retention_started;
+    PAD64(size_t) journal_v2_mapped;
+    PAD64(size_t) journal_v2_unmapped;
+    PAD64(size_t) datafile_creation_started;
+    PAD64(size_t) datafile_deletion_started;
+    PAD64(size_t) datafile_deletion_spin;
+    PAD64(size_t) journal_v2_indexing_started;
+    PAD64(size_t) metrics_retention_started;
 };
+
+typedef enum rrdeng_mem {
+    RRDENG_MEM_PGC = 0,
+    RRDENG_MEM_PGD,
+    RRDENG_MEM_MRG,
+    RRDENG_MEM_OPCODES,
+    RRDENG_MEM_HANDLES,
+    RRDENG_MEM_DESCRIPTORS,
+    RRDENG_MEM_WORKERS,
+    RRDENG_MEM_PDC,
+    RRDENG_MEM_XT_IO,
+    RRDENG_MEM_EPDL,
+    RRDENG_MEM_DEOL,
+    RRDENG_MEM_PD,
+
+    // terminator
+    RRDENG_MEM_MAX,
+} RRDENG_MEM;
 
 struct rrdeng_buffer_sizes {
-    size_t workers;
-    size_t pdc;
+    struct aral_statistics *as[RRDENG_MEM_MAX];
+
     size_t wal;
-    size_t descriptors;
-    size_t xt_io;
     size_t xt_buf;
-    size_t handles;
-    size_t opcodes;
-    size_t epdl;
-    size_t deol;
-    size_t pd;
-    size_t pgc;
-    size_t mrg;
-#ifdef PDC_USE_JULYL
-    size_t julyl;
-#endif
 };
 
-struct rrdeng_buffer_sizes rrdeng_get_buffer_sizes(void);
+struct rrdeng_buffer_sizes rrdeng_pulse_memory_sizes(void);
 struct rrdeng_cache_efficiency_stats rrdeng_get_cache_efficiency_stats(void);
 
 RRDENG_SIZE_STATS rrdeng_size_statistics(struct rrdengine_instance *ctx);

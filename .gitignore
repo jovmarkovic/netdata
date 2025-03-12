@@ -19,7 +19,7 @@ Makefile.in
 *.old
 *.log
 !src/collectors/log2journal/tests.d/*.log
-!src/go/collectors/**/*.log
+!src/go/**/*.log
 *.pyc
 
 netdata.spec
@@ -32,10 +32,6 @@ ebpf.plugin
 src/collectors/ebpf.plugin/reset_netdata_trace.sh
 !ebpf.plugin/
 src/libnetdata/ebpf/includes/
-
-# protoc generated files
-*.pb.cc
-*.pb.h
 
 # installation artifacts
 packaging/installer/.environment.sh
@@ -60,14 +56,6 @@ README
 TODO.md
 TODO.txt
 
-src/web/gui/chart-info/
-src/web/gui/control.html
-src/web/gui/dashboard.js
-src/web/gui/datasource.css
-src/web/gui/gadget.xml
-src/web/gui/index_new.html
-src/web/gui/version.txt
-
 # related to karma/javascript/node
 /node_modules/
 /coverage/
@@ -88,7 +76,6 @@ system/systemd/netdata-updater.service
 !system/systemd/netdata.service.*.in
 
 src/health/notifications/alarm-notify.sh
-claim/netdata-claim.sh
 src/collectors/cgroups.plugin/cgroup-name.sh
 src/collectors/cgroups.plugin/cgroup-network-helper.sh
 src/collectors/tc.plugin/tc-qos-helper.sh
@@ -97,8 +84,6 @@ src/collectors/python.d.plugin/python.d.plugin
 src/collectors/ioping.plugin/ioping.plugin
 src/collectors/go.d.plugin
 src/web/netdata-switch-dashboard.sh
-
-src/logsmanagement/stress_test/stress_test
 
 # installer generated files
 /netdata-uninstaller.sh
@@ -182,6 +167,7 @@ Session.*.vim
 
 # Special exceptions
 !packaging/repoconfig/Makefile
+packaging/windows/resources/*.manifest
 
 # Jupyter notebook checkpoints
 .ipynb_checkpoints
@@ -198,5 +184,5 @@ build/
 src/go/plugin/go.d/bin/
 src/go/plugin/go.d/vendor
 
-# ignore nsis installer
-packaging/utils/netdata-installer.exe
+# ignore files used with msi installer
+packaging/windows/*.msi

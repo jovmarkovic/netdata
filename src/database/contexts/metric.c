@@ -2,7 +2,7 @@
 
 #include "internal.h"
 
-static void rrdmetric_trigger_updates(RRDMETRIC *rm, const char *function);
+void rrdmetric_trigger_updates(RRDMETRIC *rm, const char *function);
 
 inline const char *rrdmetric_acquired_id(RRDMETRIC_ACQUIRED *rma) {
     RRDMETRIC *rm = rrdmetric_acquired_value(rma);
@@ -52,7 +52,7 @@ inline time_t rrdmetric_acquired_first_entry(RRDMETRIC_ACQUIRED *rma) {
 inline time_t rrdmetric_acquired_last_entry(RRDMETRIC_ACQUIRED *rma) {
     RRDMETRIC *rm = rrdmetric_acquired_value(rma);
 
-    if(rrd_flag_check(rm, RRD_FLAG_COLLECTED))
+    if(rrd_flag_is_collected(rm))
         return 0;
 
     return rm->last_time_s;
@@ -66,10 +66,12 @@ inline time_t rrdmetric_acquired_last_entry(RRDMETRIC_ACQUIRED *rma) {
 static void rrdmetric_free(RRDMETRIC *rm) {
     string_freez(rm->id);
     string_freez(rm->name);
+    uuidmap_free(rm->uuid);
 
     rm->id = NULL;
     rm->name = NULL;
     rm->ri = NULL;
+    rm->uuid = 0;
 }
 
 // called when this rrdmetric is inserted to the rrdmetrics dictionary of a rrdinstance
@@ -83,6 +85,9 @@ static void rrdmetric_insert_callback(const DICTIONARY_ITEM *item __maybe_unused
     // remove flags that we need to figure out at runtime
     rm->flags = rm->flags & RRD_FLAGS_ALLOWED_EXTERNALLY_ON_NEW_OBJECTS; // no need for atomics
 
+    // update the count of metrics
+    __atomic_add_fetch(&rm->ri->rc->rrdhost->rrdctx.metrics_count, 1, __ATOMIC_RELAXED);
+
     // signal the react callback to do the job
     rrd_flag_set_updated(rm, RRD_FLAG_UPDATE_REASON_NEW_OBJECT);
 }
@@ -94,6 +99,9 @@ static void rrdmetric_delete_callback(const DICTIONARY_ITEM *item __maybe_unused
 
     internal_error(rm->rrddim, "RRDMETRIC: '%s' is freed but there is a RRDDIM linked to it.", string2str(rm->id));
 
+    // update the count of metrics
+    __atomic_sub_fetch(&rm->ri->rc->rrdhost->rrdctx.metrics_count, 1, __ATOMIC_RELAXED);
+
     // free the resources
     rrdmetric_free(rm);
 }
@@ -103,16 +111,17 @@ static void rrdmetric_delete_callback(const DICTIONARY_ITEM *item __maybe_unused
 static bool rrdmetric_conflict_callback(const DICTIONARY_ITEM *item __maybe_unused, void *old_value, void *new_value, void *rrdinstance __maybe_unused) {
     RRDMETRIC *rm     = old_value;
     RRDMETRIC *rm_new = new_value;
+    rm_new->ri = rm->ri;
 
     internal_error(rm->id != rm_new->id,
                    "RRDMETRIC: '%s' cannot change id to '%s'",
                    string2str(rm->id), string2str(rm_new->id));
 
-    if(!uuid_eq(rm->uuid, rm_new->uuid)) {
+    if(rm->uuid != rm_new->uuid) {
 #ifdef NETDATA_INTERNAL_CHECKS
         char uuid1[UUID_STR_LEN], uuid2[UUID_STR_LEN];
-        uuid_unparse(rm->uuid, uuid1);
-        uuid_unparse(rm_new->uuid, uuid2);
+        uuid_unparse(*uuidmap_uuid_ptr(rm->uuid), uuid1);
+        uuid_unparse(*uuidmap_uuid_ptr(rm_new->uuid), uuid2);
 
         time_t old_first_time_s = 0;
         time_t old_last_time_s = 0;
@@ -121,13 +130,11 @@ static bool rrdmetric_conflict_callback(const DICTIONARY_ITEM *item __maybe_unus
             old_last_time_s = rm->last_time_s;
         }
 
-        uuid_copy(rm->uuid, rm_new->uuid);
-
         time_t new_first_time_s = 0;
         time_t new_last_time_s = 0;
-        if(rrdmetric_update_retention(rm)) {
-            new_first_time_s = rm->first_time_s;
-            new_last_time_s = rm->last_time_s;
+        if(rrdmetric_update_retention(rm_new)) {
+            new_first_time_s = rm_new->first_time_s;
+            new_last_time_s = rm_new->last_time_s;
         }
 
         internal_error(true,
@@ -138,9 +145,9 @@ static bool rrdmetric_conflict_callback(const DICTIONARY_ITEM *item __maybe_unus
                        , uuid1, old_first_time_s, old_last_time_s, old_last_time_s - old_first_time_s
                        , uuid2, new_first_time_s, new_last_time_s, new_last_time_s - new_first_time_s
                        );
-#else
-        uuid_copy(rm->uuid, rm_new->uuid);
 #endif
+
+        SWAP(rm->uuid, rm_new->uuid);
         rrd_flag_set_updated(rm, RRD_FLAG_UPDATE_REASON_CHANGED_METADATA);
     }
 
@@ -149,22 +156,11 @@ static bool rrdmetric_conflict_callback(const DICTIONARY_ITEM *item __maybe_unus
         rrd_flag_set_updated(rm, RRD_FLAG_UPDATE_REASON_CHANGED_LINKING);
     }
 
-#ifdef NETDATA_INTERNAL_CHECKS
-    if(rm->rrddim && !uuid_eq(rm->uuid, rm->rrddim->metric_uuid)) {
-        char uuid1[UUID_STR_LEN], uuid2[UUID_STR_LEN];
-        uuid_unparse(rm->uuid, uuid1);
-        uuid_unparse(rm_new->uuid, uuid2);
-        internal_error(true, "RRDMETRIC: '%s' is linked to RRDDIM '%s' but they have different UUIDs. RRDMETRIC has '%s', RRDDIM has '%s'", string2str(rm->id), rrddim_id(rm->rrddim), uuid1, uuid2);
-    }
-#endif
-
     if(rm->rrddim != rm_new->rrddim)
         rm->rrddim = rm_new->rrddim;
 
     if(rm->name != rm_new->name) {
-        STRING *old = rm->name;
-        rm->name = string_dup(rm_new->name);
-        string_freez(old);
+        SWAP(rm->name, rm_new->name);
         rrd_flag_set_updated(rm, RRD_FLAG_UPDATE_REASON_CHANGED_METADATA);
     }
 
@@ -181,7 +177,7 @@ static bool rrdmetric_conflict_callback(const DICTIONARY_ITEM *item __maybe_unus
     rrd_flag_set(rm, rm_new->flags & RRD_FLAGS_ALLOWED_EXTERNALLY_ON_NEW_OBJECTS); // no needs for atomics on rm_new
 
     if(rrd_flag_is_collected(rm) && rrd_flag_is_archived(rm))
-        rrd_flag_set_collected(rm);
+        rrdmetric_set_collected(rm);
 
     if(rrd_flag_check(rm, RRD_FLAG_UPDATED))
         rrd_flag_set(rm, RRD_FLAG_UPDATE_REASON_UPDATED_OBJECT);
@@ -219,9 +215,9 @@ void rrdmetrics_destroy_from_rrdinstance(RRDINSTANCE *ri) {
 }
 
 // trigger post-processing of the rrdmetric, escalating changes to the rrdinstance it belongs
-static void rrdmetric_trigger_updates(RRDMETRIC *rm, const char *function) {
+void rrdmetric_trigger_updates(RRDMETRIC *rm, const char *function) {
     if(unlikely(rrd_flag_is_collected(rm)) && (!rm->rrddim || rrd_flag_check(rm, RRD_FLAG_UPDATE_REASON_DISCONNECTED_CHILD)))
-        rrd_flag_set_archived(rm);
+        rrdmetric_set_archived(rm);
 
     if(rrd_flag_is_updated(rm) || !rrd_flag_check(rm, RRD_FLAG_LIVE_RETENTION)) {
         rrd_flag_set_updated(rm->ri, RRD_FLAG_UPDATE_REASON_TRIGGERED);
@@ -231,6 +227,10 @@ static void rrdmetric_trigger_updates(RRDMETRIC *rm, const char *function) {
 
 // ----------------------------------------------------------------------------
 // RRDMETRIC HOOKS ON RRDDIM
+
+ALWAYS_INLINE void rrdmetric_not_collected_rrddim(RRDDIM *rd) {
+    rd->rrdcontexts.collected = false;
+}
 
 void rrdmetric_from_rrddim(RRDDIM *rd) {
     if(unlikely(!rd->rrdset))
@@ -245,12 +245,12 @@ void rrdmetric_from_rrddim(RRDDIM *rd) {
     RRDINSTANCE *ri = rrdinstance_acquired_value(rd->rrdset->rrdcontexts.rrdinstance);
 
     RRDMETRIC trm = {
+            .uuid = uuidmap_dup(rd->uuid),
             .id = string_dup(rd->id),
             .name = string_dup(rd->name),
             .flags = RRD_FLAG_NONE, // no need for atomics
             .rrddim = rd,
     };
-    uuid_copy(trm.uuid, rd->metric_uuid);
 
     RRDMETRIC_ACQUIRED *rma = (RRDMETRIC_ACQUIRED *)dictionary_set_and_acquire_item(ri->rrdmetrics, string2str(trm.id), &trm, sizeof(trm));
 
@@ -258,11 +258,11 @@ void rrdmetric_from_rrddim(RRDDIM *rd) {
         rrdmetric_release(rd->rrdcontexts.rrdmetric);
 
     rd->rrdcontexts.rrdmetric = rma;
-    rd->rrdcontexts.collected = false;
+    rrdmetric_not_collected_rrddim(rd);
 }
 
 #define rrddim_get_rrdmetric(rd) rrddim_get_rrdmetric_with_trace(rd, __FUNCTION__)
-static inline RRDMETRIC *rrddim_get_rrdmetric_with_trace(RRDDIM *rd, const char *function) {
+static ALWAYS_INLINE RRDMETRIC *rrddim_get_rrdmetric_with_trace(RRDDIM *rd, const char *function) {
     if(unlikely(!rd->rrdcontexts.rrdmetric)) {
         netdata_log_error("RRDMETRIC: RRDDIM '%s' is not linked to an RRDMETRIC at %s()", rrddim_id(rd), function);
         return NULL;
@@ -285,30 +285,30 @@ inline void rrdmetric_rrddim_is_freed(RRDDIM *rd) {
     if(unlikely(!rm)) return;
 
     if(unlikely(rrd_flag_is_collected(rm)))
-        rrd_flag_set_archived(rm);
+        rrdmetric_set_archived(rm);
 
     rm->rrddim = NULL;
     rrdmetric_trigger_updates(rm, __FUNCTION__ );
     rrdmetric_release(rd->rrdcontexts.rrdmetric);
     rd->rrdcontexts.rrdmetric = NULL;
-    rd->rrdcontexts.collected = false;
+    rrdmetric_not_collected_rrddim(rd);
 }
 
 inline void rrdmetric_updated_rrddim_flags(RRDDIM *rd) {
-    rd->rrdcontexts.collected = false;
+    rrdmetric_not_collected_rrddim(rd);
 
     RRDMETRIC *rm = rrddim_get_rrdmetric(rd);
     if(unlikely(!rm)) return;
 
     if(unlikely(rrddim_flag_check(rd, RRDDIM_FLAG_ARCHIVED|RRDDIM_FLAG_OBSOLETE))) {
         if(unlikely(rrd_flag_is_collected(rm)))
-            rrd_flag_set_archived(rm);
+            rrdmetric_set_archived(rm);
     }
 
     rrdmetric_trigger_updates(rm, __FUNCTION__ );
 }
 
-inline void rrdmetric_collected_rrddim(RRDDIM *rd) {
+ALWAYS_INLINE void rrdmetric_collected_rrddim(RRDDIM *rd) {
     if(rd->rrdcontexts.collected)
         return;
 
@@ -318,7 +318,7 @@ inline void rrdmetric_collected_rrddim(RRDDIM *rd) {
     if(unlikely(!rm)) return;
 
     if(unlikely(!rrd_flag_is_collected(rm)))
-        rrd_flag_set_collected(rm);
+        rrdmetric_set_collected(rm);
 
     // we use this variable to detect BEGIN/END without SET
     rm->ri->internal.collected_metrics_count++;

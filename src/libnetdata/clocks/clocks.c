@@ -78,7 +78,9 @@ static usec_t get_clock_resolution(clockid_t clock) {
 
 // perform any initializations required for clocks
 
-void clocks_init(void) {
+static __attribute__((constructor)) void clocks_init(void) {
+    os_get_system_HZ();
+
     // monotonic raw has to be tested before boottime
     test_clock_monotonic_raw();
 
@@ -87,9 +89,21 @@ void clocks_init(void) {
 
     clock_monotonic_resolution = get_clock_resolution(clock_monotonic_to_use);
     clock_realtime_resolution = get_clock_resolution(CLOCK_REALTIME);
+
+#if defined(OS_WINDOWS)
+    timeBeginPeriod(1);
+    clock_monotonic_resolution = 1 * USEC_PER_MS;
+    clock_realtime_resolution = 1 * USEC_PER_MS;
+#endif
 }
 
-inline time_t now_sec(clockid_t clk_id) {
+static __attribute__((destructor)) void clocks_fin(void) {
+#if defined(OS_WINDOWS)
+    timeEndPeriod(1);
+#endif
+}
+
+ALWAYS_INLINE time_t now_sec(clockid_t clk_id) {
     struct timespec ts;
     if(unlikely(clock_gettime(clk_id, &ts) == -1)) {
         netdata_log_error("clock_gettime(%ld, &timespec) failed.", (long int)clk_id);
@@ -98,7 +112,7 @@ inline time_t now_sec(clockid_t clk_id) {
     return ts.tv_sec;
 }
 
-inline usec_t now_usec(clockid_t clk_id) {
+ALWAYS_INLINE usec_t now_usec(clockid_t clk_id) {
     struct timespec ts;
     if(unlikely(clock_gettime(clk_id, &ts) == -1)) {
         netdata_log_error("clock_gettime(%ld, &timespec) failed.", (long int)clk_id);
@@ -107,7 +121,7 @@ inline usec_t now_usec(clockid_t clk_id) {
     return (usec_t)ts.tv_sec * USEC_PER_SEC + (usec_t)(ts.tv_nsec % NSEC_PER_SEC) / NSEC_PER_USEC;
 }
 
-inline int now_timeval(clockid_t clk_id, struct timeval *tv) {
+ALWAYS_INLINE int now_timeval(clockid_t clk_id, struct timeval *tv) {
     struct timespec ts;
 
     if(unlikely(clock_gettime(clk_id, &ts) == -1)) {
@@ -122,67 +136,67 @@ inline int now_timeval(clockid_t clk_id, struct timeval *tv) {
     return 0;
 }
 
-inline time_t now_realtime_sec(void) {
+ALWAYS_INLINE time_t now_realtime_sec(void) {
     return now_sec(CLOCK_REALTIME);
 }
 
-inline msec_t now_realtime_msec(void) {
+ALWAYS_INLINE msec_t now_realtime_msec(void) {
     return now_usec(CLOCK_REALTIME) / USEC_PER_MS;
 }
 
-inline usec_t now_realtime_usec(void) {
+ALWAYS_INLINE usec_t now_realtime_usec(void) {
     return now_usec(CLOCK_REALTIME);
 }
 
-inline int now_realtime_timeval(struct timeval *tv) {
+ALWAYS_INLINE int now_realtime_timeval(struct timeval *tv) {
     return now_timeval(CLOCK_REALTIME, tv);
 }
 
-inline time_t now_monotonic_sec(void) {
+ALWAYS_INLINE time_t now_monotonic_sec(void) {
     return now_sec(clock_monotonic_to_use);
 }
 
-inline usec_t now_monotonic_usec(void) {
+ALWAYS_INLINE usec_t now_monotonic_usec(void) {
     return now_usec(clock_monotonic_to_use);
 }
 
-inline int now_monotonic_timeval(struct timeval *tv) {
+ALWAYS_INLINE int now_monotonic_timeval(struct timeval *tv) {
     return now_timeval(clock_monotonic_to_use, tv);
 }
 
-inline time_t now_monotonic_high_precision_sec(void) {
+ALWAYS_INLINE time_t now_monotonic_high_precision_sec(void) {
     return now_sec(CLOCK_MONOTONIC);
 }
 
-inline usec_t now_monotonic_high_precision_usec(void) {
+ALWAYS_INLINE usec_t now_monotonic_high_precision_usec(void) {
     return now_usec(CLOCK_MONOTONIC);
 }
 
-inline int now_monotonic_high_precision_timeval(struct timeval *tv) {
+ALWAYS_INLINE int now_monotonic_high_precision_timeval(struct timeval *tv) {
     return now_timeval(CLOCK_MONOTONIC, tv);
 }
 
-inline time_t now_boottime_sec(void) {
+ALWAYS_INLINE time_t now_boottime_sec(void) {
     return now_sec(clock_boottime_to_use);
 }
 
-inline usec_t now_boottime_usec(void) {
+ALWAYS_INLINE usec_t now_boottime_usec(void) {
     return now_usec(clock_boottime_to_use);
 }
 
-inline int now_boottime_timeval(struct timeval *tv) {
+ALWAYS_INLINE int now_boottime_timeval(struct timeval *tv) {
     return now_timeval(clock_boottime_to_use, tv);
 }
 
-inline usec_t timeval_usec(struct timeval *tv) {
+ALWAYS_INLINE usec_t timeval_usec(struct timeval *tv) {
     return (usec_t)tv->tv_sec * USEC_PER_SEC + (tv->tv_usec % USEC_PER_SEC);
 }
 
-inline msec_t timeval_msec(struct timeval *tv) {
+ALWAYS_INLINE msec_t timeval_msec(struct timeval *tv) {
     return (msec_t)tv->tv_sec * MSEC_PER_SEC + ((tv->tv_usec % USEC_PER_SEC) / MSEC_PER_SEC);
 }
 
-inline susec_t dt_usec_signed(struct timeval *now, struct timeval *old) {
+ALWAYS_INLINE susec_t dt_usec_signed(struct timeval *now, struct timeval *old) {
     usec_t ts1 = timeval_usec(now);
     usec_t ts2 = timeval_usec(old);
 
@@ -190,7 +204,7 @@ inline susec_t dt_usec_signed(struct timeval *now, struct timeval *old) {
     return -((susec_t)(ts2 - ts1));
 }
 
-inline usec_t dt_usec(struct timeval *now, struct timeval *old) {
+ALWAYS_INLINE usec_t dt_usec(struct timeval *now, struct timeval *old) {
     usec_t ts1 = timeval_usec(now);
     usec_t ts2 = timeval_usec(old);
     return (ts1 > ts2) ? (ts1 - ts2) : (ts2 - ts1);
@@ -246,13 +260,18 @@ void sleep_to_absolute_time(usec_t usec) {
 }
 #endif
 
-#define HEARTBEAT_ALIGNMENT_STATISTICS_SIZE 10
-netdata_mutex_t heartbeat_alignment_mutex = NETDATA_MUTEX_INITIALIZER;
+#define HEARTBEAT_MIN_OFFSET_UT     (150 * USEC_PER_MS)
+#define HEARTBEAT_RANDOM_OFFSET_UT  (350 * USEC_PER_MS)
+
+#define HEARTBEAT_ALIGNMENT_STATISTICS_SIZE 20
+static SPINLOCK heartbeat_alignment_spinlock = SPINLOCK_INITIALIZER;
 static size_t heartbeat_alignment_id = 0;
 
 struct heartbeat_thread_statistics {
+    pid_t tid;
     size_t sequence;
     usec_t dt;
+    usec_t randomness;
 };
 static struct heartbeat_thread_statistics heartbeat_alignment_values[HEARTBEAT_ALIGNMENT_STATISTICS_SIZE] = { 0 };
 
@@ -290,19 +309,58 @@ void heartbeat_statistics(usec_t *min_ptr, usec_t *max_ptr, usec_t *average_ptr,
     memcpy(old, current, sizeof(struct heartbeat_thread_statistics) * HEARTBEAT_ALIGNMENT_STATISTICS_SIZE);
 }
 
-inline void heartbeat_init(heartbeat_t *hb) {
-    hb->realtime = 0ULL;
-    hb->randomness = (usec_t)250 * USEC_PER_MS + ((usec_t)(now_realtime_usec() * clock_realtime_resolution) % (250 * USEC_PER_MS));
-    hb->randomness -= (hb->randomness % clock_realtime_resolution);
+static XXH64_hash_t heartbeat_hash(usec_t step, size_t statistics_id) {
+    struct {
+        usec_t step;
+        pid_t pid;
+        pid_t tid;
+        usec_t now_ut;
+        size_t statistics_id;
+        char tag[ND_THREAD_TAG_MAX + 1];
+    } key = {
+        .step = step,
+        .pid = getpid(),
+        .tid = os_gettid(),
+        .now_ut = now_realtime_usec(),
+        .statistics_id = statistics_id,
+    };
+    strncpyz(key.tag, nd_thread_tag(), sizeof(key.tag) - 1);
+    return XXH3_64bits(&key, sizeof(key));
+}
 
-    netdata_mutex_lock(&heartbeat_alignment_mutex);
+static usec_t heartbeat_randomness(XXH64_hash_t hash) {
+    usec_t offset_ut = HEARTBEAT_MIN_OFFSET_UT + (hash % HEARTBEAT_RANDOM_OFFSET_UT);
+
+    // Calculate the scheduler tick interval in microseconds
+    usec_t scheduler_step_ut = USEC_PER_SEC / (usec_t)system_hz;
+    if(scheduler_step_ut > 10 * USEC_PER_MS)
+        scheduler_step_ut = 10 * USEC_PER_MS;
+
+    // if the offset is close to the scheduler tick, move it away from it
+    if(offset_ut % scheduler_step_ut < scheduler_step_ut / 4)
+        offset_ut += scheduler_step_ut / 4;
+
+    return offset_ut;
+}
+
+inline void heartbeat_init(heartbeat_t *hb, usec_t step) {
+    if(!step) step = USEC_PER_SEC;
+
+    spinlock_lock(&heartbeat_alignment_spinlock);
     hb->statistics_id = heartbeat_alignment_id;
     heartbeat_alignment_id++;
-    netdata_mutex_unlock(&heartbeat_alignment_mutex);
+    spinlock_unlock(&heartbeat_alignment_spinlock);
+
+    hb->step = step;
+    hb->realtime = 0ULL;
+    hb->hash = heartbeat_hash(hb->step, hb->statistics_id);
+    hb->randomness = heartbeat_randomness(hb->hash);
 
     if(hb->statistics_id < HEARTBEAT_ALIGNMENT_STATISTICS_SIZE) {
         heartbeat_alignment_values[hb->statistics_id].dt = 0;
         heartbeat_alignment_values[hb->statistics_id].sequence = 0;
+        heartbeat_alignment_values[hb->statistics_id].randomness = hb->randomness;
+        heartbeat_alignment_values[hb->statistics_id].tid = os_gettid();
     }
 }
 
@@ -310,17 +368,8 @@ inline void heartbeat_init(heartbeat_t *hb) {
 // it waits using the monotonic clock
 // it returns the dt using the realtime clock
 
-usec_t heartbeat_next(heartbeat_t *hb, usec_t tick) {
-    if(unlikely(hb->randomness > tick / 2)) {
-        // TODO: The heartbeat tick should be specified at the heartbeat_init() function
-        usec_t tmp = (now_realtime_usec() * clock_realtime_resolution) % (tick / 2);
-
-        nd_log_limit_static_global_var(erl, 10, 0);
-        nd_log_limit(&erl, NDLS_DAEMON, NDLP_NOTICE,
-                     "heartbeat randomness of %"PRIu64" is too big for a tick of %"PRIu64" - setting it to %"PRIu64"",
-                     hb->randomness, tick, tmp);
-        hb->randomness = tmp;
-    }
+usec_t heartbeat_next(heartbeat_t *hb) {
+    usec_t tick = hb->step;
 
     usec_t dt;
     usec_t now = now_realtime_usec();
@@ -331,10 +380,13 @@ usec_t heartbeat_next(heartbeat_t *hb, usec_t tick) {
         next = next - (next % clock_realtime_resolution) + clock_realtime_resolution;
 
     // sleep_usec() has a loop to guarantee we will sleep for at least the requested time.
-    // According the specs, when we sleep for a relative time, clock adjustments should not affect the duration
-    // we sleep.
+    // According to the specs, when we sleep for a relative time, clock adjustments should
+    // not affect the duration we sleep.
     sleep_usec_with_now(next - now, now);
+    spinlock_lock(&heartbeat_alignment_spinlock);
     now = now_realtime_usec();
+    spinlock_unlock(&heartbeat_alignment_spinlock);
+
     dt = now - hb->realtime;
 
     if(hb->statistics_id < HEARTBEAT_ALIGNMENT_STATISTICS_SIZE) {
@@ -368,22 +420,15 @@ usec_t heartbeat_next(heartbeat_t *hb, usec_t tick) {
     return dt;
 }
 
-#ifdef OS_WINDOWS
-
-#include "windows.h"
-
-void sleep_usec_with_now(usec_t usec, usec_t started_ut)
-{
+#if defined(OS_WINDOWS)
+void sleep_usec_with_now(usec_t usec, usec_t started_ut) {
     if (!started_ut)
         started_ut = now_realtime_usec();
 
     usec_t end_ut = started_ut + usec;
     usec_t remaining_ut = usec;
 
-    timeBeginPeriod(1);
-
-    while (remaining_ut >= 1000)
-    {
+    while (remaining_ut >= clock_realtime_resolution) {
         DWORD sleep_ms = (DWORD) (remaining_ut / USEC_PER_MS);
         Sleep(sleep_ms);
 
@@ -393,8 +438,6 @@ void sleep_usec_with_now(usec_t usec, usec_t started_ut)
 
         remaining_ut = end_ut - now_ut;
     }
-
-    timeEndPeriod(1);
 }
 #else
 void sleep_usec_with_now(usec_t usec, usec_t started_ut) {
@@ -406,7 +449,7 @@ void sleep_usec_with_now(usec_t usec, usec_t started_ut) {
     };
 
     // make sure errno is not EINTR
-    errno = 0;
+    errno_clear();
 
     if(!started_ut)
         started_ut = now_realtime_usec();
@@ -419,7 +462,7 @@ void sleep_usec_with_now(usec_t usec, usec_t started_ut) {
             rem = (struct timespec){ 0, 0 };
 
             // break an infinite loop
-            errno = 0;
+            errno_clear();
 
             usec_t now_ut = now_realtime_usec();
             if(now_ut >= end_ut)
@@ -429,8 +472,8 @@ void sleep_usec_with_now(usec_t usec, usec_t started_ut) {
             usec_t check_ut = now_ut - started_ut;
             if(remaining_ut > check_ut) {
                 req = (struct timespec){
-                        .tv_sec = (time_t) ( check_ut / USEC_PER_SEC),
-                        .tv_nsec = (suseconds_t) ((check_ut % USEC_PER_SEC) * NSEC_PER_USEC)
+                    .tv_sec = (time_t) ( check_ut / USEC_PER_SEC),
+                    .tv_nsec = (suseconds_t) ((check_ut % USEC_PER_SEC) * NSEC_PER_USEC)
                 };
             }
         }
@@ -452,7 +495,7 @@ static inline collected_number uptime_from_boottime(void) {
 }
 
 static procfile *read_proc_uptime_ff = NULL;
-static inline collected_number read_proc_uptime(char *filename) {
+static inline collected_number read_proc_uptime(const char *filename) {
     if(unlikely(!read_proc_uptime_ff)) {
         read_proc_uptime_ff = procfile_open(filename, " \t", PROCFILE_FLAG_DEFAULT);
         if(unlikely(!read_proc_uptime_ff)) return 0;
@@ -473,7 +516,7 @@ static inline collected_number read_proc_uptime(char *filename) {
     return (collected_number)(strtondd(procfile_lineword(read_proc_uptime_ff, 0, 0), NULL) * 1000.0);
 }
 
-inline collected_number uptime_msec(char *filename){
+inline collected_number uptime_msec(const char *filename){
     static int use_boottime = -1;
 
     if(unlikely(use_boottime == -1)) {

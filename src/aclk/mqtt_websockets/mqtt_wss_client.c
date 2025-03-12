@@ -1,35 +1,24 @@
-// SPDX-License-Identifier: GPL-3.0-only
-// Copyright (C) 2020 Timotej Šiškovič
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
 
+#include "libnetdata/libnetdata.h"
+#include "aclk_mqtt_workers.h"
 #include "mqtt_wss_client.h"
 #include "mqtt_ng.h"
 #include "ws_client.h"
 #include "common_internal.h"
-
-#include <stdlib.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <poll.h>
-#include <string.h>
-#include <time.h>
-
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <netinet/tcp.h> //TCP_NODELAY
-#include <netdb.h>
-
-#include <openssl/err.h>
-#include <openssl/ssl.h>
+#include "../aclk.h"
 
 #define PIPE_READ_END  0
 #define PIPE_WRITE_END 1
 #define POLLFD_SOCKET  0
 #define POLLFD_PIPE    1
+
+#define PING_TIMEOUT    (60)  //Expect a ping response within this time (seconds)
+time_t ping_timeout = 0;
 
 #if (OPENSSL_VERSION_NUMBER < OPENSSL_VERSION_110) && (SSLEAY_VERSION_NUMBER >= OPENSSL_VERSION_097)
 #include <openssl/conf.h>
@@ -73,14 +62,14 @@ char *util_openssl_ret_err(int err)
             return "SSL_ERROR_SYSCALL";
         case SSL_ERROR_SSL:
             return "SSL_ERROR_SSL";
+        default:
+            break;
     }
     return "UNKNOWN";
 }
 
 struct mqtt_wss_client_struct {
     ws_client *ws_client;
-
-    mqtt_wss_log_ctx_t log;
 
 // immediate connection (e.g. proxy server)
     char *host; 
@@ -107,8 +96,6 @@ struct mqtt_wss_client_struct {
 
     int mqtt_keepalive;
 
-    pthread_mutex_t pub_lock;
-
 // signifies that we didn't write all MQTT wanted
 // us to write during last cycle (e.g. due to buffer
 // size) and thus we should arm POLLOUT
@@ -121,7 +108,7 @@ struct mqtt_wss_client_struct {
     void (*msg_callback)(const char *, const void *, size_t, int);
     void (*puback_callback)(uint16_t packet_id);
 
-    pthread_mutex_t stat_lock;
+    SPINLOCK stat_lock;
     struct mqtt_wss_stats stats;
 
 #ifdef MQTT_WSS_DEBUG
@@ -135,70 +122,49 @@ static void mws_connack_callback_ng(void *user_ctx, int code)
     switch(code) {
         case 0:
             client->mqtt_connected = 1;
-            return;
+            break;
 //TODO manual labor: all the CONNACK error codes with some nice error message
         default:
-            mws_error(client->log, "MQTT CONNACK returned error %d", code);
-            return;
+            nd_log(NDLS_DAEMON, NDLP_ERR, "MQTT CONNACK returned error %d", code);
+            break;
     }
 }
 
 static ssize_t mqtt_send_cb(void *user_ctx, const void* buf, size_t len)
 {
     mqtt_wss_client client = user_ctx;
-#ifdef DEBUG_ULTRA_VERBOSE
-    mws_debug(client->log, "mqtt_pal_sendall(len=%d)", len);
-#endif
     int ret = ws_client_send(client->ws_client, WS_OP_BINARY_FRAME, buf, len);
-    if (ret >= 0 && (size_t)ret != len) {
-#ifdef DEBUG_ULTRA_VERBOSE
-        mws_debug(client->log, "Not complete message sent (Msg=%d,Sent=%d). Need to arm POLLOUT!", len, ret);
-#endif
+    if (ret >= 0 && (size_t)ret != len)
         client->mqtt_didnt_finish_write = 1;
-    }
     return ret;
 }
 
-mqtt_wss_client mqtt_wss_new(const char *log_prefix,
-                             mqtt_wss_log_callback_t log_callback,
-                             msg_callback_fnc_t msg_callback,
-                             void (*puback_callback)(uint16_t packet_id))
+mqtt_wss_client mqtt_wss_new(
+    msg_callback_fnc_t msg_callback,
+    void (*puback_callback)(uint16_t packet_id))
 {
-    mqtt_wss_log_ctx_t log;
-
-    log = mqtt_wss_log_ctx_create(log_prefix, log_callback);
-    if(!log)
-        return NULL;
-
     SSL_library_init();
     SSL_load_error_strings();
 
-    mqtt_wss_client client = mw_calloc(1, sizeof(struct mqtt_wss_client_struct));
-    if (!client) {
-        mws_error(log, "OOM alocating mqtt_wss_client");
-        goto fail;
-    }
+    mqtt_wss_client client = callocz(1, sizeof(struct mqtt_wss_client_struct));
 
-    pthread_mutex_init(&client->pub_lock, NULL);
-    pthread_mutex_init(&client->stat_lock, NULL);
+    spinlock_init(&client->stat_lock);
 
     client->msg_callback = msg_callback;
     client->puback_callback = puback_callback;
 
-    client->ws_client = ws_client_new(0, &client->target_host, log);
+    client->ws_client = ws_client_new(0, &client->target_host);
     if (!client->ws_client) {
-        mws_error(log, "Error creating ws_client");
+        nd_log(NDLS_DAEMON, NDLP_ERR, "Error creating ws_client");
         goto fail_1;
     }
-
-    client->log = log;
 
 #ifdef __APPLE__
     if (pipe(client->write_notif_pipe)) {
 #else
     if (pipe2(client->write_notif_pipe, O_CLOEXEC /*| O_DIRECT*/)) {
 #endif
-        mws_error(log, "Couldn't create pipe");
+        nd_log(NDLS_DAEMON, NDLP_ERR, "Couldn't create pipe");
         goto fail_2;
     }
 
@@ -208,7 +174,6 @@ mqtt_wss_client mqtt_wss_new(const char *log_prefix,
     client->poll_fds[POLLFD_SOCKET].events = POLLIN;
 
     struct mqtt_ng_init settings = {
-        .log = log,
         .data_in = client->ws_client->buf_to_mqtt,
         .data_out_fnc = &mqtt_send_cb,
         .user_ctx = client,
@@ -216,22 +181,14 @@ mqtt_wss_client mqtt_wss_new(const char *log_prefix,
         .puback_callback = puback_callback,
         .msg_callback = msg_callback
     };
-    if ( (client->mqtt = mqtt_ng_init(&settings)) == NULL ) {
-        mws_error(log, "Error initializing internal MQTT client");
-        goto fail_3;
-    }
+    client->mqtt = mqtt_ng_init(&settings);
 
     return client;
 
-fail_3:
-    close(client->write_notif_pipe[PIPE_WRITE_END]);
-    close(client->write_notif_pipe[PIPE_READ_END]);
 fail_2:
     ws_client_destroy(client->ws_client);
 fail_1:
-    mw_free(client);
-fail:
-    mqtt_wss_log_ctx_destroy(log);
+    freez(client);
     return NULL;
 }
 
@@ -253,12 +210,15 @@ void mqtt_wss_destroy(mqtt_wss_client client)
     // as it "borrows" this pointer and might use it
     if (client->target_host == client->host)
         client->target_host = NULL;
+
     if (client->target_host)
-        mw_free(client->target_host);
+        freez(client->target_host);
+
     if (client->host)
-        mw_free(client->host);
-    mw_free(client->proxy_passwd);
-    mw_free(client->proxy_uname);
+        freez(client->host);
+
+    freez(client->proxy_passwd);
+    freez(client->proxy_uname);
 
     if (client->ssl)
         SSL_free(client->ssl);
@@ -269,43 +229,35 @@ void mqtt_wss_destroy(mqtt_wss_client client)
     if (client->sockfd > 0)
         close(client->sockfd);
 
-    pthread_mutex_destroy(&client->pub_lock);
-    pthread_mutex_destroy(&client->stat_lock);
-
-    mqtt_wss_log_ctx_destroy(client->log);
-    mw_free(client);
+    freez(client);
 }
 
 static int cert_verify_callback(int preverify_ok, X509_STORE_CTX *ctx)
 {
-    SSL *ssl;
-    X509 *err_cert;
-    mqtt_wss_client client;
-    int err = 0, depth;
-    char *err_str;
+    int err = 0;
 
-    ssl = X509_STORE_CTX_get_ex_data(ctx, SSL_get_ex_data_X509_STORE_CTX_idx());
-    client = SSL_get_ex_data(ssl, 0);
+    SSL* ssl = X509_STORE_CTX_get_ex_data(ctx, SSL_get_ex_data_X509_STORE_CTX_idx());
+    mqtt_wss_client client = SSL_get_ex_data(ssl, 0);
 
     // TODO handle depth as per https://www.openssl.org/docs/man1.0.2/man3/SSL_CTX_set_verify.html
 
     if (!preverify_ok) {
         err = X509_STORE_CTX_get_error(ctx);
-        depth = X509_STORE_CTX_get_error_depth(ctx);
-        err_cert = X509_STORE_CTX_get_current_cert(ctx);
-        err_str = X509_NAME_oneline(X509_get_subject_name(err_cert), NULL, 0);
+        int depth = X509_STORE_CTX_get_error_depth(ctx);
+        X509* err_cert = X509_STORE_CTX_get_current_cert(ctx);
+        char* err_str = X509_NAME_oneline(X509_get_subject_name(err_cert), NULL, 0);
 
-        mws_error(client->log, "verify error:num=%d:%s:depth=%d:%s", err,
+        nd_log(NDLS_DAEMON, NDLP_ERR, "verify error:num=%d:%s:depth=%d:%s", err,
                  X509_verify_cert_error_string(err), depth, err_str);
 
-        mw_free(err_str);
+        freez(err_str);
     }
 
     if (!preverify_ok && err == X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT &&
         client->ssl_flags & MQTT_WSS_SSL_ALLOW_SELF_SIGNED)
     {
         preverify_ok = 1;
-        mws_error(client->log, "Self Signed Certificate Accepted as the connection was "
+        nd_log(NDLS_DAEMON, NDLP_ERR, "Self Signed Certificate Accepted as the connection was "
                                "requested with MQTT_WSS_SSL_ALLOW_SELF_SIGNED");
     }
 
@@ -319,16 +271,14 @@ static int cert_verify_callback(int preverify_ok, X509_STORE_CTX *ctx)
 #define HTTP_HDR_TERMINATOR "\x0D\x0A\x0D\x0A"
 #define HTTP_CODE_LEN 4
 #define HTTP_REASON_MAX_LEN 512
-static int http_parse_reply(mqtt_wss_client client, rbuf_t buf)
+static int http_parse_reply(rbuf_t buf)
 {
-    char *ptr;
     char http_code_s[4];
-    int http_code;
     int idx;
 
     if (rbuf_memcmp_n(buf, PROXY_HTTP, strlen(PROXY_HTTP))) {
         if (rbuf_memcmp_n(buf, PROXY_HTTP10, strlen(PROXY_HTTP10))) {
-            mws_error(client->log, "http_proxy expected reply with \"" PROXY_HTTP "\" or \"" PROXY_HTTP10  "\"");
+            nd_log(NDLS_DAEMON, NDLP_ERR, "http_proxy expected reply with \"" PROXY_HTTP "\" or \"" PROXY_HTTP10  "\"");
             return 1;
         }
     }
@@ -336,40 +286,38 @@ static int http_parse_reply(mqtt_wss_client client, rbuf_t buf)
     rbuf_bump_tail(buf, strlen(PROXY_HTTP));
 
     if (!rbuf_pop(buf, http_code_s, 1) || http_code_s[0] != 0x20) {
-        mws_error(client->log, "http_proxy missing space after \"" PROXY_HTTP "\" or \"" PROXY_HTTP10  "\"");
+        nd_log(NDLS_DAEMON, NDLP_ERR, "http_proxy missing space after \"" PROXY_HTTP "\" or \"" PROXY_HTTP10  "\"");
         return 2;
     }
 
     if (!rbuf_pop(buf, http_code_s, HTTP_CODE_LEN)) {
-        mws_error(client->log, "http_proxy missing HTTP code");
+        nd_log(NDLS_DAEMON, NDLP_ERR, "http_proxy missing HTTP code");
         return 3;
     }
 
     for (int i = 0; i < HTTP_CODE_LEN - 1; i++)
         if (http_code_s[i] > 0x39 || http_code_s[i] < 0x30) {
-            mws_error(client->log, "http_proxy HTTP code non numeric");
+            nd_log(NDLS_DAEMON, NDLP_ERR, "http_proxy HTTP code non numeric");
             return 4;
         }
 
     http_code_s[HTTP_CODE_LEN - 1] = 0;
-    http_code = atoi(http_code_s);
+    int http_code = str2i(http_code_s);
 
     // TODO check if we ever have more headers here
     rbuf_find_bytes(buf, HTTP_ENDLINE, strlen(HTTP_ENDLINE), &idx);
     if (idx >= HTTP_REASON_MAX_LEN) {
-        mws_error(client->log, "http_proxy returned reason that is too long");
+        nd_log(NDLS_DAEMON, NDLP_ERR, "http_proxy returned reason that is too long");
         return 5;
     }
 
     if (http_code != 200) {
-        ptr = mw_malloc(idx + 1);
-        if (!ptr)
-            return 6;
+        char *ptr = mallocz(idx + 1);
         rbuf_pop(buf, ptr, idx);
         ptr[idx] = 0;
 
-        mws_error(client->log, "http_proxy returned error code %d \"%s\"", http_code, ptr);
-        mw_free(ptr);
+        nd_log(NDLS_DAEMON, NDLP_ERR, "http_proxy returned error code %d \"%s\"", http_code, ptr);
+        freez(ptr);
         return 7;
     }/* else
         rbuf_bump_tail(buf, idx);*/
@@ -381,52 +329,11 @@ static int http_parse_reply(mqtt_wss_client client, rbuf_t buf)
     rbuf_bump_tail(buf, strlen(HTTP_HDR_TERMINATOR));
 
     if (rbuf_bytes_available(buf)) {
-        mws_error(client->log, "http_proxy unexpected trailing bytes after end of HTTP hdr");
+        nd_log(NDLS_DAEMON, NDLP_ERR, "http_proxy unexpected trailing bytes after end of HTTP hdr");
         return 8;
     }
 
-    mws_debug(client->log, "http_proxy CONNECT succeeded");
-    return 0;
-}
-
-#if defined(OPENSSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER < OPENSSL_VERSION_110
-static EVP_ENCODE_CTX *EVP_ENCODE_CTX_new(void)
-{
-	EVP_ENCODE_CTX *ctx = OPENSSL_malloc(sizeof(*ctx));
-
-	if (ctx != NULL) {
-		memset(ctx, 0, sizeof(*ctx));
-	}
-	return ctx;
-}
-static void EVP_ENCODE_CTX_free(EVP_ENCODE_CTX *ctx)
-{
-	OPENSSL_free(ctx);
-	return;
-}
-#endif
-
-inline static int base64_encode_helper(unsigned char *out, int *outl, const unsigned char *in, int in_len)
-{
-    int len;
-    unsigned char *str = out;
-    EVP_ENCODE_CTX *ctx = EVP_ENCODE_CTX_new();
-    EVP_EncodeInit(ctx);
-    EVP_EncodeUpdate(ctx, str, outl, in, in_len);
-    str += *outl;
-    EVP_EncodeFinal(ctx, str, &len);
-    *outl += len;
-
-    str = out;
-    while(*str) {
-        if (*str != 0x0D && *str != 0x0A)
-            *out++ = *str++;
-        else
-            str++;
-    }
-    *out = 0;
-
-    EVP_ENCODE_CTX_free(ctx);
+    nd_log(NDLS_DAEMON, NDLP_DEBUG, "http_proxy CONNECT succeeded");
     return 0;
 }
 
@@ -437,22 +344,22 @@ static int http_proxy_connect(mqtt_wss_client client)
     rbuf_t r_buf = rbuf_create(4096);
     if (!r_buf)
         return 1;
-    char *r_buf_ptr;
     size_t r_buf_linear_insert_capacity;
 
     poll_fd.fd = client->sockfd;
     poll_fd.events = POLLIN;
 
-    r_buf_ptr = rbuf_get_linear_insert_range(r_buf, &r_buf_linear_insert_capacity);
+    char *r_buf_ptr = rbuf_get_linear_insert_range(r_buf, &r_buf_linear_insert_capacity);
     snprintf(r_buf_ptr, r_buf_linear_insert_capacity,"%s %s:%d %s" HTTP_ENDLINE "Host: %s" HTTP_ENDLINE, PROXY_CONNECT,
              client->target_host, client->target_port, PROXY_HTTP, client->target_host);
-    write(client->sockfd, r_buf_ptr, strlen(r_buf_ptr));
+
+    if(write(client->sockfd, r_buf_ptr, strlen(r_buf_ptr)) <= 0) { ; }
 
     if (client->proxy_uname) {
         size_t creds_plain_len = strlen(client->proxy_uname) + strlen(client->proxy_passwd) + 2;
-        char *creds_plain = mw_malloc(creds_plain_len);
+        char *creds_plain = mallocz(creds_plain_len);
         if (!creds_plain) {
-            mws_error(client->log, "OOM creds_plain");
+            nd_log(NDLS_DAEMON, NDLP_ERR, "OOM creds_plain");
             rc = 6;
             goto cleanup;
         }
@@ -460,10 +367,10 @@ static int http_proxy_connect(mqtt_wss_client client)
         // OpenSSL encoder puts newline every 64 output bytes
         // we remove those but during encoding we need that space in the buffer
         creds_base64_len += (1+(creds_base64_len/64)) * strlen("\n");
-        char *creds_base64 = mw_malloc(creds_base64_len + 1);
+        char *creds_base64 = mallocz(creds_base64_len + 1);
         if (!creds_base64) {
-            mw_free(creds_plain);
-            mws_error(client->log, "OOM creds_base64");
+            freez(creds_plain);
+            nd_log(NDLS_DAEMON, NDLP_ERR, "OOM creds_base64");
             rc = 6;
             goto cleanup;
         }
@@ -473,29 +380,30 @@ static int http_proxy_connect(mqtt_wss_client client)
         *ptr++ = ':';
         strcpy(ptr, client->proxy_passwd);
 
-        int b64_len;
-        base64_encode_helper((unsigned char*)creds_base64, &b64_len, (unsigned char*)creds_plain, strlen(creds_plain));
-        mw_free(creds_plain);
+        (void) netdata_base64_encode((unsigned char*)creds_base64, (unsigned char*)creds_plain, strlen(creds_plain));
+        freez(creds_plain);
 
         r_buf_ptr = rbuf_get_linear_insert_range(r_buf, &r_buf_linear_insert_capacity);
         snprintf(r_buf_ptr, r_buf_linear_insert_capacity,"Proxy-Authorization: Basic %s" HTTP_ENDLINE, creds_base64);
-        write(client->sockfd, r_buf_ptr, strlen(r_buf_ptr));
-        mw_free(creds_base64);
+
+        if(write(client->sockfd, r_buf_ptr, strlen(r_buf_ptr)) <= 0)  { ; }
+
+        freez(creds_base64);
     }
-    write(client->sockfd, HTTP_ENDLINE, strlen(HTTP_ENDLINE));
+    if(write(client->sockfd, HTTP_ENDLINE, strlen(HTTP_ENDLINE)) <= 0)  { ; }
 
     // read until you find CRLF, CRLF (HTTP HDR end)
     // or ring buffer is full
     // or timeout
     while ((rc = poll(&poll_fd, 1, 1000)) >= 0) {
         if (!rc) {
-            mws_error(client->log, "http_proxy timeout waiting reply from proxy server");
+            nd_log(NDLS_DAEMON, NDLP_ERR, "http_proxy timeout waiting reply from proxy server");
             rc = 2;
             goto cleanup;
         }
         r_buf_ptr = rbuf_get_linear_insert_range(r_buf, &r_buf_linear_insert_capacity);
         if (!r_buf_ptr) {
-            mws_error(client->log, "http_proxy read ring buffer full");
+            nd_log(NDLS_DAEMON, NDLP_ERR, "http_proxy read ring buffer full");
             rc = 3;
             goto cleanup;
         }
@@ -503,37 +411,37 @@ static int http_proxy_connect(mqtt_wss_client client)
             if (errno == EWOULDBLOCK || errno == EAGAIN) {
                 continue;
             }
-            mws_error(client->log, "http_proxy error reading from socket \"%s\"", strerror(errno));
+            nd_log(NDLS_DAEMON, NDLP_ERR, "http_proxy error reading from socket \"%s\"", strerror(errno));
             rc = 4;
             goto cleanup;
         }
         rbuf_bump_head(r_buf, rc);
         if (rbuf_find_bytes(r_buf, HTTP_HDR_TERMINATOR, strlen(HTTP_HDR_TERMINATOR), &rc)) {
             rc = 0;
-            if (http_parse_reply(client, r_buf))
+            if (http_parse_reply(r_buf))
                 rc = 5;
 
             goto cleanup;
         }
     }
-    mws_error(client->log, "proxy negotiation poll error \"%s\"", strerror(errno));
+    nd_log(NDLS_DAEMON, NDLP_ERR, "proxy negotiation poll error \"%s\"", strerror(errno));
     rc = 5;
 cleanup:
     rbuf_free(r_buf);
     return rc;
 }
 
-int mqtt_wss_connect(mqtt_wss_client client, char *host, int port, struct mqtt_connect_params *mqtt_params, int ssl_flags, struct mqtt_wss_proxy *proxy)
+int mqtt_wss_connect(
+    mqtt_wss_client client,
+    char *host,
+    int port,
+    struct mqtt_connect_params *mqtt_params,
+    int ssl_flags,
+    const struct mqtt_wss_proxy *proxy,
+    bool *fallback_ipv4)
 {
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-
-    struct hostent *he;
-    struct in_addr **addr_list;
-
     if (!mqtt_params) {
-        mws_error(client->log, "mqtt_params can't be null!");
+        nd_log(NDLS_DAEMON, NDLP_ERR, "mqtt_params can't be null!");
         return -1;
     }
 
@@ -545,23 +453,35 @@ int mqtt_wss_connect(mqtt_wss_client client, char *host, int port, struct mqtt_c
 
     if (client->target_host == client->host)
         client->target_host = NULL;
+
     if (client->target_host)
-        mw_free(client->target_host);
+        freez(client->target_host);
+
     if (client->host)
-        mw_free(client->host);
+        freez(client->host);
+
+    if (client->proxy_uname) {
+        freez(client->proxy_uname);
+        client->proxy_uname = NULL;
+    }
+
+    if (client->proxy_passwd) {
+        freez(client->proxy_passwd);
+        client->proxy_passwd = NULL;
+    }
 
     if (proxy && proxy->type != MQTT_WSS_DIRECT) {
-        client->host = mw_strdup(proxy->host);
+        client->host = strdupz(proxy->host);
         client->port = proxy->port;
-        client->target_host = mw_strdup(host);
+        client->target_host = strdupz(host);
         client->target_port = port;
         client->proxy_type = proxy->type;
         if (proxy->username)
-            client->proxy_uname = mw_strdup(proxy->username);
+            client->proxy_uname = strdupz(proxy->username);
         if (proxy->password)
-            client->proxy_passwd = mw_strdup(proxy->password);
+            client->proxy_passwd = strdupz(proxy->password);
     } else {
-        client->host = mw_strdup(host);
+        client->host = strdupz(host);
         client->port = port;
         client->target_host = client->host;
         client->target_port = port;
@@ -569,29 +489,20 @@ int mqtt_wss_connect(mqtt_wss_client client, char *host, int port, struct mqtt_c
 
     client->ssl_flags = ssl_flags;
 
-    //TODO gethostbyname -> getaddinfo
-    //     hstrerror -> gai_strerror
-    if ((he = gethostbyname(client->host)) == NULL) {
-        mws_error(client->log, "gethostbyname() error \"%s\"", hstrerror(h_errno));
-        return -1;
-    }
-
-    addr_list = (struct in_addr **)he->h_addr_list;
-    if(!addr_list[0]) {
-        mws_error(client->log, "No IP addr resolved");
-        return -1;
-    }
-    mws_debug(client->log, "Resolved IP: %s", inet_ntoa(*addr_list[0]));
-    addr.sin_addr = *addr_list[0];
-    addr.sin_port = htons(client->port);
-
     if (client->sockfd > 0)
         close(client->sockfd);
-    client->sockfd = socket(AF_INET, SOCK_STREAM | DEFAULT_SOCKET_FLAGS, 0);
-    if (client->sockfd < 0) {
-        mws_error(client->log, "Couldn't create socket()");
-        return -1;
+
+    char port_str[16];
+    snprintf(port_str, sizeof(port_str) -1, "%d", client->port);
+
+    struct timeval timeout = { .tv_sec = 10, .tv_usec = 0 };
+    int fd = connect_to_this_ip46(IPPROTO_TCP, SOCK_STREAM, client->host, 0, port_str, &timeout, fallback_ipv4);
+    if (fd < 0) {
+        nd_log(NDLS_DAEMON, NDLP_ERR, "Could not connect to remote endpoint \"%s\", port %d.\n", client->host, port);
+        return -3;
     }
+
+    client->sockfd = fd;
 
 #ifndef SOCK_CLOEXEC
     int flags = fcntl(client->sockfd, F_GETFD);
@@ -600,23 +511,14 @@ int mqtt_wss_connect(mqtt_wss_client client, char *host, int port, struct mqtt_c
 #endif
 
     int flag = 1;
-    int result = setsockopt(client->sockfd,
-                            IPPROTO_TCP,
-                            TCP_NODELAY,
-                            &flag,
-                            sizeof(int));
+    int result = setsockopt(client->sockfd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(int));
     if (result < 0)
-       mws_error(client->log, "Could not dissable NAGLE");
-
-    if (connect(client->sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        mws_error(client->log, "Could not connect to remote endpoint \"%s\", port %d.\n", client->host, client->port);
-        return -3;
-    }
+       nd_log(NDLS_DAEMON, NDLP_ERR, "Could not dissable NAGLE");
 
     client->poll_fds[POLLFD_SOCKET].fd = client->sockfd;
 
     if (fcntl(client->sockfd, F_SETFL, fcntl(client->sockfd, F_GETFL, 0) | O_NONBLOCK) == -1) {
-        mws_error(client->log, "Error setting O_NONBLOCK to TCP socket. \"%s\"", strerror(errno));
+        nd_log(NDLS_DAEMON, NDLP_ERR, "Error setting O_NONBLOCK to TCP socket. \"%s\"", strerror(errno));
         return -8;
     }
 
@@ -632,7 +534,7 @@ int mqtt_wss_connect(mqtt_wss_client client, char *host, int port, struct mqtt_c
     SSL_library_init();
 #else
     if (OPENSSL_init_ssl(OPENSSL_INIT_LOAD_CONFIG, NULL) != 1) {
-        mws_error(client->log, "Failed to initialize SSL");
+        nd_log(NDLS_DAEMON, NDLP_ERR, "Failed to initialize SSL");
         return -1;
     };
 #endif
@@ -640,6 +542,7 @@ int mqtt_wss_connect(mqtt_wss_client client, char *host, int port, struct mqtt_c
     // free SSL structs from possible previous connections
     if (client->ssl)
         SSL_free(client->ssl);
+
     if (client->ssl_ctx)
         SSL_CTX_free(client->ssl_ctx);
 
@@ -648,7 +551,7 @@ int mqtt_wss_connect(mqtt_wss_client client, char *host, int port, struct mqtt_c
         SSL_CTX_set_default_verify_paths(client->ssl_ctx);
         SSL_CTX_set_verify(client->ssl_ctx, SSL_VERIFY_PEER | SSL_VERIFY_CLIENT_ONCE, cert_verify_callback);
     } else
-        mws_error(client->log, "SSL Certificate checking completely disabled!!!");
+        nd_log(NDLS_DAEMON, NDLP_ERR, "SSL Certificate checking completely disabled!!!");
 
 #ifdef MQTT_WSS_DEBUG
     if(client->ssl_ctx_keylog_cb)
@@ -658,7 +561,7 @@ int mqtt_wss_connect(mqtt_wss_client client, char *host, int port, struct mqtt_c
     client->ssl = SSL_new(client->ssl_ctx);
     if (!(client->ssl_flags & MQTT_WSS_SSL_DONT_CHECK_CERTS)) {
         if (!SSL_set_ex_data(client->ssl, 0, client)) {
-            mws_error(client->log, "Could not SSL_set_ex_data");
+            nd_log(NDLS_DAEMON, NDLP_ERR, "Could not SSL_set_ex_data");
             return -4;
         }
     }
@@ -666,26 +569,27 @@ int mqtt_wss_connect(mqtt_wss_client client, char *host, int port, struct mqtt_c
     SSL_set_connect_state(client->ssl);
 
     if (!SSL_set_tlsext_host_name(client->ssl, client->target_host)) {
-        mws_error(client->log, "Error setting TLS SNI host");
+        nd_log(NDLS_DAEMON, NDLP_ERR, "Error setting TLS SNI host");
         return -7;
     }
 
     result = SSL_connect(client->ssl);
     if (result != -1 && result != 1) {
-        mws_error(client->log, "SSL could not connect");
+        nd_log(NDLS_DAEMON, NDLP_ERR, "SSL could not connect");
         return -5;
     }
+
     if (result == -1) {
         int ec = SSL_get_error(client->ssl, result);
         if (ec != SSL_ERROR_WANT_READ && ec != SSL_ERROR_WANT_WRITE) {
-            mws_error(client->log, "Failed to start SSL connection");
+            nd_log(NDLS_DAEMON, NDLP_ERR, "Failed to start SSL connection");
             return -6;
         }
     }
 
     client->mqtt_keepalive = (mqtt_params->keep_alive ? mqtt_params->keep_alive : 400);
 
-    mws_info(client->log, "Going to connect using internal MQTT 5 implementation");
+    nd_log(NDLS_DAEMON, NDLP_INFO, "Going to connect using internal MQTT 5 implementation");
     struct mqtt_auth_properties auth;
     auth.client_id = (char*)mqtt_params->clientid;
     auth.client_id_free = NULL;
@@ -693,17 +597,19 @@ int mqtt_wss_connect(mqtt_wss_client client, char *host, int port, struct mqtt_c
     auth.username_free = NULL;
     auth.password = (char*)mqtt_params->password;
     auth.password_free = NULL;
+
     struct mqtt_lwt_properties lwt;
     lwt.will_topic = (char*)mqtt_params->will_topic;
     lwt.will_topic_free = NULL;
     lwt.will_message = (void*)mqtt_params->will_msg;
     lwt.will_message_free = NULL; // TODO expose no copy version to API
     lwt.will_message_size = mqtt_params->will_msg_len;
-    lwt.will_qos = (mqtt_params->will_flags & MQTT_WSS_PUB_QOSMASK);
-    lwt.will_retain = mqtt_params->will_flags & MQTT_WSS_PUB_RETAIN;
+    lwt.will_qos = (int) (mqtt_params->will_flags & MQTT_WSS_PUB_QOSMASK);
+    lwt.will_retain = (int) mqtt_params->will_flags & MQTT_WSS_PUB_RETAIN;
+
     int ret = mqtt_ng_connect(client->mqtt, &auth, mqtt_params->will_msg ? &lwt : NULL, 1, client->mqtt_keepalive);
     if (ret) {
-        mws_error(client->log, "Error generating MQTT connect");
+        nd_log(NDLS_DAEMON, NDLP_ERR, "Error generating MQTT connect");
         return 1;
     }
 
@@ -711,8 +617,8 @@ int mqtt_wss_connect(mqtt_wss_client client, char *host, int port, struct mqtt_c
     client->poll_fds[POLLFD_SOCKET].events = POLLIN;
     // wait till MQTT connection is established
     while (!client->mqtt_connected) {
-        if(mqtt_wss_service(client, -1)) {
-            mws_error(client->log, "Error connecting to MQTT WSS server \"%s\", port %d.", host, port);
+        if(mqtt_wss_service(client, 60 * MSEC_PER_SEC)) {
+            nd_log(NDLS_DAEMON, NDLP_ERR, "Error connecting to MQTT WSS server \"%s\", port %d.", host, port);
             return 2;
         }
     }
@@ -725,14 +631,14 @@ int mqtt_wss_connect(mqtt_wss_client client, char *host, int port, struct mqtt_c
 #define NSEC_PER_MSEC   1000000ULL
 #define NSEC_PER_SEC    1000000000ULL
 
-static inline uint64_t boottime_usec(mqtt_wss_client client) {
+static uint64_t boottime_usec(void) {
     struct timespec ts;
 #if defined(__APPLE__) || defined(__FreeBSD__)
     if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1) {
 #else
     if (clock_gettime(CLOCK_BOOTTIME, &ts) == -1) {
 #endif
-        mws_error(client->log, "clock_gettimte failed");
+        nd_log(NDLS_DAEMON, NDLP_ERR, "clock_gettimte failed");
         return 0;
     }
     return (uint64_t)ts.tv_sec * USEC_PER_SEC + (ts.tv_nsec % NSEC_PER_SEC) / NSEC_PER_USEC;
@@ -741,7 +647,7 @@ static inline uint64_t boottime_usec(mqtt_wss_client client) {
 #define MWS_TIMED_OUT 1
 #define MWS_ERROR 2
 #define MWS_OK 0
-static inline const char *mqtt_wss_error_tos(int ec)
+static const char *mqtt_wss_error_tos(int ec)
 {
     switch(ec) {
         case MWS_TIMED_OUT:
@@ -754,16 +660,15 @@ static inline const char *mqtt_wss_error_tos(int ec)
 
 }
 
-static inline int mqtt_wss_service_all(mqtt_wss_client client, int timeout_ms)
+static int mqtt_wss_service_all(mqtt_wss_client client, int timeout_ms)
 {
-    uint64_t exit_by = boottime_usec(client) + (timeout_ms * NSEC_PER_MSEC);
-    uint64_t now;
+    uint64_t exit_by_us = boottime_usec() + (timeout_ms * NSEC_PER_MSEC);
     client->poll_fds[POLLFD_SOCKET].events |= POLLOUT; // TODO when entering mwtt_wss_service use out buffer size to arm POLLOUT
     while (rbuf_bytes_available(client->ws_client->buf_write)) {
-        now = boottime_usec(client);
-        if (now >= exit_by)
+        const uint64_t now_us = boottime_usec();
+        if (now_us >= exit_by_us)
             return MWS_TIMED_OUT;
-        if (mqtt_wss_service(client, exit_by - now))
+        if (mqtt_wss_service(client, (exit_by_us - now_us) / USEC_PER_SEC))
             return MWS_ERROR;
     }
     return MWS_OK;
@@ -771,15 +676,13 @@ static inline int mqtt_wss_service_all(mqtt_wss_client client, int timeout_ms)
 
 void mqtt_wss_disconnect(mqtt_wss_client client, int timeout_ms)
 {
-    int ret;
-
     // block application from sending more MQTT messages
     client->mqtt_disconnecting = 1;
 
     // send whatever was left at the time of calling this function
-    ret = mqtt_wss_service_all(client, timeout_ms / 4);
+    int ret = mqtt_wss_service_all(client, timeout_ms / 4);
     if(ret)
-        mws_error(client->log,
+        nd_log(NDLS_DAEMON, NDLP_ERR,
                   "Error while trying to send all remaining data in an attempt "
                   "to gracefully disconnect! EC=%d Desc:\"%s\"",
                   ret,
@@ -791,7 +694,7 @@ void mqtt_wss_disconnect(mqtt_wss_client client, int timeout_ms)
 
     ret = mqtt_wss_service_all(client, timeout_ms / 4);
     if(ret)
-        mws_error(client->log,
+        nd_log(NDLS_DAEMON, NDLP_ERR,
                   "Error while trying to send MQTT disconnect message in an attempt "
                   "to gracefully disconnect! EC=%d Desc:\"%s\"",
                   ret,
@@ -804,7 +707,7 @@ void mqtt_wss_disconnect(mqtt_wss_client client, int timeout_ms)
     if(ret) {
         // Some MQTT/WSS servers will close socket on receipt of MQTT disconnect and
         // do not wait for WebSocket to be closed properly
-        mws_warn(client->log,
+        nd_log(NDLS_DAEMON, NDLP_WARNING,
                  "Error while trying to send WebSocket disconnect message in an attempt "
                  "to gracefully disconnect! EC=%d Desc:\"%s\".",
                  ret,
@@ -819,22 +722,19 @@ void mqtt_wss_disconnect(mqtt_wss_client client, int timeout_ms)
     client->sockfd = -1;
 }
 
-static inline void mqtt_wss_wakeup(mqtt_wss_client client)
+static void mqtt_wss_wakeup(mqtt_wss_client client)
 {
-#ifdef DEBUG_ULTRA_VERBOSE
-    mws_debug(client->log, "mqtt_wss_wakup - forcing wake up of main loop");
-#endif
-    write(client->write_notif_pipe[PIPE_WRITE_END], " ", 1);
+    if(write(client->write_notif_pipe[PIPE_WRITE_END], " ", 1) <= 0) { ; }
 }
 
 #define THROWAWAY_BUF_SIZE 32
 char throwaway[THROWAWAY_BUF_SIZE];
-static inline void util_clear_pipe(int fd)
+static void util_clear_pipe(int fd)
 {
-    (void)read(fd, throwaway, THROWAWAY_BUF_SIZE);
+    if(read(fd, throwaway, THROWAWAY_BUF_SIZE) <= 0)  { ; }
 }
 
-static inline void set_socket_pollfds(mqtt_wss_client client, int ssl_ret) {
+static void set_socket_pollfds(mqtt_wss_client client, int ssl_ret) {
     if (ssl_ret == SSL_ERROR_WANT_WRITE)
         client->poll_fds[POLLFD_SOCKET].events |= POLLOUT;
     if (ssl_ret == SSL_ERROR_WANT_READ)
@@ -845,27 +745,39 @@ static int handle_mqtt_internal(mqtt_wss_client client)
 {
     int rc = mqtt_ng_sync(client->mqtt);
     if (rc) {
-        mws_error(client->log, "mqtt_ng_sync returned %d != 0", rc);
+        nd_log(NDLS_DAEMON, NDLP_ERR, "mqtt_ng_sync returned %d != 0", rc);
         client->mqtt_connected = 0;
         return 1;
     }
     return 0;
 }
 
-#define SEC_TO_MSEC 1000
-static inline long long int t_till_next_keepalive_ms(mqtt_wss_client client)
+static int t_till_next_keepalive_ms(mqtt_wss_client client)
 {
-    time_t last_send = mqtt_ng_last_send_time(client->mqtt);
-    long long int next_mqtt_keep_alive = (last_send * SEC_TO_MSEC)
-        + (client->mqtt_keepalive * (SEC_TO_MSEC * 0.75 /* SEND IN ADVANCE */));
-    return(next_mqtt_keep_alive - (time(NULL) * SEC_TO_MSEC));
+    time_t last_send_ts = mqtt_ng_last_send_time(client->mqtt);
+    time_t next_mqtt_keep_alive_ts = last_send_ts + client->mqtt_keepalive * 0.75;
+
+    time_t now_ts = now_realtime_sec();
+
+    if(now_ts >= next_mqtt_keep_alive_ts)
+        return 0;
+
+    int timeout_ms = (int)((next_mqtt_keep_alive_ts - now_ts) * MSEC_PER_SEC);
+
+    if(timeout_ms < 1)
+        timeout_ms = 1;
+
+    if(timeout_ms > (int)(45 * MSEC_PER_SEC))
+        timeout_ms = (int)(45 * MSEC_PER_SEC);
+
+    return timeout_ms;
 }
 
 #ifdef MQTT_WSS_CPUSTATS
-static inline uint64_t mqtt_wss_now_usec(mqtt_wss_client client) {
+static uint64_t mqtt_wss_now_usec(void) {
     struct timespec ts;
     if(clock_gettime(CLOCK_MONOTONIC, &ts) == -1) {
-        mws_error(client->log, "clock_gettime(CLOCK_MONOTONIC, &timespec) failed.");
+        nd_log(NDLS_DAEMON, NDLP_ERR, "clock_gettime(CLOCK_MONOTONIC, &timespec) failed.");
         return 0;
     }
     return (uint64_t)ts.tv_sec * USEC_PER_SEC + (ts.tv_nsec % NSEC_PER_SEC) / NSEC_PER_USEC;
@@ -880,104 +792,100 @@ int mqtt_wss_service(mqtt_wss_client client, int timeout_ms)
     int send_keepalive = 0;
 
 #ifdef MQTT_WSS_CPUSTATS
-    uint64_t t1,t2;
-    t1 = mqtt_wss_now_usec(client);
-#endif
-
-#ifdef DEBUG_ULTRA_VERBOSE
-    mws_debug(client->log, ">>>>> mqtt_wss_service <<<<<");
-    mws_debug(client->log, "Waiting for events: %s%s%s",
-        (client->poll_fds[POLLFD_SOCKET].events & POLLIN)  ? "SOCKET_POLLIN " : "",
-        (client->poll_fds[POLLFD_SOCKET].events & POLLOUT) ? "SOCKET_POLLOUT " : "",
-        (client->poll_fds[POLLFD_PIPE].events & POLLIN) ? "PIPE_POLLIN" : "" );
+    uint64_t t2;
+    uint64_t t1 = mqtt_wss_now_usec();
 #endif
 
     // Check user requested TO doesn't interfere with MQTT keep alives
-    long long int till_next_keep_alive = t_till_next_keepalive_ms(client);
-    if (client->mqtt_connected && (timeout_ms < 0 || timeout_ms >= till_next_keep_alive)) {
-        #ifdef DEBUG_ULTRA_VERBOSE
-            mws_debug(client->log, "Shortening Timeout requested %d to %lld to ensure keep-alive can be sent", timeout_ms, till_next_keep_alive);
-        #endif
-        timeout_ms = till_next_keep_alive;
-        send_keepalive = 1;
+    if (!ping_timeout) {
+        int till_next_keep_alive = t_till_next_keepalive_ms(client);
+        if (client->mqtt_connected && (timeout_ms < 0 || timeout_ms >= till_next_keep_alive)) {
+            timeout_ms = till_next_keep_alive;
+            send_keepalive = 1;
+        }
     }
 
 #ifdef MQTT_WSS_CPUSTATS
-    t2 = mqtt_wss_now_usec(client);
+    t2 = mqtt_wss_now_usec();
     client->stats.time_keepalive += t2 - t1;
 #endif
 
+    worker_is_idle();
     if ((ret = poll(client->poll_fds, 2, timeout_ms >= 0 ? timeout_ms : -1)) < 0) {
-        if (errno == EINTR) {
-            mws_warn(client->log, "poll interrupted by EINTR");
-            return 0;
-        }
-        mws_error(client->log, "poll error \"%s\"", strerror(errno));
-        return -2;
-    }
+        worker_is_busy(WORKER_ACLK_POLL_ERROR);
 
-#ifdef DEBUG_ULTRA_VERBOSE
-    mws_debug(client->log, "Poll events happened: %s%s%s%s",
-        (client->poll_fds[POLLFD_SOCKET].revents & POLLIN)  ? "SOCKET_POLLIN " : "",
-        (client->poll_fds[POLLFD_SOCKET].revents & POLLOUT) ? "SOCKET_POLLOUT " : "",
-        (client->poll_fds[POLLFD_PIPE].revents & POLLIN) ? "PIPE_POLLIN " : "",
-        (!ret) ? "POLL_TIMEOUT" : "");
-#endif
+        if (errno == EINTR) {
+            nd_log(NDLS_DAEMON, NDLP_WARNING, "poll interrupted by EINTR");
+            return MQTT_WSS_OK;
+        }
+        nd_log(NDLS_DAEMON, NDLP_ERR, "poll error \"%s\"", strerror(errno));
+        return MQTT_WSS_ERR_POLL_FAILED;
+    }
+    worker_is_busy(WORKER_ACLK_POLL_OK);
 
 #ifdef MQTT_WSS_CPUSTATS
-    t1 = mqtt_wss_now_usec(client);
+    t1 = mqtt_wss_now_usec();
 #endif
 
     if (ret == 0) {
+        time_t now = now_realtime_sec();
         if (send_keepalive) {
             // otherwise we shortened the timeout ourselves to take care of
             // MQTT keep alives
-#ifdef DEBUG_ULTRA_VERBOSE
-            mws_debug(client->log, "Forcing MQTT Ping/keep-alive");
-#endif
             mqtt_ng_ping(client->mqtt);
+            ping_timeout = now + PING_TIMEOUT;
+            worker_is_busy(WORKER_ACLK_SENT_PING);
         } else {
+            if (ping_timeout && ping_timeout < now) {
+                disconnect_req = ACLK_PING_TIMEOUT;
+                ping_timeout = 0;
+            }
             // if poll timed out and user requested timeout was being used
             // return here let user do his work and he will call us back soon
-            return 0;
+            return MQTT_WSS_OK;
         }
     }
 
 #ifdef MQTT_WSS_CPUSTATS
-    t2 = mqtt_wss_now_usec(client);
+    t2 = mqtt_wss_now_usec();
     client->stats.time_keepalive += t2 - t1;
 #endif
 
     client->poll_fds[POLLFD_SOCKET].events = 0;
 
     if ((ptr = rbuf_get_linear_insert_range(client->ws_client->buf_read, &size))) {
+        worker_is_busy(WORKER_ACLK_RX);
+
         if((ret = SSL_read(client->ssl, ptr, size)) > 0) {
-#ifdef DEBUG_ULTRA_VERBOSE
-            mws_debug(client->log, "SSL_Read: Read %d.", ret);
-#endif
-            pthread_mutex_lock(&client->stat_lock);
+            spinlock_lock(&client->stat_lock);
             client->stats.bytes_rx += ret;
-            pthread_mutex_unlock(&client->stat_lock);
+            spinlock_unlock(&client->stat_lock);
             rbuf_bump_head(client->ws_client->buf_read, ret);
         } else {
             int errnobkp = errno;
             ret = SSL_get_error(client->ssl, ret);
-#ifdef DEBUG_ULTRA_VERBOSE
-            mws_debug(client->log, "Read Err: %s", util_openssl_ret_err(ret));
-#endif
             set_socket_pollfds(client, ret);
+
             if (ret != SSL_ERROR_WANT_READ &&
                 ret != SSL_ERROR_WANT_WRITE) {
-                mws_error(client->log, "SSL_read error: %d %s", ret, util_openssl_ret_err(ret));
+                worker_is_busy(WORKER_ACLK_RX_ERROR);
+                nd_log(NDLS_DAEMON, NDLP_ERR, "SSL_read error: %d %s", ret, util_openssl_ret_err(ret));
+
+                if (ret == SSL_ERROR_ZERO_RETURN) {
+                    nd_log(NDLS_DAEMON, NDLP_ERR, "SSL_read connection closed by remote end");
+                    return MQTT_WSS_ERR_REMOTE_CLOSED;
+                }
+
                 if (ret == SSL_ERROR_SYSCALL)
-                    mws_error(client->log, "SSL_read SYSCALL errno: %d %s", errnobkp, strerror(errnobkp));
+                    nd_log(NDLS_DAEMON, NDLP_ERR, "SSL_read SYSCALL errno: %d %s", errnobkp, strerror(errnobkp));
+
                 return MQTT_WSS_ERR_CONN_DROP;
             }
         }
     }
 
 #ifdef MQTT_WSS_CPUSTATS
-    t1 = mqtt_wss_now_usec(client);
+    t1 = mqtt_wss_now_usec();
     client->stats.time_read_socket += t1 - t2;
 #endif
 
@@ -985,25 +893,32 @@ int mqtt_wss_service(mqtt_wss_client client, int timeout_ms)
     switch(ret) {
         case WS_CLIENT_PROTOCOL_ERROR:
             return MQTT_WSS_ERR_PROTO_WS;
+
         case WS_CLIENT_NEED_MORE_BYTES:
-#ifdef DEBUG_ULTRA_VERBOSE
-            mws_debug(client->log, "WSCLIENT WANT READ");
-#endif
             client->poll_fds[POLLFD_SOCKET].events |= POLLIN;
             break;
+
+        case WS_CLIENT_CONNECTION_REMOTE_CLOSED:
+            return MQTT_WSS_ERR_REMOTE_CLOSED;
+
         case WS_CLIENT_CONNECTION_CLOSED:
             return MQTT_WSS_ERR_CONN_DROP;
+
+        default:
+            return MQTT_WSS_ERR_PROTO_WS;
     }
 
 #ifdef MQTT_WSS_CPUSTATS
-    t2 = mqtt_wss_now_usec(client);
+    t2 = mqtt_wss_now_usec();
     client->stats.time_process_websocket += t2 - t1;
 #endif
 
     // process MQTT stuff
-    if(client->ws_client->state == WS_ESTABLISHED)
+    if(client->ws_client->state == WS_ESTABLISHED) {
+        worker_is_busy(WORKER_ACLK_HANDLE_MQTT_INTERNAL);
         if (handle_mqtt_internal(client))
             return MQTT_WSS_ERR_PROTO_MQTT;
+    }
 
     if (client->mqtt_didnt_finish_write) {
         client->mqtt_didnt_finish_write = 0;
@@ -1011,34 +926,35 @@ int mqtt_wss_service(mqtt_wss_client client, int timeout_ms)
     }
 
 #ifdef MQTT_WSS_CPUSTATS
-    t1 = mqtt_wss_now_usec(client);
+    t1 = mqtt_wss_now_usec();
     client->stats.time_process_mqtt += t1 - t2;
 #endif
 
     if ((ptr = rbuf_get_linear_read_range(client->ws_client->buf_write, &size))) {
-#ifdef DEBUG_ULTRA_VERBOSE
-        mws_debug(client->log, "Have data to write to SSL");
-#endif
+        worker_is_busy(WORKER_ACLK_TX);
+
         if ((ret = SSL_write(client->ssl, ptr, size)) > 0) {
-#ifdef DEBUG_ULTRA_VERBOSE
-            mws_debug(client->log, "SSL_Write: Written %d of avail %d.", ret, size);
-#endif
-            pthread_mutex_lock(&client->stat_lock);
+            spinlock_lock(&client->stat_lock);
             client->stats.bytes_tx += ret;
-            pthread_mutex_unlock(&client->stat_lock);
+            spinlock_unlock(&client->stat_lock);
             rbuf_bump_tail(client->ws_client->buf_write, ret);
         } else {
             int errnobkp = errno;
             ret = SSL_get_error(client->ssl, ret);
-#ifdef DEBUG_ULTRA_VERBOSE
-            mws_debug(client->log, "Write Err: %s", util_openssl_ret_err(ret));
-#endif
             set_socket_pollfds(client, ret);
             if (ret != SSL_ERROR_WANT_READ &&
                 ret != SSL_ERROR_WANT_WRITE) {
-                mws_error(client->log, "SSL_write error: %d %s", ret, util_openssl_ret_err(ret));
+                worker_is_busy(WORKER_ACLK_TX_ERROR);
+                nd_log(NDLS_DAEMON, NDLP_ERR, "SSL_write error: %d %s", ret, util_openssl_ret_err(ret));
+
+                if (ret == SSL_ERROR_ZERO_RETURN) {
+                    nd_log(NDLS_DAEMON, NDLP_ERR, "SSL_write connection closed by remote end");
+                    return MQTT_WSS_ERR_REMOTE_CLOSED;
+                }
+
                 if (ret == SSL_ERROR_SYSCALL)
-                    mws_error(client->log, "SSL_write SYSCALL errno: %d %s", errnobkp, strerror(errnobkp));
+                    nd_log(NDLS_DAEMON, NDLP_ERR, "SSL_write SYSCALL errno: %d %s", errnobkp, strerror(errnobkp));
+
                 return MQTT_WSS_ERR_CONN_DROP;
             }
         }
@@ -1048,7 +964,7 @@ int mqtt_wss_service(mqtt_wss_client client, int timeout_ms)
         util_clear_pipe(client->write_notif_pipe[PIPE_READ_END]);
 
 #ifdef MQTT_WSS_CPUSTATS
-    t2 = mqtt_wss_now_usec(client);
+    t2 = mqtt_wss_now_usec();
     client->stats.time_write_socket += t2 - t1;
 #endif
 
@@ -1065,12 +981,12 @@ int mqtt_wss_publish5(mqtt_wss_client client,
                       uint16_t *packet_id)
 {
     if (client->mqtt_disconnecting) {
-        mws_error(client->log, "mqtt_wss is disconnecting can't publish");
+        nd_log(NDLS_DAEMON, NDLP_ERR, "mqtt_wss is disconnecting can't publish");
         return 1;
     }
 
     if (!client->mqtt_connected) {
-        mws_error(client->log, "MQTT is offline. Can't send message.");
+        nd_log(NDLS_DAEMON, NDLP_ERR, "MQTT is offline. Can't send message.");
         return 1;
     }
     uint8_t mqtt_flags = 0;
@@ -1081,7 +997,7 @@ int mqtt_wss_publish5(mqtt_wss_client client,
 
     int rc = mqtt_ng_publish(client->mqtt, topic, topic_free, msg, msg_free, msg_len, mqtt_flags, packet_id);
     if (rc == MQTT_NG_MSGGEN_MSG_TOO_BIG)
-        return MQTT_WSS_ERR_TOO_BIG_FOR_SERVER;
+        return MQTT_WSS_ERR_MSG_TOO_BIG;
 
     mqtt_wss_wakeup(client);
 
@@ -1092,12 +1008,12 @@ int mqtt_wss_subscribe(mqtt_wss_client client, char *topic, int max_qos_level)
 {
     (void)max_qos_level; //TODO now hardcoded
     if (!client->mqtt_connected) {
-        mws_error(client->log, "MQTT is offline. Can't subscribe.");
+        nd_log(NDLS_DAEMON, NDLP_ERR, "MQTT is offline. Can't subscribe.");
         return 1;
     }
 
     if (client->mqtt_disconnecting) {
-        mws_error(client->log, "mqtt_wss is disconnecting can't subscribe");
+        nd_log(NDLS_DAEMON, NDLP_ERR, "mqtt_wss is disconnecting can't subscribe");
         return 1;
     }
 
@@ -1115,12 +1031,18 @@ int mqtt_wss_subscribe(mqtt_wss_client client, char *topic, int max_qos_level)
 struct mqtt_wss_stats mqtt_wss_get_stats(mqtt_wss_client client)
 {
     struct mqtt_wss_stats current;
-    pthread_mutex_lock(&client->stat_lock);
+    spinlock_lock(&client->stat_lock);
     current = client->stats;
-    memset(&client->stats, 0, sizeof(client->stats));
-    pthread_mutex_unlock(&client->stat_lock);
+    spinlock_unlock(&client->stat_lock);
     mqtt_ng_get_stats(client->mqtt, &current.mqtt);
     return current;
+}
+
+void mqtt_wss_reset_stats(mqtt_wss_client client)
+{
+    spinlock_lock(&client->stat_lock);
+    memset(&client->stats, 0, sizeof(client->stats));
+    spinlock_unlock(&client->stat_lock);
 }
 
 int mqtt_wss_set_topic_alias(mqtt_wss_client client, const char *topic)

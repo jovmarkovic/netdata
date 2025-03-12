@@ -46,11 +46,10 @@ set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Netdata Builder <bot@netdata.cloud>")
 #
 
 set(CPACK_COMPONENT_NETDATA_DESCRIPTION
-	  "real-time charts for system monitoring
- Netdata is a daemon that collects data in realtime (per second)
- and presents a web site to view and analyze them. The presentation
- is also real-time and full of interactive charts that precisely
- render all collected values.")
+	  "Netdata is a high-resolution, real-time, low-latency observability platform.
+	  Per-second data collection, high-performance long-term storage, low-latency
+	  visualization, machine-learning based anomaly detection, alerts and notifications,
+	  advanced correlations and fast root cause analysis, native horizontal scalability.")
 
 set(CPACK_DEBIAN_NETDATA_PACKAGE_NAME "netdata")
 set(CPACK_DEBIAN_NETDATA_PACKAGE_SECTION "net")
@@ -59,13 +58,21 @@ set(CPACK_DEBIAN_NETDATA_PACKAGE_SUGGESTS
 		"netdata-plugin-cups, netdata-plugin-freeipmi")
 set(CPACK_DEBIAN_NETDATA_PACKAGE_RECOMMENDS
 		"netdata-plugin-systemd-journal, \
-netdata-plugin-logs-management, \
 netdata-plugin-network-viewer")
 set(CPACK_DEBIAN_NETDATA_PACKAGE_CONFLICTS
 		"netdata-core, netdata-plugins-bash, netdata-plugins-python, netdata-web")
 
-list(APPEND _main_deps "netdata-plugin-chartsd")
-list(APPEND _main_deps "netdata-plugin-pythond")
+if(ENABLE_DASHBOARD)
+  list(APPEND _main_deps "netdata-dashboard")
+endif()
+
+if(ENABLE_PLUGIN_CHARTS)
+  list(APPEND _main_deps "netdata-plugin-chartsd")
+endif()
+
+if(ENABLE_PLUGIN_PYTHON)
+  list(APPEND _main_deps "netdata-plugin-pythond")
+endif()
 
 if(ENABLE_PLUGIN_APPS)
         list(APPEND _main_deps "netdata-plugin-apps")
@@ -104,6 +111,27 @@ set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
 	  "${PKG_FILES_PATH}/deb/netdata/postrm")
 
 set(CPACK_DEBIAN_NETDATA_DEBUGINFO_PACKAGE On)
+
+#
+# dashboard
+#
+
+set(CPACK_COMPONENT_DASHBOARD_DEPENDS "netdata")
+set(CPACK_COMPONENT_DASHBOARD_DESCRIPTION
+    "The local dashboard for the Netdata Agent.
+ This allows access to the dashboard on the local node without internet access.")
+
+set(CPACK_DEBIAN_DASHBOARD_PACKAGE_NAME "netdata-dashboard")
+set(CPACK_DEBIAN_DASHBOARD_PACKAGE_SECTION "net")
+set(CPACK_DEBIAN_DASHBOARD_PACKAGE_CONFLICTS "netdata (<< ${CPACK_PACKAGE_VERSION})")
+set(CPACK_DEBIAN_DASHBOARD_PACKAGE_PREDEPENDS "adduser")
+
+set(CPACK_DEBIAN_DASHBOARD_PACKAGE_CONTROL_EXTRA
+    "${PKG_FILES_PATH}/deb/plugin-apps/preinst"
+    "${PKG_FILES_PATH}/deb/plugin-apps/postinst"
+    "${PKG_FILES_PATH}/deb/plugin-apps/postrm")
+
+set(CPACK_DEBIAN_DASHBOARD_DEBUGINFO_PACKAGE Off)
 
 #
 # apps.plugin
@@ -280,26 +308,6 @@ set(CPACK_DEBIAN_PLUGIN-GO_PACKAGE_CONTROL_EXTRA
 set(CPACK_DEBIAN_PLUGIN-GO_DEBUGINFO_PACKAGE Off)
 
 #
-# logs-management.plugin
-#
-
-set(CPACK_COMPONENT_PLUGIN-LOGS-MANAGEMENT_DEPENDS "netdata")
-set(CPACK_COMPONENT_PLUGIN-LOGS-MANAGEMENT_DESCRIPTION
-		"The logs-management plugin for the Netdata Agent
- This plugin allows the Netdata Agent to collect logs from the system
- and parse them to extract metrics.")
-
-set(CPACK_DEBIAN_PLUGIN-LOGS-MANAGEMENT_PACKAGE_NAME "netdata-plugin-logs-management")
-set(CPACK_DEBIAN_PLUGIN-LOGS-MANAGEMENT_PACKAGE_SECTION "net")
-set(CPACK_DEBIAN_PLUGIN-LOGS-MANAGEMENT_PACKAGE_PREDEPENDS "libcap2-bin, adduser")
-
-set(CPACK_DEBIAN_PLUGIN-LOGS-MANAGEMENT_PACKAGE_CONTROL_EXTRA
-	  "${PKG_FILES_PATH}/deb/plugin-logs-management/preinst;"
-	  "${PKG_FILES_PATH}/deb/plugin-logs-management/postinst")
-
-set(CPACK_DEBIAN_PLUGIN-LOGS-MANAGEMENT_DEBUGINFO_PACKAGE On)
-
-#
 # network-viewer.plugin
 #
 
@@ -455,10 +463,15 @@ set(CPACK_DEBIAN_PLUGIN-XENSTAT_DEBUGINFO_PACKAGE On)
 #
 
 list(APPEND CPACK_COMPONENTS_ALL "netdata")
+if(ENABLE_DASHBOARD)
+  list(APPEND CPACK_COMPONENTS_ALL "dashboard")
+endif()
 if(ENABLE_PLUGIN_APPS)
         list(APPEND CPACK_COMPONENTS_ALL "plugin-apps")
 endif()
-list(APPEND CPACK_COMPONENTS_ALL "plugin-chartsd")
+if(ENABLE_PLUGIN_CHARTS)
+  list(APPEND CPACK_COMPONENTS_ALL "plugin-chartsd")
+endif()
 if(ENABLE_PLUGIN_CUPS)
         list(APPEND CPACK_COMPONENTS_ALL "plugin-cups")
 endif()
@@ -477,9 +490,6 @@ endif()
 if(ENABLE_PLUGIN_GO)
         list(APPEND CPACK_COMPONENTS_ALL "plugin-go")
 endif()
-if(ENABLE_PLUGIN_LOGS_MANAGEMENT)
-        list(APPEND CPACK_COMPONENTS_ALL "plugin-logs-management")
-endif()
 if(ENABLE_PLUGIN_NETWORK_VIEWER)
         list(APPEND CPACK_COMPONENTS_ALL "plugin-network-viewer")
 endif()
@@ -489,7 +499,9 @@ endif()
 if(ENABLE_PLUGIN_PERF)
         list(APPEND CPACK_COMPONENTS_ALL "plugin-perf")
 endif()
-list(APPEND CPACK_COMPONENTS_ALL "plugin-pythond")
+if(ENABLE_PLUGIN_PYTHON)
+  list(APPEND CPACK_COMPONENTS_ALL "plugin-pythond")
+endif()
 if(ENABLE_PLUGIN_SLABINFO)
         list(APPEND CPACK_COMPONENTS_ALL "plugin-slabinfo")
 endif()

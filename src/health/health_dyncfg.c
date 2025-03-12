@@ -68,8 +68,8 @@ static bool parse_match(json_object *jobj, const char *path, struct rrd_alert_ma
 }
 
 static bool parse_config_value_database_lookup(json_object *jobj, const char *path, struct rrd_alert_config *config, BUFFER *error, bool strict) {
-    JSONC_PARSE_INT_OR_ERROR_AND_RETURN(jobj, path, "after", config->after, error, strict);
-    JSONC_PARSE_INT_OR_ERROR_AND_RETURN(jobj, path, "before", config->before, error, strict);
+    JSONC_PARSE_INT64_OR_ERROR_AND_RETURN(jobj, path, "after", config->after, error, strict);
+    JSONC_PARSE_INT64_OR_ERROR_AND_RETURN(jobj, path, "before", config->before, error, strict);
     JSONC_PARSE_TXT2ENUM_OR_ERROR_AND_RETURN(jobj, path, "time_group", time_grouping_txt2id, config->time_group, error, strict);
     JSONC_PARSE_TXT2ENUM_OR_ERROR_AND_RETURN(jobj, path, "dims_group", alerts_dims_grouping2id, config->dims_group, error, strict);
     JSONC_PARSE_TXT2ENUM_OR_ERROR_AND_RETURN(jobj, path, "data_source", alerts_data_sources2id, config->data_source, error, strict);
@@ -95,10 +95,10 @@ static bool parse_config_value_database_lookup(json_object *jobj, const char *pa
 }
 
 static bool parse_config_value(json_object *jobj, const char *path, struct rrd_alert_config *config, BUFFER *error, bool strict) {
-    JSONC_PARSE_SUBOBJECT(jobj, path, "database_lookup", config, parse_config_value_database_lookup, error, strict);
+    JSONC_PARSE_SUBOBJECT_CB(jobj, path, "database_lookup", config, parse_config_value_database_lookup, error, strict);
     JSONC_PARSE_TXT2EXPRESSION_OR_ERROR_AND_RETURN(jobj, path, "calculation", config->calculation, error, false);
     JSONC_PARSE_TXT2STRING_OR_ERROR_AND_RETURN(jobj, path, "units", config->units, error, false);
-    JSONC_PARSE_INT_OR_ERROR_AND_RETURN(jobj, path, "update_every", config->update_every, error, strict);
+    JSONC_PARSE_INT64_OR_ERROR_AND_RETURN(jobj, path, "update_every", config->update_every, error, strict);
     return true;
 }
 
@@ -109,17 +109,17 @@ static bool parse_config_conditions(json_object *jobj, const char *path, struct 
 }
 
 static bool parse_config_action_delay(json_object *jobj, const char *path, struct rrd_alert_config *config, BUFFER *error, bool strict) {
-    JSONC_PARSE_INT_OR_ERROR_AND_RETURN(jobj, path, "up", config->delay_up_duration, error, strict);
-    JSONC_PARSE_INT_OR_ERROR_AND_RETURN(jobj, path, "down", config->delay_down_duration, error, strict);
-    JSONC_PARSE_INT_OR_ERROR_AND_RETURN(jobj, path, "max", config->delay_max_duration, error, strict);
+    JSONC_PARSE_INT64_OR_ERROR_AND_RETURN(jobj, path, "up", config->delay_up_duration, error, strict);
+    JSONC_PARSE_INT64_OR_ERROR_AND_RETURN(jobj, path, "down", config->delay_down_duration, error, strict);
+    JSONC_PARSE_INT64_OR_ERROR_AND_RETURN(jobj, path, "max", config->delay_max_duration, error, strict);
     JSONC_PARSE_DOUBLE_OR_ERROR_AND_RETURN(jobj, path, "multiplier", config->delay_multiplier, error, strict);
     return true;
 }
 
 static bool parse_config_action_repeat(json_object *jobj, const char *path, struct rrd_alert_config *config, BUFFER *error, bool strict) {
     JSONC_PARSE_BOOL_OR_ERROR_AND_RETURN(jobj, path, "enabled", config->has_custom_repeat_config, error, strict);
-    JSONC_PARSE_INT_OR_ERROR_AND_RETURN(jobj, path, "warning", config->warn_repeat_every, error, strict);
-    JSONC_PARSE_INT_OR_ERROR_AND_RETURN(jobj, path, "critical", config->crit_repeat_every, error, strict);
+    JSONC_PARSE_INT64_OR_ERROR_AND_RETURN(jobj, path, "warning", config->warn_repeat_every, error, strict);
+    JSONC_PARSE_INT64_OR_ERROR_AND_RETURN(jobj, path, "critical", config->crit_repeat_every, error, strict);
     return true;
 }
 
@@ -127,8 +127,8 @@ static bool parse_config_action(json_object *jobj, const char *path, struct rrd_
     JSONC_PARSE_ARRAY_OF_TXT2BITMAP_OR_ERROR_AND_RETURN(jobj, path, "options", alert_action_options_parse_one, config->alert_action_options, error, strict);
     JSONC_PARSE_TXT2STRING_OR_ERROR_AND_RETURN(jobj, path, "execute", config->exec, error, strict);
     JSONC_PARSE_TXT2STRING_OR_ERROR_AND_RETURN(jobj, path, "recipient", config->recipient, error, strict);
-    JSONC_PARSE_SUBOBJECT(jobj, path, "delay", config, parse_config_action_delay, error, strict);
-    JSONC_PARSE_SUBOBJECT(jobj, path, "repeat", config, parse_config_action_repeat, error, strict);
+    JSONC_PARSE_SUBOBJECT_CB(jobj, path, "delay", config, parse_config_action_delay, error, strict);
+    JSONC_PARSE_SUBOBJECT_CB(jobj, path, "repeat", config, parse_config_action_repeat, error, strict);
     return true;
 }
 
@@ -143,17 +143,17 @@ static bool parse_config(json_object *jobj, const char *path, RRD_ALERT_PROTOTYP
     JSONC_PARSE_TXT2STRING_OR_ERROR_AND_RETURN(jobj, path, "component", ap->config.component, error, false);
     JSONC_PARSE_TXT2STRING_OR_ERROR_AND_RETURN(jobj, path, "classification", ap->config.classification, error, false);
 
-    JSONC_PARSE_SUBOBJECT(jobj, path, "value", &ap->config, parse_config_value, error, strict);
-    JSONC_PARSE_SUBOBJECT(jobj, path, "conditions", &ap->config, parse_config_conditions, error, false);
-    JSONC_PARSE_SUBOBJECT(jobj, path, "action", &ap->config, parse_config_action, error, false);
-    JSONC_PARSE_SUBOBJECT(jobj, path, "match", &ap->match, parse_match, error, strict);
+    JSONC_PARSE_SUBOBJECT_CB(jobj, path, "value", &ap->config, parse_config_value, error, strict);
+    JSONC_PARSE_SUBOBJECT_CB(jobj, path, "conditions", &ap->config, parse_config_conditions, error, false);
+    JSONC_PARSE_SUBOBJECT_CB(jobj, path, "action", &ap->config, parse_config_action, error, false);
+    JSONC_PARSE_SUBOBJECT_CB(jobj, path, "match", &ap->match, parse_match, error, strict);
 
     return true;
 }
 
 static bool parse_prototype(json_object *jobj, const char *path, RRD_ALERT_PROTOTYPE *base, BUFFER *error, const char *name, bool strict) {
     int64_t version = 0;
-    JSONC_PARSE_INT_OR_ERROR_AND_RETURN(jobj, path, "format_version", version, error, strict);
+    JSONC_PARSE_UINT64_OR_ERROR_AND_RETURN(jobj, path, "format_version", version, error, strict);
 
     if(version != 1) {
         buffer_sprintf(error, "unsupported document version");
@@ -164,6 +164,11 @@ static bool parse_prototype(json_object *jobj, const char *path, RRD_ALERT_PROTO
 
     json_object *rules;
     if (json_object_object_get_ex(jobj, "rules", &rules)) {
+        if (json_object_get_type(rules) != json_type_array) {
+            buffer_sprintf(error, "member 'rules' is not an array");
+            return false;
+        }
+
         size_t rules_len = json_object_array_length(rules);
 
         RRD_ALERT_PROTOTYPE *ap = base; // fill the first entry
@@ -178,18 +183,18 @@ static bool parse_prototype(json_object *jobj, const char *path, RRD_ALERT_PROTO
 
             JSONC_PARSE_BOOL_OR_ERROR_AND_RETURN(rule, path, "enabled", ap->match.enabled, error, strict);
 
-            STRING *type = NULL;
-            JSONC_PARSE_TXT2STRING_OR_ERROR_AND_RETURN(rule, path, "type", type, error, strict);
-            if(string_strcmp(type, "template") == 0)
+            char type[32];
+            JSONC_PARSE_TXT2CHAR_OR_ERROR_AND_RETURN(rule, path, "type", type, error, strict);
+            if(strcmp(type, "template") == 0)
                 ap->match.is_template = true;
-            else if(string_strcmp(type, "instance") == 0)
+            else if(strcmp(type, "instance") == 0)
                 ap->match.is_template = false;
             else {
-                buffer_sprintf(error, "type is '%s', but it can only be 'instance' or 'template'", string2str(type));
+                buffer_sprintf(error, "type is '%s', but it can only be 'instance' or 'template'", type);
                 return false;
             }
 
-            JSONC_PARSE_SUBOBJECT(rule, path, "config", ap, parse_config, error, strict);
+            JSONC_PARSE_SUBOBJECT_CB(rule, path, "config", ap, parse_config, error, strict);
 
             ap = NULL; // so that we will create another one, if available
         }
@@ -270,7 +275,7 @@ static inline void health_prototype_rule_to_json_array_member(BUFFER *wb, RRD_AL
         buffer_json_member_add_object(wb, "config");
         {
             if(!for_hashing) {
-                buffer_json_member_add_uuid(wb, "hash", &ap->config.hash_id);
+                buffer_json_member_add_uuid(wb, "hash", ap->config.hash_id);
                 buffer_json_member_add_string(wb, "source_type", dyncfg_id2source_type(ap->config.source_type));
                 buffer_json_member_add_string(wb, "source", string2str(ap->config.source));
             }
@@ -504,7 +509,7 @@ int dyncfg_health_prototype_to_conf(BUFFER *wb, RRD_ALERT_PROTOTYPE *ap, const c
         if(nap->config.info)
             buffer_sprintf(wb, "%13s: %s\n", "info", string2str(nap->config.info));
 
-        if(nap->config.exec && nap->config.exec != localhost->health.health_default_exec)
+        if(nap->config.exec && nap->config.exec != localhost->health.default_exec)
             buffer_sprintf(wb, "%13s: %s\n", "exec", string2str(nap->config.exec));
 
         if(nap->config.recipient)
@@ -654,11 +659,11 @@ static int dyncfg_health_prototype_job_action(BUFFER *result, DYNCFG_CMDS cmd, B
                 code = dyncfg_default_response(result, HTTP_RESP_OK, "already enabled");
             else {
                 size_t matches_enabled = 0;
-                spinlock_lock(&ap->_internal.spinlock);
+                rw_spinlock_write_lock(&ap->_internal.rw_spinlock);
                 for(RRD_ALERT_PROTOTYPE *t = ap; t ;t = t->_internal.next)
                     if(t->match.enabled)
                         matches_enabled++;
-                spinlock_unlock(&ap->_internal.spinlock);
+                rw_spinlock_write_unlock(&ap->_internal.rw_spinlock);
 
                 if(!matches_enabled) {
                     code = dyncfg_default_response(result, HTTP_RESP_BAD_REQUEST, "all rules in this alert are disabled, so enabling the alert has no effect");
@@ -797,7 +802,7 @@ static void health_dyncfg_register_prototype(RRD_ALERT_PROTOTYPE *ap) {
                ap->config.source_type, string2str(ap->config.source),
                DYNCFG_CMD_SCHEMA | DYNCFG_CMD_GET | DYNCFG_CMD_ENABLE | DYNCFG_CMD_DISABLE |
                    DYNCFG_CMD_UPDATE | DYNCFG_CMD_USERCONFIG |
-                   (ap->config.source_type == DYNCFG_SOURCE_TYPE_DYNCFG && !ap->_internal.is_on_disk ? DYNCFG_CMD_REMOVE : 0),
+                   (ap->config.source_type == DYNCFG_SOURCE_TYPE_DYNCFG /* && !ap->_internal.is_on_disk */ ? DYNCFG_CMD_REMOVE : 0),
                HTTP_ACCESS_NONE,
                HTTP_ACCESS_NONE,
                dyncfg_health_cb, NULL);

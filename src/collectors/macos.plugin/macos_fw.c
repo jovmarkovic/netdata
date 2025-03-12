@@ -27,10 +27,10 @@ int do_macos_iokit(int update_every, usec_t dt) {
     static int do_io = -1, do_space = -1, do_inodes = -1, do_bandwidth = -1;
 
     if (unlikely(do_io == -1)) {
-        do_io                   = config_get_boolean("plugin:macos:iokit", "disk i/o", 1);
-        do_space                = config_get_boolean("plugin:macos:sysctl", "space usage for all disks", 1);
-        do_inodes               = config_get_boolean("plugin:macos:sysctl", "inodes usage for all disks", 1);
-        do_bandwidth            = config_get_boolean("plugin:macos:sysctl", "bandwidth", 1);
+        do_io                   = inicfg_get_boolean(&netdata_config, "plugin:macos:iokit", "disk i/o", 1);
+        do_space                = inicfg_get_boolean(&netdata_config, "plugin:macos:sysctl", "space usage for all disks", 1);
+        do_inodes               = inicfg_get_boolean(&netdata_config, "plugin:macos:sysctl", "inodes usage for all disks", 1);
+        do_bandwidth            = inicfg_get_boolean(&netdata_config, "plugin:macos:sysctl", "bandwidth", 1);
     }
 
     RRDSET *st;
@@ -199,7 +199,6 @@ int do_macos_iokit(int update_every, usec_t dt) {
                                 , update_every
                                 , RRDSET_TYPE_LINE
                         );
-                        rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
 
                         rrddim_add(st, "reads", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
                         rrddim_add(st, "writes", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
@@ -235,7 +234,6 @@ int do_macos_iokit(int update_every, usec_t dt) {
                                 , update_every
                                 , RRDSET_TYPE_AREA
                         );
-                        rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
 
                         rrddim_add(st, "utilization", NULL, 1, 10000000, RRD_ALGORITHM_INCREMENTAL);
                     }
@@ -270,7 +268,6 @@ int do_macos_iokit(int update_every, usec_t dt) {
                                 , update_every
                                 , RRDSET_TYPE_LINE
                         );
-                        rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
 
                         rrddim_add(st, "reads", NULL, 1, 1000000, RRD_ALGORITHM_INCREMENTAL);
                         rrddim_add(st, "writes", NULL, -1, 1000000, RRD_ALGORITHM_INCREMENTAL);
@@ -302,7 +299,6 @@ int do_macos_iokit(int update_every, usec_t dt) {
                                     , update_every
                                     , RRDSET_TYPE_LINE
                             );
-                            rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
 
                             rrddim_add(st, "reads", NULL, 1, 1000000, RRD_ALGORITHM_ABSOLUTE);
                             rrddim_add(st, "writes", NULL, -1, 1000000, RRD_ALGORITHM_ABSOLUTE);
@@ -330,7 +326,6 @@ int do_macos_iokit(int update_every, usec_t dt) {
                                     , update_every
                                     , RRDSET_TYPE_AREA
                             );
-                            rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
 
                             rrddim_add(st, "reads", NULL, 1, 1024, RRD_ALGORITHM_ABSOLUTE);
                             rrddim_add(st, "writes", NULL, -1, 1024, RRD_ALGORITHM_ABSOLUTE);
@@ -358,7 +353,6 @@ int do_macos_iokit(int update_every, usec_t dt) {
                                     , update_every
                                     , RRDSET_TYPE_LINE
                             );
-                            rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
 
                             rrddim_add(st, "svctm", NULL, 1, 1000000, RRD_ALGORITHM_ABSOLUTE);
                         }
@@ -549,7 +543,6 @@ int do_macos_iokit(int update_every, usec_t dt) {
                             , update_every
                             , RRDSET_TYPE_LINE
                     );
-                    rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
 
                     rrddim_add(st, "received", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
                     rrddim_add(st, "sent", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
@@ -579,7 +572,6 @@ int do_macos_iokit(int update_every, usec_t dt) {
                             , update_every
                             , RRDSET_TYPE_LINE
                     );
-                    rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
 
                     rrddim_add(st, "inbound", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
                     rrddim_add(st, "outbound", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
@@ -605,7 +597,6 @@ int do_macos_iokit(int update_every, usec_t dt) {
                             , update_every
                             , RRDSET_TYPE_LINE
                     );
-                    rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
 
                     rrddim_add(st, "inbound", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
                 }
@@ -629,7 +620,6 @@ int do_macos_iokit(int update_every, usec_t dt) {
                             , update_every
                             , RRDSET_TYPE_LINE
                     );
-                    rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
 
                     rrddim_add(st, "frames", NULL, 1, 1, RRD_ALGORITHM_INCREMENTAL);
                     rrddim_add(st, "collisions", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);

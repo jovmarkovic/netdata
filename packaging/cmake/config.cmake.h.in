@@ -14,6 +14,10 @@
 #cmakedefine OS_MACOS
 #cmakedefine OS_WINDOWS
 
+// required compilation options
+
+#cmakedefine HAVE_FEXCEPTIONS
+
 // checked headers
 
 #cmakedefine HAVE_NETINET_IN_H
@@ -67,7 +71,18 @@
 #cmakedefine HAVE_GETPRIORITY
 #cmakedefine HAVE_SETENV
 #cmakedefine HAVE_DLSYM
+#cmakedefine HAVE_LIBCURL
+#cmakedefine HAVE_LIBICONV
 
+#cmakedefine HAVE_ARC4RANDOM_BUF
+#cmakedefine HAVE_ARC4RANDOM_UNIFORM
+#cmakedefine HAVE_RAND_S
+#cmakedefine HAVE_GETRANDOM
+#cmakedefine HAVE_SYSINFO
+#cmakedefine HAVE_TIMEGM
+#cmakedefine HAVE_TM_GMTOFF
+
+#cmakedefine HAVE_LIBUNWIND
 #cmakedefine HAVE_BACKTRACE
 #cmakedefine HAVE_CLOSE_RANGE
 #cmakedefine HAVE_SCHED_GETSCHEDULER
@@ -89,6 +104,9 @@
 #cmakedefine STRERROR_R_CHAR_P
 #cmakedefine HAVE_C__GENERIC
 #cmakedefine HAVE_C_MALLOPT
+#cmakedefine HAVE_C_MALLOC_TRIM
+#cmakedefine HAVE_C_MALLOC_INFO
+#cmakedefine HAVE_C_MALLINFO2
 #cmakedefine HAVE_SETNS
 #cmakedefine HAVE_STRNDUP
 #cmakedefine SSL_HAS_PENDING
@@ -100,17 +118,14 @@
 #cmakedefine HAVE_FUNC_ATTRIBUTE_NORETURN
 #cmakedefine HAVE_FUNC_ATTRIBUTE_RETURNS_NONNULL
 #cmakedefine HAVE_FUNC_ATTRIBUTE_WARN_UNUSED_RESULT
+#cmakedefine HAVE_JEMALLOC_ARENA_API
 
 // enabled features
 
-#cmakedefine ENABLE_OPENSSL
-#cmakedefine ENABLE_CLOUD
-#cmakedefine ENABLE_ACLK
 #cmakedefine ENABLE_ML
 #cmakedefine ENABLE_EXPORTING_MONGODB
 #cmakedefine ENABLE_H2O
 #cmakedefine ENABLE_DBENGINE
-#cmakedefine ENABLE_HTTPS
 #cmakedefine ENABLE_LZ4
 #cmakedefine ENABLE_ZSTD
 #cmakedefine ENABLE_BROTLI
@@ -131,6 +146,8 @@
 #cmakedefine ENABLE_PLUGIN_CUPS
 #cmakedefine ENABLE_PLUGIN_CGROUP_NETWORK
 #cmakedefine ENABLE_PLUGIN_EBPF
+#cmakedefine ENABLE_PLUGIN_SYSTEMD_JOURNAL
+#cmakedefine ENABLE_PLUGIN_NETWORK_VIEWER
 
 // enabled sentry
 
@@ -138,14 +155,17 @@
 #cmakedefine NETDATA_SENTRY_ENVIRONMENT "@NETDATA_SENTRY_ENVIRONMENT@"
 #cmakedefine NETDATA_SENTRY_DIST "@NETDATA_SENTRY_DIST@"
 #cmakedefine NETDATA_SENTRY_DSN "@NETDATA_SENTRY_DSN@"
+
 // enabled bundling
 
 #cmakedefine ENABLE_BUNDLED_JSONC
 #cmakedefine ENABLE_BUNDLED_YAML
 #cmakedefine ENABLE_BUNDLED_PROTOBUF
+#cmakedefine ENABLE_MIMALLOC
 
 // directory paths
 
+#define NETDATA_RUNTIME_PREFIX "@NETDATA_RUNTIME_PREFIX@"
 #cmakedefine CACHE_DIR "@CACHE_DIR@"
 #cmakedefine CONFIG_DIR "@CONFIG_DIR@"
 #cmakedefine LIBCONFIG_DIR "@LIBCONFIG_DIR@"
@@ -157,6 +177,10 @@
 // config command, user and version
 
 #cmakedefine CONFIGURE_COMMAND "@CONFIGURE_COMMAND@"
+
+#cmakedefine BUILD_INFO_CMAKE_CACHE_ARCHIVE_NAME "@BUILD_INFO_CMAKE_CACHE_ARCHIVE_NAME@"
+#cmakedefine BUILD_INFO_CMAKE_CACHE_ARCHIVE_PATH "@BUILD_INFO_CMAKE_CACHE_ARCHIVE_PATH@"
+
 #cmakedefine NETDATA_USER "@NETDATA_USER@"
 
 #define NETDATA_VERSION_MAJOR "@NETDATA_VERSION_MAJOR@"
@@ -172,6 +196,10 @@
 #cmakedefine HAVE_LIBYAML
 #cmakedefine HAVE_LIBMNL
 
+#cmakedefine HAVE_WEL
+#cmakedefine HAVE_ETW
+#cmakedefine RUN_UNDER_CLION
+
 // /* Enable GNU extensions on systems that have them.  */
 // #ifndef _GNU_SOURCE
 // # define _GNU_SOURCE 1
@@ -182,7 +210,6 @@
 // #cmakedefine ENABLE_PROMETHEUS_REMOTE_WRITE
 
 // /* NSA spy stuff */
-// #define ENABLE_HTTPS 1
 // #cmakedefine01 HAVE_X509_VERIFY_PARAM_set1_host
 
 #define HAVE_CRYPTO

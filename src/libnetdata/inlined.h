@@ -106,17 +106,6 @@ static inline uint64_t murmur64(uint64_t k) {
     return k;
 }
 
-static inline size_t indexing_partition(Word_t ptr, Word_t modulo) __attribute__((const));
-static inline size_t indexing_partition(Word_t ptr, Word_t modulo) {
-#ifdef ENV64BIT
-    uint64_t hash = murmur64(ptr);
-    return hash % modulo;
-#else
-    uint32_t hash = murmur32(ptr);
-    return hash % modulo;
-#endif
-}
-
 static inline unsigned int str2u(const char *s) {
     unsigned int n = 0;
 
@@ -362,7 +351,7 @@ static inline NETDATA_DOUBLE str2ndd(const char *src, char **endptr) {
     return sign * result;
 }
 
-static inline unsigned long long str2ull_encoded(const char *s) {
+static ALWAYS_INLINE unsigned long long str2ull_encoded(const char *s) {
     if(*s == IEEE754_UINT64_B64_PREFIX[0])
         return str2uint64_base64(s + sizeof(IEEE754_UINT64_B64_PREFIX) - 1, NULL);
 
@@ -372,14 +361,14 @@ static inline unsigned long long str2ull_encoded(const char *s) {
     return str2uint64_t(s, NULL);
 }
 
-static inline long long str2ll_encoded(const char *s) {
+static ALWAYS_INLINE long long str2ll_encoded(const char *s) {
     if(*s == '-')
         return -(long long) str2ull_encoded(&s[1]);
     else
         return (long long) str2ull_encoded(s);
 }
 
-static inline NETDATA_DOUBLE str2ndd_encoded(const char *src, char **endptr) {
+static ALWAYS_INLINE NETDATA_DOUBLE str2ndd_encoded(const char *src, char **endptr) {
     if (*src == IEEE754_DOUBLE_B64_PREFIX[0]) {
         // double parsing from base64
         uint64_t n = str2uint64_base64(src + sizeof(IEEE754_DOUBLE_B64_PREFIX) - 1, endptr);
@@ -506,6 +495,43 @@ static inline int read_txt_file(const char *filename, char *buffer, size_t size)
     return 0;
 }
 
+static inline bool read_txt_file_to_buffer(const char *filename, BUFFER *wb, size_t max_size) {
+    // Open the file
+    int fd = open(filename, O_RDONLY | O_CLOEXEC);
+    if (fd == -1)
+        return false;
+
+    // Get the file size
+    struct stat st;
+    if (fstat(fd, &st) == -1) {
+        close(fd);
+        return false;
+    }
+
+    size_t file_size = st.st_size;
+
+    // Check if the file size exceeds the maximum allowed size
+    if (file_size > max_size) {
+        close(fd);
+        return false; // File size too large
+    }
+
+    buffer_need_bytes(wb, file_size + 1);
+
+    // Read the file contents into the buffer
+    ssize_t r = read(fd, &wb->buffer[wb->len], file_size);
+    if (r != (ssize_t)file_size) {
+        close(fd);
+        return false; // Read error
+    }
+    wb->len = r;
+
+    // Close the file descriptor
+    close(fd);
+
+    return true; // Success
+}
+
 static inline int read_proc_cmdline(const char *filename, char *buffer, size_t size) {
     if (unlikely(!size)) return 3;
 
@@ -596,9 +622,14 @@ static inline char *strsep_skip_consecutive_separators(char **ptr, char *s) {
 
 // remove leading and trailing spaces; may return NULL
 static inline char *trim(char *s) {
+    char *buf = s;
+
     // skip leading spaces
     while (*s && isspace((uint8_t)*s)) s++;
-    if (!*s) return NULL;
+    if (!*s) {
+        *buf = '\0';
+        return NULL;
+    }
 
     // skip tailing spaces
     // this way is way faster. Writes only one NUL char.
@@ -609,7 +640,10 @@ static inline char *trim(char *s) {
         *++p = '\0';
     }
 
-    if (!*s) return NULL;
+    if (!*s) {
+        *buf = '\0';
+        return NULL;
+    }
 
     return s;
 }

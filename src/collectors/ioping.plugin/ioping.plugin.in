@@ -1,10 +1,5 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-
-# netdata
-# real-time performance and health monitoring, done right!
-# (C) 2017 Costa Tsaousis <costa@tsaousis.gr>
-# GPL v3+
 #
 # This plugin requires a latest version of ioping.
 # You can compile it from source, by running me with option: install
@@ -154,13 +149,13 @@ log() {
 
   [[ -n "$level" && -n "$LOG_LEVEL" && "$level" -gt "$LOG_LEVEL" ]] && return
 
-  systemd-cat-native --log-as-netdata --newline="--NEWLINE--" <<EOFLOG
+  systemd-cat-native --log-as-netdata <<EOFLOG
 INVOCATION_ID=${NETDATA_INVOCATION_ID}
 SYSLOG_IDENTIFIER=${PROGRAM_NAME}
 PRIORITY=${level}
 THREAD_TAG=ioping.plugin
 ND_LOG_SOURCE=collector
-MESSAGE=${MODULE_NAME}: ${*//\\n/--NEWLINE--}
+MESSAGE=${MODULE_NAME}: ${*//$'\n'/\\n}
 
 EOFLOG
   # AN EMPTY LINE IS NEEDED ABOVE

@@ -1,53 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "web/api/web_api_v1.h"
-#include "database/storage_engine.h"
+#include "database/storage-engine.h"
 
 void rrd_stats_api_v1_chart(RRDSET *st, BUFFER *wb)
 {
     buffer_json_initialize(wb, "\"", "\"", 0, true, BUFFER_JSON_OPTIONS_DEFAULT);
     rrdset2json(st, wb, NULL, NULL);
     buffer_json_finalize(wb);
-}
-
-const char *rrdr_format_to_string(DATASOURCE_FORMAT format)  {
-    switch(format) {
-        case DATASOURCE_JSON:
-            return DATASOURCE_FORMAT_JSON;
-
-        case DATASOURCE_JSON2:
-            return DATASOURCE_FORMAT_JSON2;
-
-        case DATASOURCE_DATATABLE_JSON:
-            return DATASOURCE_FORMAT_DATATABLE_JSON;
-
-        case DATASOURCE_DATATABLE_JSONP:
-            return DATASOURCE_FORMAT_DATATABLE_JSONP;
-
-        case DATASOURCE_JSONP:
-            return DATASOURCE_FORMAT_JSONP;
-
-        case DATASOURCE_SSV:
-            return DATASOURCE_FORMAT_SSV;
-
-        case DATASOURCE_CSV:
-            return DATASOURCE_FORMAT_CSV;
-
-        case DATASOURCE_TSV:
-            return DATASOURCE_FORMAT_TSV;
-
-        case DATASOURCE_HTML:
-            return DATASOURCE_FORMAT_HTML;
-
-        case DATASOURCE_JS_ARRAY:
-            return DATASOURCE_FORMAT_JS_ARRAY;
-
-        case DATASOURCE_SSV_COMMA:
-            return DATASOURCE_FORMAT_SSV_COMMA;
-
-        default:
-            return "unknown";
-    }
 }
 
 int rrdset2value_api_v1(
@@ -103,7 +63,7 @@ int rrdset2value_api_v1(
         *db_points_read += r->stats.db_points_read;
 
     if(db_points_per_tier) {
-        for(size_t t = 0; t < storage_tiers ;t++)
+        for(size_t t = 0; t < nd_profile.storage_tiers;t++)
             db_points_per_tier[t] += r->internal.qt->db.tiers[t].points;
     }
 
@@ -164,7 +124,9 @@ int data_query_execute(ONEWAYALLOC *owa, BUFFER *wb, QUERY_TARGET *qt, time_t *l
         wrapper_end = rrdr_json_wrapper_end2;
     }
 
+    stream_control_user_data_query_started();
     RRDR *r = rrd2rrdr(owa, qt);
+    stream_control_user_data_query_finished();
 
     if(!r) {
         buffer_strcat(wb, "Cannot generate output with these parameters on this chart.");

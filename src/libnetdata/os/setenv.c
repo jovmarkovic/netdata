@@ -1,13 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include "config.h"
+#include "libnetdata/libnetdata.h"
 
 #ifndef HAVE_SETENV
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
 int os_setenv(const char *name, const char *value, int overwrite) {
     char *env_var;
     int result;
@@ -28,3 +23,21 @@ int os_setenv(const char *name, const char *value, int overwrite) {
 }
 
 #endif
+
+void nd_setenv(const char *name, const char *value, int overwrite) {
+#if defined(OS_WINDOWS)
+    if(overwrite)
+        SetEnvironmentVariable(name, value);
+    else {
+        char buf[1024];
+        if(GetEnvironmentVariable(name, buf, sizeof(buf)) == 0)
+            SetEnvironmentVariable(name, value);
+    }
+#endif
+
+#ifdef HAVE_SETENV
+    setenv(name, value, overwrite);
+#else
+    os_setenv(name, value, overwite);
+#endif
+}

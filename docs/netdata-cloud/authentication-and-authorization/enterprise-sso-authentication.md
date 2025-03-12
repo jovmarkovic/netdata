@@ -1,36 +1,48 @@
 # Enterprise SSO Authentication
 
-Netdata provides you with means to streamline and control how your team connects and authenticates to Netdata Cloud. We provide
- diferent Single Sign-On (SSO) integrations that allow you to connect with the tool that your organization is using to manage your 
- user accounts.
+Enterprise Single Sign-On (SSO) integration enables organizations to manage Netdata Cloud access through their existing identity management solution. This simplifies user authentication and improves security through centralized access control.
 
- > ❗ This feature focus is on the Authentication flow, it doesn't support the Authorization with managing Users and Roles.
+> **Important**: Enterprise SSO handles authentication only. User and role management must be configured separately within Netdata Cloud.
 
+## Prerequisites
 
-## How to set it up?
+| Requirement    | Details                                                                                                                                                         |
+|----------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| SSO Provider   | Must be [supported by Netdata](https://learn.netdata.cloud/docs/netdata-cloud/authentication-&-authorization/cloud-authentication-&-authorization-integrations) |
+| Account Status | Active Netdata Cloud account                                                                                                                                    |
+| Subscription   | Business plan or higher                                                                                                                                         |
+| Access Level   | Space Administrator permissions                                                                                                                                 |
 
-If you want to setup your Netdata Space to allow user Authentication through an Enterprise SSO tool you need to:
-* Confirm the integration to the tool you want is available ([Authentication integations](https://learn.netdata.cloud/docs/netdata-cloud/authentication-&-authorization/cloud-authentication-&-authorization-integrations))
-* Have a Netdata Cloud account
-* Have Access to the Space as an administrator
-* Your Space needs to be on the Business plan or higher
+## Setup
 
-Once you ensure the above prerequisites you need to:
-1. Click on the Space settings cog (located above your profile icon)
-2. Click on the Authentication tab
-3. Select the card for the integration you are looking for, click on Configure
-4. Fill the required attributes need to establish the integration with the tool
+**Netdata Cloud Configuration**:
 
+To configure SSO in your Netdata Cloud space:
 
-## How to authenticate to Netdata?
+1. Navigate to Space Settings (gear icon above profile)
+2. Select User Management → Authentication & Authorization
+3. Locate your desired SSO integration
+4. Click "Configure" and fill in the required integration attributes
 
-### From Netdata Sign-up page
+**Domain Verification**:
 
-If you're starting your flow from Netdata sign-in page you need to:
-1. Click on the link `Sign-in with an Enterprise Signle Sign-On (SSO)`
-2. Enter your email address 
-3. Go to your mailbox and check the `Sign In to Nedata` email that you have received
-4. Click on the **Sign In** button
+Domain verification is required to establish secure SSO connectivity:
 
-Note: If you're not authenticated on the Enterprise SSO tool you'll be prompted to authenticate there
-first before being allowed to proceed to Netdata Cloud.
+1. Access the DNS TXT record:
+    - Go to Space Settings → User Management → Authentication & Authorization
+    - Click "DNS TXT record" button to reveal verification code
+2. Add DNS Record:
+    - Log into your domain provider's DNS management
+    - Create a new TXT record with these specifications:
+
+      | Field                    | Value                                        |
+      |--------------------------|----------------------------------------------|
+      | Value/Answer/Description | `"netdata-verification=[VERIFICATION CODE]"` |
+      | Name/Host/Alias          | Leave blank or use @ for subdomain           |
+      | TTL (Time to Live)       | 86400 (or use provider default)              |
+
+**SSO Provider Configuration**: Consult your provider's documentation for detailed instructions.
+
+## How to Authenticate
+
+Click on the link `Sign-in with an Enterprise Single Sign-On (SSO)` and follow the instructions. If you're not authenticated on the Enterprise SSO tool, you'll be prompted to authenticate there first before being allowed to proceed to Netdata Cloud.

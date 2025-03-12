@@ -3,7 +3,7 @@
 #ifndef NETDATA_EXPORTING_ENGINE_H
 #define NETDATA_EXPORTING_ENGINE_H 1
 
-#include "daemon/common.h"
+#include "database/rrd.h"
 #include <uv.h>
 
 #define exporter_get(section, name, value) expconfig_get(&exporting_config, section, name, value)
@@ -124,9 +124,7 @@ struct simple_connector_data {
     struct simple_connector_buffer *first_buffer;
     struct simple_connector_buffer *last_buffer;
 
-#ifdef ENABLE_HTTPS
     NETDATA_SSL ssl;
-#endif
 };
 
 struct prometheus_remote_write_specific_config {

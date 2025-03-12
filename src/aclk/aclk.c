@@ -2,9 +2,8 @@
 
 #include "aclk.h"
 
-#ifdef ENABLE_ACLK
-#include "aclk_stats.h"
 #include "mqtt_websockets/mqtt_wss_client.h"
+#include "mqtt_websockets/aclk_mqtt_workers.h"
 #include "aclk_otp.h"
 #include "aclk_tx_msgs.h"
 #include "aclk_query.h"
@@ -14,7 +13,6 @@
 #include "https_client.h"
 #include "schema-wrappers/schema_wrappers.h"
 #include "aclk_capas.h"
-
 #include "aclk_proxy.h"
 
 #ifdef ACLK_LOG_CONVERSATION_DIR
@@ -23,20 +21,43 @@
 #include <fcntl.h>
 #endif
 
-#define ACLK_STABLE_TIMEOUT 3 // Minimum delay to mark AGENT as stable
-
-#endif /* ENABLE_ACLK */
-
 int aclk_pubacks_per_conn = 0; // How many PubAcks we got since MQTT conn est.
 int aclk_rcvd_cloud_msgs = 0;
 int aclk_connection_counter = 0;
-int disconnect_req = 0;
 
-int aclk_connected = 0;
+mqtt_wss_client mqttwss_client;
+
+static bool aclk_connected = false;
+static inline void aclk_set_connected(void) {
+    __atomic_store_n(&aclk_connected, true, __ATOMIC_RELAXED);
+}
+static inline void aclk_set_disconnected(void) {
+    __atomic_store_n(&aclk_connected, false, __ATOMIC_RELAXED);
+
+    if(mqttwss_client)
+        mqtt_wss_reset_stats(mqttwss_client);
+}
+
+inline bool aclk_online(void) {
+    return __atomic_load_n(&aclk_connected, __ATOMIC_RELAXED);
+}
+
+bool aclk_online_for_contexts(void) {
+    return aclk_online() && aclk_query_scope_has(HTTP_ACL_METRICS);
+}
+
+bool aclk_online_for_alerts(void) {
+    return aclk_online() && aclk_query_scope_has(HTTP_ACL_ALERTS);
+}
+
+bool aclk_online_for_nodes(void) {
+    return aclk_online() && aclk_query_scope_has(HTTP_ACL_NODES);
+}
+
 int aclk_ctx_based = 0;
 int aclk_disable_runtime = 0;
-int aclk_stats_enabled;
-int aclk_kill_link = 0;
+
+ACLK_DISCONNECT_ACTION disconnect_req = ACLK_NO_DISCONNECT;
 
 usec_t aclk_session_us = 0;
 time_t aclk_session_sec = 0;
@@ -49,12 +70,12 @@ float last_backoff_value = 0;
 
 time_t aclk_block_until = 0;
 
-#ifdef ENABLE_ACLK
-mqtt_wss_client mqttwss_client;
-
-netdata_mutex_t aclk_shared_state_mutex = NETDATA_MUTEX_INITIALIZER;
-#define ACLK_SHARED_STATE_LOCK netdata_mutex_lock(&aclk_shared_state_mutex)
-#define ACLK_SHARED_STATE_UNLOCK netdata_mutex_unlock(&aclk_shared_state_mutex)
+struct mqtt_wss_stats aclk_statistics(void) {
+    if(mqttwss_client)
+        return mqtt_wss_get_stats(mqttwss_client);
+    else
+        return (struct mqtt_wss_stats) { 0 };
+}
 
 struct aclk_shared_state aclk_shared_state = {
     .mqtt_shutdown_msg_id = -1,
@@ -72,7 +93,7 @@ static void aclk_ssl_keylog_cb(const SSL *ssl, const char *line)
     if (!ssl_log_file)
         ssl_log_file = fopen(ssl_log_filename, "a");
     if (!ssl_log_file) {
-        netdata_log_error("Couldn't open ssl_log file (%s) for append.", ssl_log_filename);
+        netdata_log_error("ACLK: Couldn't open ssl_log file (%s) for append.", ssl_log_filename);
         return;
     }
     fputs(line, ssl_log_file);
@@ -107,14 +128,14 @@ static int load_private_key()
     long bytes_read;
     char *private_key = read_by_filename(filename, &bytes_read);
     if (!private_key) {
-        netdata_log_error("Claimed agent cannot establish ACLK - unable to load private key '%s' failed.", filename);
+        netdata_log_error("ACLK: Claimed agent cannot establish ACLK - unable to load private key '%s' failed.", filename);
         return 1;
     }
     netdata_log_debug(D_ACLK, "Claimed agent loaded private key len=%ld bytes", bytes_read);
 
     BIO *key_bio = BIO_new_mem_buf(private_key, -1);
     if (key_bio==NULL) {
-        netdata_log_error("Claimed agent cannot establish ACLK - failed to create BIO for key");
+        netdata_log_error("ACLK: Claimed agent cannot establish ACLK - failed to create BIO for key");
         goto biofailed;
     }
 
@@ -125,13 +146,13 @@ static int load_private_key()
                                               NULL, NULL);
 
     if (!aclk_dctx) {
-        netdata_log_error("Loading private key (from claiming) failed - no OpenSSL Decoders found");
+        netdata_log_error("ACLK: Loading private key (from claiming) failed - no OpenSSL Decoders found");
         goto biofailed;
     }
 
     // this is necesseary to avoid RSA key with wrong size
     if (!OSSL_DECODER_from_bio(aclk_dctx, key_bio)) {
-        netdata_log_error("Decoding private key (from claiming) failed - invalid format.");
+        netdata_log_error("ACLK: Decoding private key (from claiming) failed - invalid format.");
         goto biofailed;
     }
 #else
@@ -145,24 +166,11 @@ static int load_private_key()
     }
     char err[512];
     ERR_error_string_n(ERR_get_error(), err, sizeof(err));
-    netdata_log_error("Claimed agent cannot establish ACLK - cannot create private key: %s", err);
+    netdata_log_error("ACLK: Claimed agent cannot establish ACLK - cannot create private key: %s", err);
 
 biofailed:
     freez(private_key);
     return 1;
-}
-
-static int wait_till_cloud_enabled()
-{
-    nd_log(NDLS_DAEMON, NDLP_INFO,
-           "Waiting for Cloud to be enabled");
-
-    while (!netdata_cloud_enabled) {
-        sleep_usec(USEC_PER_SEC * 1);
-        if (!service_running(SERVICE_ACLK))
-            return 1;
-    }
-    return 0;
 }
 
 /**
@@ -174,15 +182,13 @@ static int wait_till_cloud_enabled()
  */
 static int wait_till_agent_claimed(void)
 {
-    //TODO prevent malloc and freez
-    char *agent_id = get_agent_claimid();
-    while (likely(!agent_id)) {
+    ND_UUID uuid = claim_id_get_uuid();
+    while (likely(UUIDiszero(uuid))) {
         sleep_usec(USEC_PER_SEC * 1);
         if (!service_running(SERVICE_ACLK))
             return 1;
-        agent_id = get_agent_claimid();
+        uuid = claim_id_get_uuid();
     }
-    freez(agent_id);
     return 0;
 }
 
@@ -193,7 +199,7 @@ static int wait_till_agent_claimed(void)
  * @param aclk_hostname points to location where string pointer to hostname will be set
  * @param aclk_port port to int where port will be saved
  * 
- * @return If non 0 returned irrecoverable error happened (or netdata_exit) and ACLK should be terminated
+ * @return If non 0 returned irrecoverable error happened (or exit_initiated) and ACLK should be terminated
  */
 static int wait_till_agent_claim_ready()
 {
@@ -204,9 +210,9 @@ static int wait_till_agent_claim_ready()
 
         // The NULL return means the value was never initialised, but this value has been initialized in post_conf_load.
         // We trap the impossible NULL here to keep the linter happy without using a fatal() in the code.
-        char *cloud_base_url = appconfig_get(&cloud_config, CONFIG_SECTION_GLOBAL, "cloud base url", NULL);
+        const char *cloud_base_url = cloud_config_url_get();
         if (cloud_base_url == NULL) {
-            netdata_log_error("Do not move the cloud base url out of post_conf_load!!");
+            netdata_log_error("ACLK: Do not move the \"url\" out of netdata_conf_section_global_run_as_user!!");
             return 1;
         }
 
@@ -214,7 +220,7 @@ static int wait_till_agent_claim_ready()
         // TODO make it without malloc/free
         memset(&url, 0, sizeof(url_t));
         if (url_parse(cloud_base_url, &url)) {
-            netdata_log_error("Agent is claimed but the URL in configuration key \"cloud base url\" is invalid, please fix");
+            netdata_log_error("ACLK: Agent is claimed but the URL in configuration key \"url\" is invalid, please fix");
             url_t_destroy(&url);
             sleep(5);
             continue;
@@ -230,30 +236,6 @@ static int wait_till_agent_claim_ready()
     return 1;
 }
 
-void aclk_mqtt_wss_log_cb(mqtt_wss_log_type_t log_type, const char* str)
-{
-    switch(log_type) {
-        case MQTT_WSS_LOG_ERROR:
-        case MQTT_WSS_LOG_FATAL:
-            nd_log(NDLS_DAEMON, NDLP_ERR, "%s", str);
-            return;
-
-        case MQTT_WSS_LOG_WARN:
-            nd_log(NDLS_DAEMON, NDLP_WARNING, "%s", str);
-            return;
-
-        case MQTT_WSS_LOG_INFO:
-            nd_log(NDLS_DAEMON, NDLP_INFO, "%s", str);
-            return;
-
-        case MQTT_WSS_LOG_DEBUG:
-            return;
-
-        default:
-            nd_log(NDLS_DAEMON, NDLP_ERR, "Unknown log type from mqtt_wss");
-    }
-}
-
 static void msg_callback(const char *topic, const void *msg, size_t msglen, int qos)
 {
     UNUSED(qos);
@@ -262,7 +244,7 @@ static void msg_callback(const char *topic, const void *msg, size_t msglen, int 
     netdata_log_debug(D_ACLK, "Got Message From Broker Topic \"%s\" QOS %d", topic, qos);
 
     if (aclk_shared_state.mqtt_shutdown_msg_id > 0) {
-        netdata_log_error("Link is shutting down. Ignoring incoming message.");
+        netdata_log_error("ACLK: Link is shutting down. Ignoring incoming message.");
         return;
     }
 
@@ -284,7 +266,7 @@ static void msg_callback(const char *topic, const void *msg, size_t msglen, int 
     snprintf(filename, FN_MAX_LEN, ACLK_LOG_CONVERSATION_DIR "/%010d-rx-%s.bin", ACLK_GET_CONV_LOG_NEXT(), msgtype);
     logfd = open(filename, O_CREAT | O_TRUNC | O_WRONLY, S_IRUSR | S_IWUSR );
     if(logfd < 0)
-        netdata_log_error("Error opening ACLK Conversation logfile \"%s\" for RX message.", filename);
+        netdata_log_error("ACLK: Error opening ACLK Conversation logfile \"%s\" for RX message.", filename);
     write(logfd, msg, msglen);
     close(logfd);
 #endif
@@ -299,9 +281,9 @@ static void puback_callback(uint16_t packet_id)
         aclk_tbeb_reset();
     }
 
-#ifdef NETDATA_INTERNAL_CHECKS
-    aclk_stats_msg_puback(packet_id);
-#endif
+//#ifdef NETDATA_INTERNAL_CHECKS
+//    aclk_stats_msg_puback(packet_id);
+//#endif
 
     if (aclk_shared_state.mqtt_shutdown_msg_id == (int)packet_id) {
         nd_log(NDLS_DAEMON, NDLP_DEBUG,
@@ -311,21 +293,9 @@ static void puback_callback(uint16_t packet_id)
     }
 }
 
-static int read_query_thread_count()
-{
-    int threads = MIN(get_netdata_cpus()/2, 6);
-    threads = MAX(threads, 2);
-    threads = config_get_number(CONFIG_SECTION_CLOUD, "query thread count", threads);
-    if(threads < 1) {
-        netdata_log_error("You need at least one query thread. Overriding configured setting of \"%d\"", threads);
-        threads = 1;
-        config_set_number(CONFIG_SECTION_CLOUD, "query thread count", threads);
-    }
-    return threads;
-}
-
 void aclk_graceful_disconnect(mqtt_wss_client client);
 
+bool schedule_node_update = false;
 /* Keeps connection alive and handles all network communications.
  * Returns on error or when netdata is shutting down.
  * @param client instance of mqtt_wss_client
@@ -334,38 +304,63 @@ void aclk_graceful_disconnect(mqtt_wss_client client);
  */
 static int handle_connection(mqtt_wss_client client)
 {
-    time_t last_periodic_query_wakeup = now_monotonic_sec();
     while (service_running(SERVICE_ACLK)) {
         // timeout 1000 to check at least once a second
-        // for netdata_exit
-        if (mqtt_wss_service(client, 1000) < 0){
+        // for exit_initiated
+        int rc = mqtt_wss_service(client, 1000);
+        if (rc < 0){
+            worker_is_busy(WORKER_ACLK_DISCONNECTED);
             error_report("Connection Error or Dropped");
+
+            if(rc == MQTT_WSS_ERR_REMOTE_CLOSED)
+                aclk_status_set(ACLK_STATUS_OFFLINE_CLOSED_BY_REMOTE);
+            else if(rc == MQTT_WSS_ERR_PROTO_MQTT)
+                aclk_status_set(ACLK_STATUS_OFFLINE_MQTT_PROTOCOL_ERROR);
+            else if(rc == MQTT_WSS_ERR_PROTO_WS)
+                aclk_status_set(ACLK_STATUS_OFFLINE_WS_PROTOCOL_ERROR);
+            else if(rc == MQTT_WSS_ERR_MSG_TOO_BIG)
+                aclk_status_set(ACLK_STATUS_OFFLINE_MESSAGE_TOO_BIG);
+            else if(rc == MQTT_WSS_ERR_POLL_FAILED)
+                aclk_status_set(ACLK_STATUS_OFFLINE_POLL_ERROR);
+            else /* if(rc == MQTT_WSS_ERR_CONN_DROP) */
+                aclk_status_set(ACLK_STATUS_OFFLINE_SOCKET_ERROR);
+
             return 1;
         }
 
-        if (disconnect_req || aclk_kill_link) {
-            nd_log(NDLS_DAEMON, NDLP_NOTICE,
-                   "Going to restart connection due to disconnect_req=%s (cloud req), aclk_kill_link=%s (reclaim)",
-                   disconnect_req ? "true" : "false",
-                   aclk_kill_link ? "true" : "false");
+        if (disconnect_req != ACLK_NO_DISCONNECT) {
+            const char *reason;
+            switch (disconnect_req) {
+                case ACLK_CLOUD_DISCONNECT:
+                    worker_is_busy(WORKER_ACLK_CMD_DISCONNECT);
+                    reason = "cloud request";
+                    aclk_status_set(ACLK_STATUS_OFFLINE_CLOUD_REQUESTED_DISCONNECT);
+                    break;
+                case ACLK_PING_TIMEOUT:
+                    worker_is_busy(WORKER_ACLK_CMD_TIMEOUT);
+                    reason = "ping timeout";
+                    schedule_node_update = true;
+                    aclk_status_set(ACLK_STATUS_OFFLINE_PING_TIMEOUT);
+                    break;
+                case ACLK_RELOAD_CONF:
+                    worker_is_busy(WORKER_ACLK_CMD_RELOAD_CONF);
+                    reason = "reclaim";
+                    aclk_status_set(ACLK_STATUS_OFFLINE_RELOADING_CONFIG);
+                    break;
+                default:
+                    worker_is_busy(WORKER_ACLK_CMD_UNKNOWN);
+                    reason = "unknown";
+                    aclk_status_set(ACLK_STATUS_OFFLINE);
+                    break;
+            }
 
-            disconnect_req = 0;
-            aclk_kill_link = 0;
+            nd_log(NDLS_DAEMON, NDLP_NOTICE, "Going to restart connection due to \"%s\"", reason);
+
+            disconnect_req = ACLK_NO_DISCONNECT;
             aclk_graceful_disconnect(client);
-            aclk_queue_unlock();
             aclk_shared_state.mqtt_shutdown_msg_id = -1;
             aclk_shared_state.mqtt_shutdown_msg_rcvd = 0;
             return 1;
-        }
-
-        // mqtt_wss_service will return faster than in one second
-        // if there is enough work to do
-        time_t now = now_monotonic_sec();
-        if (last_periodic_query_wakeup < now) {
-            // wake up at least one Query Thread at least
-            // once per second
-            last_periodic_query_wakeup = now;
-            QUERY_THREAD_WAKEUP;
         }
     }
     return 0;
@@ -376,23 +371,22 @@ static inline void mqtt_connected_actions(mqtt_wss_client client)
     char *topic = (char*)aclk_get_topic(ACLK_TOPICID_COMMAND);
 
     if (!topic)
-        netdata_log_error("Unable to fetch topic for COMMAND (to subscribe)");
+        netdata_log_error("ACLK: Unable to fetch topic for COMMAND (to subscribe)");
     else
         mqtt_wss_subscribe(client, topic, 1);
 
     topic = (char*)aclk_get_topic(ACLK_TOPICID_CMD_NG_V1);
     if (!topic)
-        netdata_log_error("Unable to fetch topic for protobuf COMMAND (to subscribe)");
+        netdata_log_error("ACLK: Unable to fetch topic for protobuf COMMAND (to subscribe)");
     else
         mqtt_wss_subscribe(client, topic, 1);
 
-    aclk_stats_upd_online(1);
-    aclk_connected = 1;
+    aclk_set_connected();
     aclk_pubacks_per_conn = 0;
     aclk_rcvd_cloud_msgs = 0;
     aclk_connection_counter++;
 
-    aclk_topic_cache_iter_t iter = ACLK_TOPIC_CACHE_ITER_T_INITIALIZER;
+    size_t iter = 0;
     while ((topic = (char*)aclk_topic_cache_iterate(&iter)) != NULL)
         mqtt_wss_set_topic_alias(client, topic);
 
@@ -404,15 +398,12 @@ void aclk_graceful_disconnect(mqtt_wss_client client)
     nd_log(NDLS_DAEMON, NDLP_DEBUG,
            "Preparing to gracefully shutdown ACLK connection");
 
-    aclk_queue_lock();
-    aclk_queue_flush();
-
     aclk_shared_state.mqtt_shutdown_msg_id = aclk_send_agent_connection_update(client, 0);
 
     time_t t = now_monotonic_sec();
     while (!mqtt_wss_service(client, 100)) {
         if (now_monotonic_sec() - t >= 2) {
-            netdata_log_error("Wasn't able to gracefully shutdown ACLK in time!");
+            netdata_log_error("ACLK: Wasn't able to gracefully shutdown ACLK in time!");
             break;
         }
         if (aclk_shared_state.mqtt_shutdown_msg_rcvd) {
@@ -425,9 +416,8 @@ void aclk_graceful_disconnect(mqtt_wss_client client)
     nd_log(NDLS_DAEMON, NDLP_WARNING, "ACLK link is down");
     nd_log(NDLS_ACCESS, NDLP_WARNING, "ACLK DISCONNECTED");
 
-    aclk_stats_upd_online(0);
     last_disconnect_time = now_realtime_sec();
-    aclk_connected = 0;
+    aclk_set_disconnected();
 
     nd_log(NDLS_DAEMON, NDLP_DEBUG,
            "Attempting to gracefully shutdown the MQTT/WSS connection");
@@ -462,9 +452,9 @@ static unsigned long aclk_reconnect_delay() {
     return aclk_tbeb_delay(0, aclk_env->backoff.base, aclk_env->backoff.min_s, aclk_env->backoff.max_s);
 }
 
-/* Block till aclk_reconnect_delay is satisfied or netdata_exit is signalled
+/* Block till aclk_reconnect_delay is satisfied or exit_initiated is signalled
  * @return 0 - Go ahead and connect (delay expired)
- *         1 - netdata_exit
+ *         1 - exit_initiated
  */
 #define NETDATA_EXIT_POLL_MS (MSEC_PER_SEC/4)
 static int aclk_block_till_recon_allowed() {
@@ -476,7 +466,8 @@ static int aclk_block_till_recon_allowed() {
     nd_log(NDLS_DAEMON, NDLP_DEBUG,
            "Wait before attempting to reconnect in %.3f seconds", recon_delay / (float)MSEC_PER_SEC);
 
-    // we want to wake up from time to time to check netdata_exit
+    // we want to wake up from time to time to check exit_initiated
+    worker_is_busy(WORKER_ACLK_WAITING_TO_CONNECT);
     while (recon_delay)
     {
         if (!service_running(SERVICE_ACLK))
@@ -489,6 +480,8 @@ static int aclk_block_till_recon_allowed() {
         sleep_usec(recon_delay * USEC_PER_MS);
         recon_delay = 0;
     }
+
+    worker_is_busy(WORKER_ACLK_CONNECT);
     return !service_running(SERVICE_ACLK);
 }
 
@@ -509,70 +502,98 @@ static int aclk_get_transport_idx(aclk_env_t *env) {
 }
 #endif
 
-ACLK_STATUS aclk_status = ACLK_STATUS_NONE;
+ACLK_STATUS aclk_status = ACLK_STATUS_OFFLINE;
 
 const char *aclk_status_to_string(void) {
+    if(aclk_status == ACLK_STATUS_CONNECTED)
+        return "connected";
+
+    if((int)aclk_status < (int)ND_SOCK_ERR_MAX)
+        return ND_SOCK_ERROR_2str((ND_SOCK_ERROR)aclk_status);
+
+    if((int)aclk_status < (int)HTTPS_CLIENT_RESP_MAX)
+        return https_client_resp_t_2str((https_client_resp_t)aclk_status);
+
     switch(aclk_status) {
         case ACLK_STATUS_CONNECTED:
             return "connected";
 
-        case ACLK_STATUS_NONE:
-            return "none";
+        case ACLK_STATUS_OFFLINE:
+            return "offline";
 
         case ACLK_STATUS_DISABLED:
             return "disabled";
 
-        case ACLK_STATUS_NO_CLOUD_URL:
-            return "no_cloud_url";
+        case ACLK_STATUS_CANT_CONNECT_NO_CLOUD_URL:
+            return "configuration error, no cloud url";
 
-        case ACLK_STATUS_INVALID_CLOUD_URL:
-            return "invalid_cloud_url";
-
-        case ACLK_STATUS_NOT_CLAIMED:
-            return "not_claimed";
-
-        case ACLK_STATUS_ENV_ENDPOINT_UNREACHABLE:
-            return "env_endpoint_unreachable";
-
-        case ACLK_STATUS_ENV_RESPONSE_NOT_200:
-            return "env_response_not_200";
-
-        case ACLK_STATUS_ENV_RESPONSE_EMPTY:
-            return "env_response_empty";
-
-        case ACLK_STATUS_ENV_RESPONSE_NOT_JSON:
-            return "env_response_not_json";
-
-        case ACLK_STATUS_ENV_FAILED:
-            return "env_failed";
+        case ACLK_STATUS_CANT_CONNECT_INVALID_CLOUD_URL:
+            return "configuration error, invalid cloud url";
 
         case ACLK_STATUS_BLOCKED:
-            return "blocked";
+            return "agent is blocked";
 
         case ACLK_STATUS_NO_OLD_PROTOCOL:
-            return "no_old_protocol";
+            return "can't connect, old protocol not supported";
 
         case ACLK_STATUS_NO_PROTOCOL_CAPABILITY:
-            return "no_protocol_capability";
+            return "can't connect, protocol capability not supported";
 
         case ACLK_STATUS_INVALID_ENV_AUTH_URL:
-            return "invalid_env_auth_url";
+            return "can't connect, invalid /env auth url";
 
         case ACLK_STATUS_INVALID_ENV_TRANSPORT_IDX:
-            return "invalid_env_transport_idx";
+            return "can't connect, invalid /env transport idx";
 
         case ACLK_STATUS_INVALID_ENV_TRANSPORT_URL:
-            return "invalid_env_transport_url";
-
-        case ACLK_STATUS_INVALID_OTP:
-            return "invalid_otp";
+            return "can't connect, invalid /env transport URL";
 
         case ACLK_STATUS_NO_LWT_TOPIC:
-            return "no_lwt_topic";
+            return "can't connect, no LWT topic";
+
+        case ACLK_STATUS_OFFLINE_CLOUD_REQUESTED_DISCONNECT:
+            return "disconnected, due to remote request";
+
+        case ACLK_STATUS_OFFLINE_PING_TIMEOUT:
+            return "disconnected, ping timed out";
+
+        case ACLK_STATUS_OFFLINE_RELOADING_CONFIG:
+            return "disconnected, to reload config";
+
+        case ACLK_STATUS_OFFLINE_POLL_ERROR:
+            return "disconnected, poll() failed";
+
+        case ACLK_STATUS_OFFLINE_CLOSED_BY_REMOTE:
+            return "disconnected, closed by remote end";
+
+        case ACLK_STATUS_OFFLINE_SOCKET_ERROR:
+            return "disconnected, socket error";
+
+        case ACLK_STATUS_OFFLINE_MQTT_PROTOCOL_ERROR:
+            return "disconnected, MQTT protocol error";
+
+        case ACLK_STATUS_OFFLINE_WS_PROTOCOL_ERROR:
+            return "disconnected, WebSockets protocol error";
+
+        case ACLK_STATUS_OFFLINE_MESSAGE_TOO_BIG:
+            return "disconnected, message too big";
 
         default:
-            return "unknown";
+            return "unknown status";
     }
+}
+
+void aclk_status_set(ACLK_STATUS status) {
+    aclk_status = status;
+
+    ND_LOG_STACK lgs[] = {
+        ND_LOG_FIELD_UUID(NDF_MESSAGE_ID, &aclk_connection_msgid),
+        ND_LOG_FIELD_END(),
+    };
+    ND_LOG_STACK_PUSH(lgs);
+
+    nd_log(NDLS_DAEMON, status == ACLK_STATUS_CONNECTED ? NDLP_INFO : NDLP_ERR,
+           "Netdata Cloud, ACLK connection status: %s", aclk_status_to_string());
 }
 
 const char *aclk_cloud_base_url = NULL;
@@ -581,17 +602,12 @@ const char *aclk_cloud_base_url = NULL;
  * @param client instance of mqtt_wss_client
  * @return  0 - Successful Connection,
  *          <0 - Irrecoverable Error -> Kill ACLK,
- *          >0 - netdata_exit
+ *          >0 - exit_initiated
  */
 #define CLOUD_BASE_URL_READ_RETRY 30
-#ifdef ACLK_SSL_ALLOW_SELF_SIGNED
-#define ACLK_SSL_FLAGS MQTT_WSS_SSL_ALLOW_SELF_SIGNED
-#else
-#define ACLK_SSL_FLAGS MQTT_WSS_SSL_CERT_CHECK_FULL
-#endif
 static int aclk_attempt_to_connect(mqtt_wss_client client)
 {
-    int ret;
+    https_client_resp_t rc;
 
     url_t base_url;
 
@@ -600,26 +616,26 @@ static int aclk_attempt_to_connect(mqtt_wss_client client)
     url_t mqtt_url;
 #endif
 
+    bool fallback_ipv4 = false;
     while (service_running(SERVICE_ACLK)) {
-        aclk_cloud_base_url = appconfig_get(&cloud_config, CONFIG_SECTION_GLOBAL, "cloud base url", NULL);
+        aclk_cloud_base_url = cloud_config_url_get();
         if (aclk_cloud_base_url == NULL) {
-            error_report("Do not move the cloud base url out of post_conf_load!!");
-            aclk_status = ACLK_STATUS_NO_CLOUD_URL;
+            error_report("ACLK: cloud base URL is empty.");
+            aclk_status_set(ACLK_STATUS_CANT_CONNECT_NO_CLOUD_URL);
             return -1;
         }
 
         if (aclk_block_till_recon_allowed()) {
-            aclk_status = ACLK_STATUS_BLOCKED;
+            aclk_status_set(ACLK_STATUS_BLOCKED);
             return 1;
         }
 
-        nd_log(NDLS_DAEMON, NDLP_DEBUG,
-               "Attempting connection now");
+        nd_log(NDLS_DAEMON, NDLP_DEBUG, "ACLK: attempting to connect now");
 
         memset(&base_url, 0, sizeof(url_t));
         if (url_parse(aclk_cloud_base_url, &base_url)) {
-            aclk_status = ACLK_STATUS_INVALID_CLOUD_URL;
-            error_report("ACLK base URL configuration key could not be parsed. Will retry in %d seconds.", CLOUD_BASE_URL_READ_RETRY);
+            aclk_status_set(ACLK_STATUS_CANT_CONNECT_INVALID_CLOUD_URL);
+            error_report("ACLK: base URL '%s' cannot be parsed.", aclk_cloud_base_url);
             sleep(CLOUD_BASE_URL_READ_RETRY);
             url_t_destroy(&base_url);
             continue;
@@ -646,79 +662,46 @@ static int aclk_attempt_to_connect(mqtt_wss_client client)
         }
         aclk_env = callocz(1, sizeof(aclk_env_t));
 
-        ret = aclk_get_env(aclk_env, base_url.host, base_url.port);
+        rc = aclk_get_env(aclk_env, base_url.host, base_url.port, &fallback_ipv4);
         url_t_destroy(&base_url);
-        if(ret) switch(ret) {
-            case 1:
-                aclk_status = ACLK_STATUS_NOT_CLAIMED;
-                error_report("Failed to Get ACLK environment (agent is not claimed)");
-                // delay handled by aclk_block_till_recon_allowed
-                continue;
-
-            case 2:
-                aclk_status = ACLK_STATUS_ENV_ENDPOINT_UNREACHABLE;
-                error_report("Failed to Get ACLK environment (cannot contact ENV endpoint)");
-                // delay handled by aclk_block_till_recon_allowed
-                continue;
-
-            case 3:
-                aclk_status = ACLK_STATUS_ENV_RESPONSE_NOT_200;
-                error_report("Failed to Get ACLK environment (ENV response code is not 200)");
-                // delay handled by aclk_block_till_recon_allowed
-                continue;
-
-            case 4:
-                aclk_status = ACLK_STATUS_ENV_RESPONSE_EMPTY;
-                error_report("Failed to Get ACLK environment (ENV response is empty)");
-                // delay handled by aclk_block_till_recon_allowed
-                continue;
-
-            case 5:
-                aclk_status = ACLK_STATUS_ENV_RESPONSE_NOT_JSON;
-                error_report("Failed to Get ACLK environment (ENV response is not JSON)");
-                // delay handled by aclk_block_till_recon_allowed
-                continue;
-
-            default:
-                aclk_status = ACLK_STATUS_ENV_FAILED;
-                error_report("Failed to Get ACLK environment (unknown error)");
-                // delay handled by aclk_block_till_recon_allowed
-                continue;
+        if (rc != HTTPS_CLIENT_RESP_OK) {
+            aclk_status_set((ACLK_STATUS)rc);
+            continue;
         }
 
         if (!service_running(SERVICE_ACLK)) {
-            aclk_status = ACLK_STATUS_DISABLED;
+            aclk_status_set(ACLK_STATUS_DISABLED);
             return 1;
         }
 
         if (aclk_env->encoding != ACLK_ENC_PROTO) {
-            aclk_status = ACLK_STATUS_NO_OLD_PROTOCOL;
-            error_report("This agent can only use the new cloud protocol but cloud requested old one.");
+            aclk_status_set(ACLK_STATUS_NO_OLD_PROTOCOL);
+            error_report("ACLK: this agent can only use the new cloud protocol but cloud requested old one.");
             continue;
         }
 
         if (!aclk_env_has_capa("proto")) {
-            aclk_status = ACLK_STATUS_NO_PROTOCOL_CAPABILITY;
-            error_report("Can't use encoding=proto without at least \"proto\" capability.");
+            aclk_status_set(ACLK_STATUS_NO_PROTOCOL_CAPABILITY);
+            error_report("ACLK: can't use encoding=proto without at least \"proto\" capability.");
             continue;
         }
 
         nd_log(NDLS_DAEMON, NDLP_DEBUG,
-               "New ACLK protobuf protocol negotiated successfully (/env response).");
+               "ACLK: new ACLK protobuf protocol negotiated successfully (/env response).");
 
         memset(&auth_url, 0, sizeof(url_t));
         if (url_parse(aclk_env->auth_endpoint, &auth_url)) {
-            aclk_status = ACLK_STATUS_INVALID_ENV_AUTH_URL;
-            error_report("Parsing URL returned by env endpoint for authentication failed. \"%s\"", aclk_env->auth_endpoint);
+            aclk_status_set(ACLK_STATUS_INVALID_ENV_AUTH_URL);
+            error_report("ACLK: parsing URL returned by env endpoint for authentication failed. \"%s\"", aclk_env->auth_endpoint);
             url_t_destroy(&auth_url);
             continue;
         }
 
-        ret = aclk_get_mqtt_otp(aclk_private_key, (char **)&mqtt_conn_params.clientid, (char **)&mqtt_conn_params.username, (char **)&mqtt_conn_params.password, &auth_url);
+        rc = aclk_get_mqtt_otp(aclk_private_key, (char **)&mqtt_conn_params.clientid, (char **)&mqtt_conn_params.username, (char **)&mqtt_conn_params.password, &auth_url, &fallback_ipv4);
         url_t_destroy(&auth_url);
-        if (ret) {
-            aclk_status = ACLK_STATUS_INVALID_OTP;
-            error_report("Error passing Challenge/Response to get OTP");
+        if (rc != HTTPS_CLIENT_RESP_OK) {
+            aclk_status_set((ACLK_STATUS)rc);
+            error_report("ACLK: error passing Challenge/Response to get OTP");
             continue;
         }
 
@@ -727,23 +710,23 @@ static int aclk_attempt_to_connect(mqtt_wss_client client)
         mqtt_conn_params.will_topic = aclk_get_topic(ACLK_TOPICID_AGENT_CONN);
 
         if (!mqtt_conn_params.will_topic) {
-            aclk_status = ACLK_STATUS_NO_LWT_TOPIC;
-            error_report("Couldn't get LWT topic. Will not send LWT.");
+            aclk_status_set(ACLK_STATUS_NO_LWT_TOPIC);
+            error_report("ACLK: couldn't get LWT topic. Will not send LWT.");
             continue;
         }
 
         // Do the MQTT connection
-        ret = aclk_get_transport_idx(aclk_env);
-        if (ret < 0) {
-            aclk_status = ACLK_STATUS_INVALID_ENV_TRANSPORT_IDX;
-            error_report("Cloud /env endpoint didn't return any transport usable by this Agent.");
+        int trp = aclk_get_transport_idx(aclk_env);
+        if (trp < 0) {
+            aclk_status_set(ACLK_STATUS_INVALID_ENV_TRANSPORT_IDX);
+            error_report("ACLK: cloud /env endpoint didn't return any transport usable by this agent.");
             continue;
         }
 
         memset(&mqtt_url, 0, sizeof(url_t));
-        if (url_parse(aclk_env->transports[ret]->endpoint, &mqtt_url)){
-            aclk_status = ACLK_STATUS_INVALID_ENV_TRANSPORT_URL;
-            error_report("Failed to parse target URL for /env trp idx %d \"%s\"", ret, aclk_env->transports[ret]->endpoint);
+        if (url_parse(aclk_env->transports[rc]->endpoint, &mqtt_url)){
+            aclk_status_set(ACLK_STATUS_INVALID_ENV_TRANSPORT_URL);
+            error_report("ACLK: failed to parse target URL for /env trp idx %d \"%s\"", trp, aclk_env->transports[rc]->endpoint);
             url_t_destroy(&mqtt_url);
             continue;
         }
@@ -755,11 +738,13 @@ static int aclk_attempt_to_connect(mqtt_wss_client client)
 
         mqtt_conn_params.will_msg = aclk_generate_lwt(&mqtt_conn_params.will_msg_len);
 
+        int ssl_flags = cloud_config_insecure_get() ? MQTT_WSS_SSL_ALLOW_SELF_SIGNED : MQTT_WSS_SSL_CERT_CHECK_FULL;
+
 #ifdef ACLK_DISABLE_CHALLENGE
-        ret = mqtt_wss_connect(client, base_url.host, base_url.port, &mqtt_conn_params, ACLK_SSL_FLAGS, &proxy_conf);
+        int mqtt_rc = mqtt_wss_connect(client, base_url.host, base_url.port, &mqtt_conn_params, ssl_flags, &proxy_conf);
         url_t_destroy(&base_url);
 #else
-        ret = mqtt_wss_connect(client, mqtt_url.host, mqtt_url.port, &mqtt_conn_params, ACLK_SSL_FLAGS, &proxy_conf);
+        int mqtt_rc = mqtt_wss_connect(client, mqtt_url.host, mqtt_url.port, &mqtt_conn_params, ssl_flags, &proxy_conf, &fallback_ipv4);
         url_t_destroy(&mqtt_url);
 
         freez((char*)mqtt_conn_params.clientid);
@@ -772,19 +757,20 @@ static int aclk_attempt_to_connect(mqtt_wss_client client)
         freez((char*)proxy_conf.username);
         freez((char*)proxy_conf.password);
 
-        if (!ret) {
+        if (!mqtt_rc) {
             last_conn_time_mqtt = now_realtime_sec();
-            nd_log(NDLS_DAEMON, NDLP_INFO, "ACLK connection successfully established");
-            aclk_status = ACLK_STATUS_CONNECTED;
+            nd_log(NDLS_DAEMON, NDLP_INFO, "ACLK: connection successfully established");
+            aclk_status_set(ACLK_STATUS_CONNECTED);
             nd_log(NDLS_ACCESS, NDLP_INFO, "ACLK CONNECTED");
             mqtt_connected_actions(client);
+            fallback_ipv4 = false;
             return 0;
         }
 
-        error_report("Connect failed");
+        error_report("ACLK: connection failed");
     }
 
-    aclk_status = ACLK_STATUS_DISABLED;
+    aclk_status_set(ACLK_STATUS_DISABLED);
     return 1;
 }
 
@@ -800,40 +786,61 @@ static int aclk_attempt_to_connect(mqtt_wss_client client)
  */
 void *aclk_main(void *ptr)
 {
-    struct netdata_static_thread *static_thread = (struct netdata_static_thread *)ptr;
+    struct netdata_static_thread *static_thread = ptr;
 
-    struct aclk_stats_thread *stats_thread = NULL;
-
-    struct aclk_query_threads query_threads;
-    query_threads.thread_list = NULL;
+    worker_register("ACLK");
+    worker_register_job_name(WORKER_ACLK_WAIT_CLAIMING, "wait claim");
+    worker_register_job_name(WORKER_ACLK_CONNECT, "connect");
+    worker_register_job_name(WORKER_ACLK_NODE_UPDATE, "node update");
+    worker_register_job_name(WORKER_ACLK_HANDLE_CONNECTION, "handle connection");
+    worker_register_job_name(WORKER_ACLK_DISCONNECTED, "disconnected");
+    worker_register_job_name(WORKER_ACLK_CMD_DISCONNECT, "cmd disconnect");
+    worker_register_job_name(WORKER_ACLK_CMD_TIMEOUT, "cmd timeout");
+    worker_register_job_name(WORKER_ACLK_CMD_RELOAD_CONF, "cmd reload");
+    worker_register_job_name(WORKER_ACLK_CMD_UNKNOWN, "cmd unknown");
+    worker_register_job_name(WORKER_ACLK_SENT_PING, "sent ping");
+    worker_register_job_name(WORKER_ACLK_POLL_ERROR, "poll error");
+    worker_register_job_name(WORKER_ACLK_POLL_OK, "poll ok");
+    worker_register_job_name(WORKER_ACLK_RX, "rx");
+    worker_register_job_name(WORKER_ACLK_RX_ERROR, "rx error");
+    worker_register_job_name(WORKER_ACLK_PROCESS_RAW, "p-raw");
+    worker_register_job_name(WORKER_ACLK_PROCESS_HANDSHAKE, "p-handshake");
+    worker_register_job_name(WORKER_ACLK_PROCESS_ESTABLISHED, "p-established");
+    worker_register_job_name(WORKER_ACLK_PROCESS_ERROR, "p-error");
+    worker_register_job_name(WORKER_ACLK_PROCESS_CLOSED_GRACEFULLY, "p-closed");
+    worker_register_job_name(WORKER_ACLK_PROCESS_UNKNOWN, "p-unknown");
+    worker_register_job_name(WORKER_ACLK_HANDLE_MQTT_INTERNAL, "mqtt internal");
+    worker_register_job_name(WORKER_ACLK_TX, "tx");
+    worker_register_job_name(WORKER_ACLK_TX_ERROR, "tx error");
+    worker_register_job_name(WORKER_ACLK_TRY_SEND_ALL, "try send all");
+    worker_register_job_name(WORKER_ACLK_HANDLE_INCOMING, "handle incoming");
+    worker_register_job_name(WORKER_ACLK_CPT_CONNACK, "cpt connack");
+    worker_register_job_name(WORKER_ACLK_CPT_PUBACK, "cpt puback");
+    worker_register_job_name(WORKER_ACLK_CPT_PINGRESP, "cpt pingresp");
+    worker_register_job_name(WORKER_ACLK_CPT_SUBACK, "cpt suback");
+    worker_register_job_name(WORKER_ACLK_CPT_PUBLISH, "cpt publish");
+    worker_register_job_name(WORKER_ACLK_CPT_DISCONNECT, "cpt disconnect");
+    worker_register_job_name(WORKER_ACLK_CPT_UNKNOWN, "cpt unknown");
+    worker_register_job_name(WORKER_ACLK_SEND_FRAGMENT, "send fragment");
+    worker_register_job_name(WORKER_ACLK_MSG_CALLBACK, "msg callback");
+    worker_register_job_name(WORKER_ACLK_WAITING_TO_CONNECT, "conn wait");
 
     ACLK_PROXY_TYPE proxy_type;
     aclk_get_proxy(&proxy_type);
     if (proxy_type == PROXY_TYPE_SOCKS5) {
-        netdata_log_error("SOCKS5 proxy is not supported by ACLK-NG yet.");
+        netdata_log_error("ACLK: SOCKS5 proxy is not supported by ACLK-NG yet.");
         static_thread->enabled = NETDATA_MAIN_THREAD_EXITED;
         return NULL;
     }
 
-    unsigned int proto_hdl_cnt = aclk_init_rx_msg_handlers();
+    aclk_init_rx_msg_handlers();
 
-#if defined( DISABLE_CLOUD ) || !defined( ENABLE_ACLK )
-    nd_log(NDLS_DAEMON, NDLP_INFO,
-           "Killing ACLK thread -> cloud functionality has been disabled");
-
-    static_thread->enabled = NETDATA_MAIN_THREAD_EXITED;
-    return NULL;
-#endif
-    query_threads.count = read_query_thread_count();
-
-    if (wait_till_cloud_enabled())
-        goto exit;
-
+    worker_is_busy(WORKER_ACLK_WAIT_CLAIMING);
     if (wait_till_agent_claim_ready())
         goto exit;
 
-    if (!(mqttwss_client = mqtt_wss_new("mqtt_wss", aclk_mqtt_wss_log_cb, msg_callback, puback_callback))) {
-        netdata_log_error("Couldn't initialize MQTT_WSS network library");
+    if (!((mqttwss_client = mqtt_wss_new(msg_callback, puback_callback)))) {
+        netdata_log_error("ACLK: Couldn't initialize MQTT_WSS network library");
         goto exit;
     }
 
@@ -841,7 +848,7 @@ void *aclk_main(void *ptr)
     size_t default_ssl_log_filename_size = strlen(netdata_configured_log_dir) + strlen(DEFAULT_SSKEYLOGFILE_NAME) + 2;
     char *default_ssl_log_filename = mallocz(default_ssl_log_filename_size);
     snprintfz(default_ssl_log_filename, default_ssl_log_filename_size, "%s/%s", netdata_configured_log_dir, DEFAULT_SSKEYLOGFILE_NAME);
-    ssl_log_filename = config_get(CONFIG_SECTION_CLOUD, "aclk ssl keylog file", default_ssl_log_filename);
+    ssl_log_filename = inicfg_get(&netdata_config, CONFIG_SECTION_CLOUD, "aclk ssl keylog file", default_ssl_log_filename);
     freez(default_ssl_log_filename);
     if (ssl_log_filename) {
         error_report("SSLKEYLOGFILE active (path:\"%s\")!", ssl_log_filename);
@@ -854,32 +861,31 @@ void *aclk_main(void *ptr)
     // that send JSON payloads of 10 MB as single messages
     mqtt_wss_set_max_buf_size(mqttwss_client, 25*1024*1024);
 
-    aclk_stats_enabled = config_get_boolean(CONFIG_SECTION_CLOUD, "statistics", global_statistics_enabled);
-    if (aclk_stats_enabled) {
-        stats_thread = callocz(1, sizeof(struct aclk_stats_thread));
-        stats_thread->query_thread_count = query_threads.count;
-        stats_thread->client = mqttwss_client;
-        aclk_stats_thread_prepare(query_threads.count, proto_hdl_cnt);
-        stats_thread->thread = nd_thread_create("ACLK_STATS", NETDATA_THREAD_OPTION_JOINABLE, aclk_stats_main_thread, stats_thread);
-    }
-
     // Keep reconnecting and talking until our time has come
-    // and the Grim Reaper (netdata_exit) calls
+    // and the Grim Reaper (exit_initiated) calls
+    netdata_log_info("ACLK: Starting ACLK query event loop");
+    aclk_query_init(mqttwss_client);
     do {
+        worker_is_busy(WORKER_ACLK_CONNECT);
         if (aclk_attempt_to_connect(mqttwss_client))
             goto exit_full;
 
-        if (unlikely(!query_threads.thread_list))
-            aclk_query_threads_start(&query_threads, mqttwss_client);
+        if (schedule_node_update) {
+            worker_is_busy(WORKER_ACLK_NODE_UPDATE);
+            schedule_node_state_update(localhost, 10);
+            schedule_node_update = false;
+        }
 
+        worker_is_busy(WORKER_ACLK_HANDLE_CONNECTION);
         if (handle_connection(mqttwss_client)) {
-            aclk_stats_upd_online(0);
+            worker_is_busy(WORKER_ACLK_DISCONNECTED);
             last_disconnect_time = now_realtime_sec();
-            aclk_connected = 0;
+            aclk_set_disconnected();
             nd_log(NDLS_ACCESS, NDLP_WARNING, "ACLK DISCONNECTED");
         }
     } while (service_running(SERVICE_ACLK));
 
+    worker_is_busy(WORKER_ACLK_DISCONNECTED);
     aclk_graceful_disconnect(mqttwss_client);
 
 #ifdef MQTT_WSS_DEBUG
@@ -888,16 +894,6 @@ void *aclk_main(void *ptr)
 #endif
 
 exit_full:
-// Tear Down
-    QUERY_THREAD_WAKEUP_ALL;
-
-    aclk_query_threads_cleanup(&query_threads);
-
-    if (aclk_stats_enabled) {
-        nd_thread_join(stats_thread->thread);
-        aclk_stats_thread_cleanup();
-        freez(stats_thread);
-    }
     free_topic_cache();
     mqtt_wss_destroy(mqttwss_client);
 exit:
@@ -909,146 +905,118 @@ exit:
     return NULL;
 }
 
-void aclk_host_state_update(RRDHOST *host, int cmd, int queryable)
-{
-    nd_uuid_t node_id;
-    int ret = 0;
+bool aclk_host_state_update_auto(RRDHOST *host) {
+    int live;
+    switch(rrdhost_ingestion_status(host)) {
+        default:
+        case RRDHOST_INGEST_STATUS_ARCHIVED:
+        case RRDHOST_INGEST_STATUS_INITIALIZING:
+        case RRDHOST_INGEST_STATUS_OFFLINE:
+            live = 0;
+            break;
 
-    if (!aclk_connected)
+        case RRDHOST_INGEST_STATUS_REPLICATING:
+            // receiving replication
+            // no need to send this to NC
+            return false;
+
+        case RRDHOST_INGEST_STATUS_ONLINE:
+            // currently collecting data
+            live = 1;
+            break;
+    }
+    aclk_host_state_update(host, live, 1);
+    return true;
+}
+
+void aclk_create_node_instance_job(RRDHOST *host)
+{
+    if (unlikely(!host))
         return;
 
-    if (host->node_id && !uuid_is_null(*host->node_id)) {
-        uuid_copy(node_id, *host->node_id);
-    }
-    else {
-        ret = get_node_id(&host->host_uuid, &node_id);
-        if (ret > 0) {
-            // this means we were not able to check if node_id already present
-            netdata_log_error("Unable to check for node_id. Ignoring the host state update.");
-            return;
-        }
-        if (ret < 0) {
-            // node_id not found
-            aclk_query_t create_query;
-            create_query = aclk_query_new(REGISTER_NODE);
-            rrdhost_aclk_state_lock(localhost);
-            node_instance_creation_t node_instance_creation = {
-                .claim_id = localhost->aclk_state.claimed_id,
-                .hops = host->system_info->hops,
-                .hostname = rrdhost_hostname(host),
-                .machine_guid = host->machine_guid};
-            create_query->data.bin_payload.payload =
-                generate_node_instance_creation(&create_query->data.bin_payload.size, &node_instance_creation);
-            rrdhost_aclk_state_unlock(localhost);
-            create_query->data.bin_payload.topic = ACLK_TOPICID_CREATE_NODE;
-            create_query->data.bin_payload.msg_name = "CreateNodeInstance";
-            nd_log(NDLS_DAEMON, NDLP_DEBUG,
-                   "Registering host=%s, hops=%u", host->machine_guid, host->system_info->hops);
+    CLAIM_ID claim_id = claim_id_get();
+    if (!claim_id_is_set(claim_id))
+        return;
 
-            aclk_queue_query(create_query);
-            return;
-        }
-    }
+    aclk_query_t query = aclk_query_new(REGISTER_NODE);
+    int32_t hops =  rrdhost_ingestion_hops(host);
+    node_instance_creation_t node_instance_creation = {
+        .hops = hops,
+        .hostname = rrdhost_hostname(host),
+        .machine_guid = host->machine_guid,
+        .claim_id = claim_id.str
+    };
+
+    query->data.bin_payload.topic = ACLK_TOPICID_CREATE_NODE;
+    query->data.bin_payload.msg_name = "CreateNodeInstance";
+    query->data.bin_payload.payload = generate_node_instance_creation(&query->data.bin_payload.size, &node_instance_creation);
+
+    nd_log_daemon(NDLP_DEBUG, "Queuing registration for host=%s, hops=%d", host->machine_guid, hops);
+
+    aclk_add_job(query);
+}
+
+void aclk_update_node_instance_job(RRDHOST *host, int live, int queryable)
+{
+    if (unlikely(!host))
+        return;
+
+    CLAIM_ID claim_id = claim_id_get();
+    if (!claim_id_is_set(claim_id))
+        return;
 
     aclk_query_t query = aclk_query_new(NODE_STATE_UPDATE);
+
+    int32_t hops = rrdhost_ingestion_hops(host);
     node_instance_connection_t node_state_update = {
-        .hops = host->system_info->hops,
-        .live = cmd,
+        .claim_id = claim_id.str,
+        .hops = hops,
+        .live = live,
         .queryable = queryable,
-        .session_id = aclk_session_newarch
-    };
-    node_state_update.node_id = mallocz(UUID_STR_LEN);
-    uuid_unparse_lower(node_id, (char*)node_state_update.node_id);
+        .session_id = aclk_session_newarch};
 
-    node_state_update.capabilities = aclk_get_agent_capas();
+    char node_id[UUID_STR_LEN];
+    uuid_unparse_lower(host->node_id.uuid, node_id);
 
-    rrdhost_aclk_state_lock(localhost);
-    node_state_update.claim_id = localhost->aclk_state.claimed_id;
-    query->data.bin_payload.payload = generate_node_instance_connection(&query->data.bin_payload.size, &node_state_update);
-    rrdhost_aclk_state_unlock(localhost);
+    node_state_update.node_id = node_id;
+    node_state_update.capabilities = aclk_get_node_instance_capas(host);
 
-    nd_log(NDLS_DAEMON, NDLP_DEBUG,
-           "Queuing status update for node=%s, live=%d, hops=%u, queryable=%d",
-           (char*)node_state_update.node_id, cmd, host->system_info->hops, queryable);
-    freez((void*)node_state_update.node_id);
-    query->data.bin_payload.msg_name = "UpdateNodeInstanceConnection";
     query->data.bin_payload.topic = ACLK_TOPICID_NODE_CONN;
-    aclk_queue_query(query);
+    query->data.bin_payload.msg_name = "UpdateNodeInstanceConnection";
+    query->data.bin_payload.payload = generate_node_instance_connection(&query->data.bin_payload.size, &node_state_update);
+
+    nd_log_daemon(
+        NDLP_DEBUG,
+        "Queuing status update for node=%s, live=%d, hops=%d, queryable=%d",
+        (char *)node_state_update.node_id,
+        live,
+        hops,
+        queryable);
+
+    freez((void *)node_state_update.capabilities);
+    aclk_add_job(query);
+}
+
+void aclk_host_state_update(RRDHOST *host, int live, int queryable)
+{
+    if (!aclk_online())
+        return;
+
+    if (uuid_is_null(host->node_id.uuid))
+        aclk_create_node_instance_job(host);
+    else
+        aclk_update_node_instance_job(host, live, queryable);
 }
 
 void aclk_send_node_instances()
 {
-    struct node_instance_list *list_head = get_node_list();
-    struct node_instance_list *list = list_head;
-    if (unlikely(!list)) {
-        error_report("Failure to get_node_list from DB!");
-        return;
+    RRDHOST *host;
+    dfe_start_reentrant(rrdhost_root_index, host)
+    {
+        int live = rrdhost_ingestion_status(host) == RRDHOST_INGEST_STATUS_ONLINE ? 1 : 0;
+        aclk_host_state_update(host, live, 1);
     }
-    while (!uuid_is_null(list->host_id)) {
-        if (!uuid_is_null(list->node_id)) {
-            aclk_query_t query = aclk_query_new(NODE_STATE_UPDATE);
-            node_instance_connection_t node_state_update = {
-                .live = list->live,
-                .hops = list->hops,
-                .queryable = 1,
-                .session_id = aclk_session_newarch
-            };
-            node_state_update.node_id = mallocz(UUID_STR_LEN);
-            uuid_unparse_lower(list->node_id, (char*)node_state_update.node_id);
-
-            char host_id[UUID_STR_LEN];
-            uuid_unparse_lower(list->host_id, host_id);
-
-            RRDHOST *host = rrdhost_find_by_guid(host_id);
-            if (unlikely(!host)) {
-                freez((void*)node_state_update.node_id);
-                freez(query);
-                continue;
-            }
-            node_state_update.capabilities = aclk_get_node_instance_capas(host);
-
-            rrdhost_aclk_state_lock(localhost);
-            node_state_update.claim_id = localhost->aclk_state.claimed_id;
-            query->data.bin_payload.payload = generate_node_instance_connection(&query->data.bin_payload.size, &node_state_update);
-            rrdhost_aclk_state_unlock(localhost);
-
-            nd_log(NDLS_DAEMON, NDLP_DEBUG,
-                   "Queuing status update for node=%s, live=%d, hops=%d, queryable=1",
-                   (char*)node_state_update.node_id, list->live, list->hops);
-
-            freez((void*)node_state_update.capabilities);
-            freez((void*)node_state_update.node_id);
-            query->data.bin_payload.msg_name = "UpdateNodeInstanceConnection";
-            query->data.bin_payload.topic = ACLK_TOPICID_NODE_CONN;
-            aclk_queue_query(query);
-        } else {
-            aclk_query_t create_query;
-            create_query = aclk_query_new(REGISTER_NODE);
-            node_instance_creation_t node_instance_creation = {
-                .hops = list->hops,
-                .hostname = list->hostname,
-            };
-            node_instance_creation.machine_guid = mallocz(UUID_STR_LEN);
-            uuid_unparse_lower(list->host_id, (char*)node_instance_creation.machine_guid);
-            create_query->data.bin_payload.topic = ACLK_TOPICID_CREATE_NODE;
-            create_query->data.bin_payload.msg_name = "CreateNodeInstance";
-            rrdhost_aclk_state_lock(localhost);
-            node_instance_creation.claim_id = localhost->aclk_state.claimed_id,
-            create_query->data.bin_payload.payload = generate_node_instance_creation(&create_query->data.bin_payload.size, &node_instance_creation);
-            rrdhost_aclk_state_unlock(localhost);
-
-            nd_log(NDLS_DAEMON, NDLP_DEBUG,
-                   "Queuing registration for host=%s, hops=%d",
-                   (char*)node_instance_creation.machine_guid, list->hops);
-
-            freez((void *)node_instance_creation.machine_guid);
-            aclk_queue_query(create_query);
-        }
-        freez(list->hostname);
-
-        list++;
-    }
-    freez(list_head);
+    dfe_done(host);
 }
 
 void aclk_send_bin_msg(char *msg, size_t msg_len, enum aclk_topics subtopic, const char *msgname)
@@ -1058,30 +1026,24 @@ void aclk_send_bin_msg(char *msg, size_t msg_len, enum aclk_topics subtopic, con
 
 static void fill_alert_status_for_host(BUFFER *wb, RRDHOST *host)
 {
-    struct proto_alert_status status;
-    memset(&status, 0, sizeof(status));
-    if (get_proto_alert_status(host, &status)) {
-        buffer_strcat(wb, "\nFailed to get alert streaming status for this host");
+    struct aclk_sync_cfg_t *wc = host->aclk_config;
+    if (!wc)
         return;
-    }
+
     buffer_sprintf(wb,
         "\n\t\tUpdates: %d"
-        "\n\t\tPending Min Seq ID: %"PRIu64
-        "\n\t\tPending Max Seq ID: %"PRIu64
-        "\n\t\tLast Submitted Seq ID: %"PRIu64,
-        status.alert_updates,
-        status.pending_min_sequence_id,
-        status.pending_max_sequence_id,
-        status.last_submitted_sequence_id
+        "\n\t\tCheckpoints: %d"
+        "\n\t\tAlert count: %d"
+        "\n\t\tAlert snapshot count: %d",
+        wc->stream_alerts,
+        wc->checkpoint_count,
+        wc->alert_count,
+        wc->snapshot_count
     );
 }
-#endif /* ENABLE_ACLK */
 
 char *aclk_state(void)
 {
-#ifndef ENABLE_ACLK
-    return strdupz("ACLK Available: No");
-#else
     BUFFER *wb = buffer_create(1024, &netdata_buffers_statistics.buffers_aclk);
     struct tm *tmptr, tmbuf;
     char *ret;
@@ -1093,38 +1055,37 @@ char *aclk_state(void)
     );
     buffer_sprintf(wb, "Protocol Used: Protobuf\nMQTT Version: %d\nClaimed: ", 5);
 
-    char *agent_id = get_agent_claimid();
-    if (agent_id == NULL)
+    CLAIM_ID claim_id = claim_id_get();
+    if (!claim_id_is_set(claim_id))
         buffer_strcat(wb, "No\n");
     else {
-        char *cloud_base_url = appconfig_get(&cloud_config, CONFIG_SECTION_GLOBAL, "cloud base url", NULL);
-        buffer_sprintf(wb, "Yes\nClaimed Id: %s\nCloud URL: %s\n", agent_id, cloud_base_url ? cloud_base_url : "null");
-        freez(agent_id);
+        const char *cloud_base_url = cloud_config_url_get();
+        buffer_sprintf(wb, "Yes\nClaimed Id: %s\nCloud URL: %s\n", claim_id.str, cloud_base_url ? cloud_base_url : "null");
     }
 
-    buffer_sprintf(wb, "Online: %s\nReconnect count: %d\nBanned By Cloud: %s\n", aclk_connected ? "Yes" : "No", aclk_connection_counter > 0 ? (aclk_connection_counter - 1) : 0, aclk_disable_runtime ? "Yes" : "No");
-    if (last_conn_time_mqtt && (tmptr = localtime_r(&last_conn_time_mqtt, &tmbuf)) ) {
+    buffer_sprintf(wb, "Online: %s\nReconnect count: %d\nBanned By Cloud: %s\n", aclk_online() ? "Yes" : "No", aclk_connection_counter > 0 ? (aclk_connection_counter - 1) : 0, aclk_disable_runtime ? "Yes" : "No");
+    if (last_conn_time_mqtt && ((tmptr = localtime_r(&last_conn_time_mqtt, &tmbuf))) ) {
         char timebuf[26];
         strftime(timebuf, 26, "%Y-%m-%d %H:%M:%S", tmptr);
         buffer_sprintf(wb, "Last Connection Time: %s\n", timebuf);
     }
-    if (last_conn_time_appl && (tmptr = localtime_r(&last_conn_time_appl, &tmbuf)) ) {
+    if (last_conn_time_appl && ((tmptr = localtime_r(&last_conn_time_appl, &tmbuf))) ) {
         char timebuf[26];
         strftime(timebuf, 26, "%Y-%m-%d %H:%M:%S", tmptr);
         buffer_sprintf(wb, "Last Connection Time + %d PUBACKs received: %s\n", ACLK_PUBACKS_CONN_STABLE, timebuf);
     }
-    if (last_disconnect_time && (tmptr = localtime_r(&last_disconnect_time, &tmbuf)) ) {
+    if (last_disconnect_time && ((tmptr = localtime_r(&last_disconnect_time, &tmbuf))) ) {
         char timebuf[26];
         strftime(timebuf, 26, "%Y-%m-%d %H:%M:%S", tmptr);
         buffer_sprintf(wb, "Last Disconnect Time: %s\n", timebuf);
     }
-    if (!aclk_connected && next_connection_attempt && (tmptr = localtime_r(&next_connection_attempt, &tmbuf)) ) {
+    if (!aclk_connected && next_connection_attempt && ((tmptr = localtime_r(&next_connection_attempt, &tmbuf))) ) {
         char timebuf[26];
         strftime(timebuf, 26, "%Y-%m-%d %H:%M:%S", tmptr);
         buffer_sprintf(wb, "Next Connection Attempt At: %s\nLast Backoff: %.3f", timebuf, last_backoff_value);
     }
 
-    if (aclk_connected) {
+    if (aclk_online()) {
         buffer_sprintf(wb, "Received Cloud MQTT Messages: %d\nMQTT Messages Confirmed by Remote Broker (PUBACKs): %d", aclk_rcvd_cloud_msgs, aclk_pubacks_per_conn);
 
         RRDHOST *host;
@@ -1133,23 +1094,23 @@ char *aclk_state(void)
             buffer_sprintf(wb, "\n\n> Node Instance for mGUID: \"%s\" hostname \"%s\"\n", host->machine_guid, rrdhost_hostname(host));
 
             buffer_strcat(wb, "\tClaimed ID: ");
-            rrdhost_aclk_state_lock(host);
-            if (host->aclk_state.claimed_id)
-                buffer_strcat(wb, host->aclk_state.claimed_id);
+            claim_id = rrdhost_claim_id_get(host);
+            if(claim_id_is_set(claim_id))
+                buffer_strcat(wb, claim_id.str);
             else
                 buffer_strcat(wb, "null");
-            rrdhost_aclk_state_unlock(host);
 
-
-            if (host->node_id == NULL || uuid_is_null(*host->node_id)) {
+            if (UUIDiszero(host->node_id))
                 buffer_strcat(wb, "\n\tNode ID: null\n");
-            } else {
-                char node_id[GUID_LEN + 1];
-                uuid_unparse_lower(*host->node_id, node_id);
-                buffer_sprintf(wb, "\n\tNode ID: %s\n", node_id);
+            else {
+                char node_id_str[UUID_STR_LEN];
+                uuid_unparse_lower(host->node_id.uuid, node_id_str);
+                buffer_sprintf(wb, "\n\tNode ID: %s\n", node_id_str);
             }
 
-            buffer_sprintf(wb, "\tStreaming Hops: %d\n\tRelationship: %s", host->system_info->hops, host == localhost ? "self" : "child");
+            buffer_sprintf(wb, "\tStreaming Hops: %d\n\tRelationship: %s",
+                           rrdhost_ingestion_hops(host),
+                           host == localhost ? "self" : "child");
 
             if (host != localhost)
                 buffer_sprintf(wb, "\n\tStreaming Connection Live: %s", host->receiver ? "true" : "false");
@@ -1163,47 +1124,42 @@ char *aclk_state(void)
     ret = strdupz(buffer_tostring(wb));
     buffer_free(wb);
     return ret;
-#endif /* ENABLE_ACLK */
 }
 
-#ifdef ENABLE_ACLK
 static void fill_alert_status_for_host_json(json_object *obj, RRDHOST *host)
 {
-    struct proto_alert_status status;
-    memset(&status, 0, sizeof(status));
-    if (get_proto_alert_status(host, &status))
+    struct aclk_sync_cfg_t *wc = host->aclk_config;
+    if (!wc)
         return;
 
-    json_object *tmp = json_object_new_int(status.alert_updates);
+    json_object *tmp = json_object_new_int(wc->stream_alerts);
     json_object_object_add(obj, "updates", tmp);
 
-    tmp = json_object_new_int(status.pending_min_sequence_id);
-    json_object_object_add(obj, "pending-min-seq-id", tmp);
+    tmp = json_object_new_int(wc->checkpoint_count);
+    json_object_object_add(obj, "checkpoint-count", tmp);
 
-    tmp = json_object_new_int(status.pending_max_sequence_id);
-    json_object_object_add(obj, "pending-max-seq-id", tmp);
+    tmp = json_object_new_int(wc->alert_count);
+    json_object_object_add(obj, "alert-count", tmp);
 
-    tmp = json_object_new_int(status.last_submitted_sequence_id);
-    json_object_object_add(obj, "last-submitted-seq-id", tmp);
+    tmp = json_object_new_int(wc->snapshot_count);
+    json_object_object_add(obj, "alert-snapshot-count", tmp);
+    tmp = json_object_new_int64(calculate_node_alert_version(wc->host));
+    json_object_object_add(obj, "alert-version", tmp);
 }
 
 static json_object *timestamp_to_json(const time_t *t)
 {
     struct tm *tmptr, tmbuf;
-    if (*t && (tmptr = gmtime_r(t, &tmbuf)) ) {
+    if (*t && ((tmptr = gmtime_r(t, &tmbuf))) ) {
         char timebuf[26];
         strftime(timebuf, 26, "%Y-%m-%d %H:%M:%S", tmptr);
         return json_object_new_string(timebuf);
     }
     return NULL;
 }
-#endif /* ENABLE_ACLK */
 
 char *aclk_state_json(void)
 {
-#ifndef ENABLE_ACLK
-    return strdupz("{\"aclk-available\":false}");
-#else
     json_object *tmp, *grp, *msg = json_object_new_object();
 
     tmp = json_object_new_boolean(1);
@@ -1217,22 +1173,21 @@ char *aclk_state_json(void)
     json_object_array_add(grp, tmp);
     json_object_object_add(msg, "protocols-supported", grp);
 
-    char *agent_id = get_agent_claimid();
-    tmp = json_object_new_boolean(agent_id != NULL);
+    CLAIM_ID claim_id = claim_id_get();
+    tmp = json_object_new_boolean(claim_id_is_set(claim_id));
     json_object_object_add(msg, "agent-claimed", tmp);
 
-    if (agent_id) {
-        tmp = json_object_new_string(agent_id);
-        freez(agent_id);
-    } else
+    if (claim_id_is_set(claim_id))
+        tmp = json_object_new_string(claim_id.str);
+    else
         tmp = NULL;
     json_object_object_add(msg, "claimed-id", tmp);
 
-    char *cloud_base_url = appconfig_get(&cloud_config, CONFIG_SECTION_GLOBAL, "cloud base url", NULL);
+    const char *cloud_base_url = cloud_config_url_get();
     tmp = cloud_base_url ? json_object_new_string(cloud_base_url) : NULL;
     json_object_object_add(msg, "cloud-url", tmp);
 
-    tmp = json_object_new_boolean(aclk_connected);
+    tmp = json_object_new_boolean(aclk_online());
     json_object_object_add(msg, "online", tmp);
 
     tmp = json_object_new_string("Protobuf");
@@ -1253,9 +1208,9 @@ char *aclk_state_json(void)
     json_object_object_add(msg, "last-connect-time-utc", timestamp_to_json(&last_conn_time_mqtt));
     json_object_object_add(msg, "last-connect-time-puback-utc", timestamp_to_json(&last_conn_time_appl));
     json_object_object_add(msg, "last-disconnect-time-utc", timestamp_to_json(&last_disconnect_time));
-    json_object_object_add(msg, "next-connection-attempt-utc", !aclk_connected ? timestamp_to_json(&next_connection_attempt) : NULL);
+    json_object_object_add(msg, "next-connection-attempt-utc", !aclk_online() ? timestamp_to_json(&next_connection_attempt) : NULL);
     tmp = NULL;
-    if (!aclk_connected && last_backoff_value)
+    if (!aclk_online() && last_backoff_value)
         tmp = json_object_new_double(last_backoff_value);
     json_object_object_add(msg, "last-backoff-value", tmp);
 
@@ -1275,24 +1230,23 @@ char *aclk_state_json(void)
         tmp = json_object_new_string(host->machine_guid);
         json_object_object_add(nodeinstance, "mguid", tmp);
 
-        rrdhost_aclk_state_lock(host);
-        if (host->aclk_state.claimed_id) {
-            tmp = json_object_new_string(host->aclk_state.claimed_id);
+        claim_id = rrdhost_claim_id_get(host);
+        if(claim_id_is_set(claim_id)) {
+            tmp = json_object_new_string(claim_id.str);
             json_object_object_add(nodeinstance, "claimed_id", tmp);
         } else
             json_object_object_add(nodeinstance, "claimed_id", NULL);
-        rrdhost_aclk_state_unlock(host);
 
-        if (host->node_id == NULL || uuid_is_null(*host->node_id)) {
+        if (UUIDiszero(host->node_id)) {
             json_object_object_add(nodeinstance, "node-id", NULL);
         } else {
-            char node_id[GUID_LEN + 1];
-            uuid_unparse_lower(*host->node_id, node_id);
-            tmp = json_object_new_string(node_id);
+            char node_id_str[UUID_STR_LEN];
+            uuid_unparse_lower(host->node_id.uuid, node_id_str);
+            tmp = json_object_new_string(node_id_str);
             json_object_object_add(nodeinstance, "node-id", tmp);
         }
 
-        tmp = json_object_new_int(host->system_info->hops);
+        tmp = json_object_new_int(rrdhost_ingestion_hops(host));
         json_object_object_add(nodeinstance, "streaming-hops", tmp);
 
         tmp = json_object_new_string(host == localhost ? "self" : "child");
@@ -1313,13 +1267,11 @@ char *aclk_state_json(void)
     char *str = strdupz(json_object_to_json_string_ext(msg, JSON_C_TO_STRING_PLAIN));
     json_object_put(msg);
     return str;
-#endif /* ENABLE_ACLK */
 }
 
 void add_aclk_host_labels(void) {
     RRDLABELS *labels = localhost->rrdlabels;
 
-#ifdef ENABLE_ACLK
     rrdlabels_add(labels, "_aclk_available", "true", RRDLABEL_SRC_AUTO|RRDLABEL_SRC_ACLK);
     ACLK_PROXY_TYPE aclk_proxy;
     char *proxy_str;
@@ -1340,14 +1292,11 @@ void add_aclk_host_labels(void) {
     rrdlabels_add(labels, "_mqtt_version", "5", RRDLABEL_SRC_AUTO);
     rrdlabels_add(labels, "_aclk_proxy", proxy_str, RRDLABEL_SRC_AUTO);
     rrdlabels_add(labels, "_aclk_ng_new_cloud_protocol", "true", RRDLABEL_SRC_AUTO|RRDLABEL_SRC_ACLK);
-#else
-    rrdlabels_add(labels, "_aclk_available", "false", RRDLABEL_SRC_AUTO|RRDLABEL_SRC_ACLK);
-#endif
 }
 
 void aclk_queue_node_info(RRDHOST *host, bool immediate)
 {
-    struct aclk_sync_cfg_t  *wc = host->aclk_config;
-    if (likely(wc))
+    struct aclk_sync_cfg_t *wc = host->aclk_config;
+    if (wc)
         wc->node_info_send_time = (host == localhost || immediate) ? 1 : now_realtime_sec();
 }

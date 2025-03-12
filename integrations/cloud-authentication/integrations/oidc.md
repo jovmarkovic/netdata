@@ -39,7 +39,7 @@ The access settings for your client are the following:
 
 ### Netdata Configuration Steps
 1. Click on the Space settings cog (located above your profile icon)
-2. Click on the **Authentication** tab
+2. Click on the **User Management** section and access **Authentication and Authorization** tab.
 3. On the OIDC card, click on **Configure**
 4. Fill in the required credentials:
     - **Issuer URL** the Authorization Server Issuer URL, e.g. `https://my-auth-server.com/`
@@ -55,7 +55,7 @@ The access settings for your client are the following:
 
 ### SP-initiated SSO
 
-If you start your authentication flow from Netdata sign-in page please check [these steps](/docs/netdata-cloud/authentication-and-authorization/enterprise-sso-authentication.md#from-netdata-sign-up-page).
+If you start your authentication flow from Netdata sign-in page please check [these steps](https://github.com/netdata/netdata/blob/master/docs/netdata-cloud/authentication-and-authorization/enterprise-sso-authentication.md).
 
 
 ### Reference

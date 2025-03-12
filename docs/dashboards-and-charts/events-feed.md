@@ -49,8 +49,8 @@ At a high-level view, these are the domains from which the Events feed will prov
 | Node Removed        | The node was removed from the Space, for example by using the `Delete` action on the node. This is a soft delete in that the node gets marked as deleted, but retains the association with this space. If it becomes live again, it will be restored (see `Node Restored` below) and reappear in this space as before. | Node `ip-xyz.ec2.internal` was **deleted (soft)**                                                               |
 | Node Restored       | The node was restored. See `Node Removed` above.                                                                                                                                                                                                                                                                       | Node `ip-xyz.ec2.internal` was **restored**                                                                     |
 | Node Deleted        | The node was deleted from the Space. This is a hard delete and no information on the node is retained.                                                                                                                                                                                                                 | Node `ip-xyz.ec2.internal` was **deleted (hard)**                                                               |
-| Agent Connected     | The agent connected to the Cloud MQTT server (Agent-Cloud Link established).<br/>These events can only be seen on _All nodes_  Room.                                                                                                                                                                                   | Agent with claim ID `7d87bqs9-cv42-4823-8sd4-3614548850c7` has connected to Cloud.                              |
-| Agent Disconnected  | The agent disconnected from the Cloud MQTT server (Agent-Cloud Link severed).<br/>These events can only be seen on _All nodes_ Room.                                                                                                                                                                                   | Agent with claim ID `7d87bqs9-cv42-4823-8sd4-3614548850c7` has disconnected from Cloud: **Connection Timeout**. |
+| Agent Connected     | The Agent connected to the Cloud MQTT server (Agent-Cloud Link established).<br/>These events can only be seen on _All nodes_  Room.                                                                                                                                                                                   | Agent with claim ID `7d87bqs9-cv42-4823-8sd4-3614548850c7` has connected to Cloud.                              |
+| Agent Disconnected  | The Agent disconnected from the Cloud MQTT server (Agent-Cloud Link severed).<br/>These events can only be seen on _All nodes_ Room.                                                                                                                                                                                   | Agent with claim ID `7d87bqs9-cv42-4823-8sd4-3614548850c7` has disconnected from Cloud: **Connection Timeout**. |
 | Space Statistics    | Daily snapshot of space node statistics.<br/>These events can only be seen on _All nodes_ Room.                                                                                                                                                                                                                        | Space statistics. Nodes: **22 live**, **21 stale**, **18 removed**, **61 total**.                               |
 
 ### Alert events
@@ -61,14 +61,14 @@ At a high-level view, these are the domains from which the Events feed will prov
 
 ## Who can access the events?
 
-All users will be able to see events from the Topology and Alerts domain but Auditing events, once these are added, will only be accessible to administrators. For more details check the [Netdata Role-Based Access model](/docs/netdata-cloud/authentication-and-authorization/role-based-access-model.md).
+All users will be able to see events from the Topology and Alerts domain, but Auditing events, once these are added, will only be accessible to administrators. For more details, check the [Netdata Role-Based Access model](/docs/netdata-cloud/authentication-and-authorization/role-based-access-model.md).
 
 ## How to use the events feed
 
 1. Click on the **Events** tab (located near the top of your screen)
-1. You will be presented with a table listing the events that occurred from the timeframe defined on the [date time picker](/docs/dashboards-and-charts/visualization-date-and-time-controls.md#date-and-time-selector)
-1. You can use the filtering capabilities available on right-hand bar to slice through the results provided. See more details on [event types and filters](#event-types-and-filters)
+2. You will be presented with a table listing the events that occurred from the timeframe defined on the [date time picker](/docs/dashboards-and-charts/visualization-date-and-time-controls.md#date-and-time-selector)
+3. You can use the filtering capabilities available on the right-hand bar to slice through the results provided
 
 > **Note**
 >
-> When you try to query a longer period than what your space allows you will see an error message highlighting that you are querying data outside your plan.
+> When you try to query a longer period than what your space allows, you will see an error message highlighting that you are querying data outside your plan.

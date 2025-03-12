@@ -4,28 +4,28 @@ package module
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
-	"regexp"
 	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/netdata/netdata/go/plugins/logger"
-	"github.com/netdata/netdata/go/plugins/plugin/go.d/agent/netdataapi"
+	"github.com/netdata/netdata/go/plugins/pkg/netdataapi"
 	"github.com/netdata/netdata/go/plugins/plugin/go.d/agent/vnodes"
+	"github.com/netdata/netdata/go/plugins/plugin/go.d/pkg/metrix"
 )
 
 var obsoleteLock = &sync.Mutex{}
 var obsoleteCharts = true
 
-func DontObsoleteCharts() {
+func ObsoleteCharts(b bool) {
 	obsoleteLock.Lock()
-	obsoleteCharts = false
+	obsoleteCharts = b
 	obsoleteLock.Unlock()
 }
 
@@ -35,26 +35,31 @@ func shouldObsoleteCharts() bool {
 	return obsoleteCharts
 }
 
-var reSpace = regexp.MustCompile(`\s+`)
-
-var ndInternalMonitoringDisabled = os.Getenv("NETDATA_INTERNALS_MONITORING") == "NO"
-
-func newRuntimeChart(pluginName string) *Chart {
-	// this is needed to keep the same name as we had before https://github.com/netdata/netdata/go/plugins/plugin/go.d/issues/650
-	ctxName := pluginName
-	if ctxName == "go.d" {
-		ctxName = "go"
-	}
-	ctxName = reSpace.ReplaceAllString(ctxName, "_")
+func newCollectStatusChart(pluginName string) *Chart {
 	return &Chart{
 		typ:      "netdata",
-		Title:    "Execution time",
+		Title:    "Data Collection Status",
+		Units:    "status",
+		Fam:      pluginName,
+		Ctx:      "netdata.plugin_data_collection_status",
+		Priority: 144000,
+		Dims: Dims{
+			{ID: "success"},
+			{ID: "failed"},
+		},
+	}
+}
+
+func newCollectDurationChart(pluginName string) *Chart {
+	return &Chart{
+		typ:      "netdata",
+		Title:    "Data Collection Duration",
 		Units:    "ms",
 		Fam:      pluginName,
-		Ctx:      fmt.Sprintf("netdata.%s_plugin_execution_time", ctxName),
+		Ctx:      "netdata.plugin_data_collection_duration",
 		Priority: 145000,
 		Dims: Dims{
-			{ID: "time"},
+			{ID: "duration"},
 		},
 	}
 }
@@ -71,10 +76,7 @@ type JobConfig struct {
 	AutoDetectEvery int
 	Priority        int
 	IsStock         bool
-
-	VnodeGUID     string
-	VnodeHostname string
-	VnodeLabels   map[string]string
+	Vnode           vnodes.VirtualNode
 }
 
 const (
@@ -94,25 +96,24 @@ func NewJob(cfg JobConfig) *Job {
 		AutoDetectEvery: cfg.AutoDetectEvery,
 		AutoDetectTries: infTries,
 
-		pluginName:  cfg.PluginName,
-		name:        cfg.Name,
-		moduleName:  cfg.ModuleName,
-		fullName:    cfg.FullName,
-		updateEvery: cfg.UpdateEvery,
-		priority:    cfg.Priority,
-		isStock:     cfg.IsStock,
-		module:      cfg.Module,
-		labels:      cfg.Labels,
-		out:         cfg.Out,
-		runChart:    newRuntimeChart(cfg.PluginName),
-		stop:        make(chan struct{}),
-		tick:        make(chan int),
-		buf:         &buf,
-		api:         netdataapi.New(&buf),
-
-		vnodeGUID:     cfg.VnodeGUID,
-		vnodeHostname: cfg.VnodeHostname,
-		vnodeLabels:   cfg.VnodeLabels,
+		pluginName:           cfg.PluginName,
+		name:                 cfg.Name,
+		moduleName:           cfg.ModuleName,
+		fullName:             cfg.FullName,
+		updateEvery:          cfg.UpdateEvery,
+		priority:             cfg.Priority,
+		isStock:              cfg.IsStock,
+		module:               cfg.Module,
+		labels:               cfg.Labels,
+		out:                  cfg.Out,
+		collectStatusChart:   newCollectStatusChart(cfg.PluginName),
+		collectDurationChart: newCollectDurationChart(cfg.PluginName),
+		stop:                 make(chan struct{}),
+		tick:                 make(chan int),
+		buf:                  &buf,
+		api:                  netdataapi.New(&buf),
+		vnode:                cfg.Vnode,
+		updVnode:             make(chan *vnodes.VirtualNode, 1),
 	}
 
 	log := logger.New().With(
@@ -150,22 +151,22 @@ type Job struct {
 	initialized bool
 	panicked    bool
 
-	runChart *Chart
-	charts   *Charts
-	tick     chan int
-	out      io.Writer
-	buf      *bytes.Buffer
-	api      *netdataapi.API
+	collectStatusChart   *Chart
+	collectDurationChart *Chart
+	charts               *Charts
+	tick                 chan int
+	out                  io.Writer
+	buf                  *bytes.Buffer
+	api                  *netdataapi.API
+
+	vnodeCreated bool
+	vnode        vnodes.VirtualNode
+	updVnode     chan *vnodes.VirtualNode
 
 	retries int
 	prevRun time.Time
 
 	stop chan struct{}
-
-	vnodeCreated  bool
-	vnodeGUID     string
-	vnodeHostname string
-	vnodeLabels   map[string]string
 }
 
 // NetdataChartIDMaxLength is the chart ID max length. See RRD_ID_LENGTH_MAX in the netdata source code.
@@ -205,6 +206,10 @@ func (j *Job) Configuration() any {
 	return j.module.Configuration()
 }
 
+func (j *Job) Vnode() vnodes.VirtualNode {
+	return j.vnode
+}
+
 // AutoDetection invokes init, check and postCheck. It handles panic.
 func (j *Job) AutoDetection() (err error) {
 	defer func() {
@@ -219,7 +224,7 @@ func (j *Job) AutoDetection() (err error) {
 			}
 		}
 		if err != nil {
-			j.module.Cleanup()
+			j.module.Cleanup(context.TODO())
 		}
 	}()
 
@@ -228,14 +233,14 @@ func (j *Job) AutoDetection() (err error) {
 	}
 
 	if err = j.init(); err != nil {
-		j.Error("init failed")
+		j.Errorf("init failed: %v", err)
 		j.Unmute()
 		j.disableAutoDetection()
 		return err
 	}
 
 	if err = j.check(); err != nil {
-		j.Error("check failed")
+		j.Errorf("check failed: %v", err)
 		j.Unmute()
 		return err
 	}
@@ -244,12 +249,20 @@ func (j *Job) AutoDetection() (err error) {
 	j.Info("check success")
 
 	if err = j.postCheck(); err != nil {
-		j.Error("postCheck failed")
+		j.Errorf("postCheck failed: %v", err)
 		j.disableAutoDetection()
 		return err
 	}
 
 	return nil
+}
+
+func (j *Job) UpdateVnode(vnode *vnodes.VirtualNode) {
+	select {
+	case <-j.updVnode:
+	default:
+	}
+	j.updVnode <- vnode
 }
 
 // Tick Tick.
@@ -277,7 +290,7 @@ LOOP:
 			}
 		}
 	}
-	j.module.Cleanup()
+	j.module.Cleanup(context.TODO())
 	j.Cleanup()
 	j.stop <- struct{}{}
 }
@@ -299,18 +312,25 @@ func (j *Job) Cleanup() {
 		return
 	}
 
-	if !vnodes.Disabled {
-		if !j.vnodeCreated && j.vnodeGUID != "" {
-			_ = j.api.HOSTINFO(j.vnodeGUID, j.vnodeHostname, j.vnodeLabels)
-			j.vnodeCreated = true
-		}
-		_ = j.api.HOST(j.vnodeGUID)
+	if !j.vnodeCreated && j.vnode.GUID != "" {
+		j.api.HOSTINFO(netdataapi.HostInfo{
+			GUID:     j.vnode.GUID,
+			Hostname: j.vnode.Hostname,
+			Labels:   j.vnode.Labels,
+		})
+		j.vnodeCreated = true
+	}
+	j.api.HOST(j.vnode.GUID)
+
+	if j.collectStatusChart.created {
+		j.collectStatusChart.MarkRemove()
+		j.createChart(j.collectStatusChart)
+	}
+	if j.collectDurationChart.created {
+		j.collectDurationChart.MarkRemove()
+		j.createChart(j.collectDurationChart)
 	}
 
-	if j.runChart.created {
-		j.runChart.MarkRemove()
-		j.createChart(j.runChart)
-	}
 	if j.charts != nil {
 		for _, chart := range *j.charts {
 			if chart.created {
@@ -330,7 +350,7 @@ func (j *Job) init() error {
 		return nil
 	}
 
-	if err := j.module.Init(); err != nil {
+	if err := j.module.Init(context.TODO()); err != nil {
 		return err
 	}
 
@@ -340,7 +360,7 @@ func (j *Job) init() error {
 }
 
 func (j *Job) check() error {
-	if err := j.module.Check(); err != nil {
+	if err := j.module.Check(context.TODO()); err != nil {
 		if j.AutoDetectTries != infTries {
 			j.AutoDetectTries--
 		}
@@ -393,29 +413,54 @@ func (j *Job) collect() (result map[string]int64) {
 			}
 		}
 	}()
-	return j.module.Collect()
+	return j.module.Collect(context.TODO())
 }
 
 func (j *Job) processMetrics(metrics map[string]int64, startTime time.Time, sinceLastRun int) bool {
-	if !vnodes.Disabled {
-		if !j.vnodeCreated && j.vnodeGUID != "" {
-			_ = j.api.HOSTINFO(j.vnodeGUID, j.vnodeHostname, j.vnodeLabels)
-			j.vnodeCreated = true
+	var createChart bool
+	if j.module.VirtualNode() == nil {
+		select {
+		case vnode := <-j.updVnode:
+			j.vnodeCreated = false
+			createChart = j.vnode.GUID != vnode.GUID
+			j.vnode = *vnode.Copy()
+		default:
 		}
-
-		_ = j.api.HOST(j.vnodeGUID)
 	}
 
-	if !ndInternalMonitoringDisabled && !j.runChart.created {
-		j.runChart.ID = fmt.Sprintf("execution_time_of_%s", j.FullName())
-		j.createChart(j.runChart)
+	if !j.vnodeCreated {
+		if j.vnode.GUID == "" {
+			if v := j.module.VirtualNode(); v != nil && v.GUID != "" && v.Hostname != "" {
+				j.vnode = *v
+			}
+		}
+		if j.vnode.GUID != "" {
+			j.api.HOSTINFO(netdataapi.HostInfo{
+				GUID:     j.vnode.GUID,
+				Hostname: j.vnode.Hostname,
+				Labels:   j.vnode.Labels,
+			})
+			j.vnodeCreated = true
+		}
+	}
+
+	j.api.HOST(j.vnode.GUID)
+
+	if !j.collectStatusChart.created || createChart {
+		j.collectStatusChart.ID = fmt.Sprintf("%s_%s_data_collection_status", cleanPluginName(j.pluginName), j.FullName())
+		j.createChart(j.collectStatusChart)
+	}
+
+	if !j.collectDurationChart.created || createChart {
+		j.collectDurationChart.ID = fmt.Sprintf("%s_%s_data_collection_duration", cleanPluginName(j.pluginName), j.FullName())
+		j.createChart(j.collectDurationChart)
 	}
 
 	elapsed := int64(durationTo(time.Since(startTime), time.Millisecond))
 
 	var i, updated int
 	for _, chart := range *j.charts {
-		if !chart.created {
+		if !chart.created || createChart {
 			typeID := fmt.Sprintf("%s.%s", j.FullName(), chart.ID)
 			if len(typeID) >= NetdataChartIDMaxLength {
 				j.Warningf("chart 'type.id' length (%d) >= max allowed (%d), the chart is ignored (%s)",
@@ -438,12 +483,17 @@ func (j *Job) processMetrics(metrics map[string]int64, startTime time.Time, sinc
 	}
 	*j.charts = (*j.charts)[:i]
 
+	j.updateChart(
+		j.collectStatusChart,
+		map[string]int64{"success": metrix.Bool(updated > 0), "failed": metrix.Bool(updated == 0)},
+		sinceLastRun,
+	)
+
 	if updated == 0 {
 		return false
 	}
-	if !ndInternalMonitoringDisabled {
-		j.updateChart(j.runChart, map[string]int64{"time": elapsed}, sinceLastRun)
-	}
+
+	j.updateChart(j.collectDurationChart, map[string]int64{"duration": elapsed}, sinceLastRun)
 
 	return true
 }
@@ -458,21 +508,21 @@ func (j *Job) createChart(chart *Chart) {
 		chart.Priority = j.priority
 		j.priority++
 	}
-	_ = j.api.CHART(
-		getChartType(chart, j),
-		getChartID(chart),
-		chart.OverID,
-		chart.Title,
-		chart.Units,
-		chart.Fam,
-		chart.Ctx,
-		chart.Type.String(),
-		chart.Priority,
-		j.updateEvery,
-		chart.Opts.String(),
-		j.pluginName,
-		j.moduleName,
-	)
+	j.api.CHART(netdataapi.ChartOpts{
+		TypeID:      getChartType(chart, j),
+		ID:          getChartID(chart),
+		Name:        chart.OverID,
+		Title:       chart.Title,
+		Units:       chart.Units,
+		Family:      chart.Fam,
+		Context:     chart.Ctx,
+		ChartType:   chart.Type.String(),
+		Priority:    chart.Priority,
+		UpdateEvery: j.updateEvery,
+		Options:     chart.Opts.String(),
+		Plugin:      j.pluginName,
+		Module:      j.moduleName,
+	})
 
 	if chart.Obsolete {
 		_ = j.api.EMPTYLINE()
@@ -489,32 +539,32 @@ func (j *Job) createChart(chart *Chart) {
 			if ls == 0 {
 				ls = LabelSourceAuto
 			}
-			_ = j.api.CLABEL(l.Key, l.Value, ls)
+			j.api.CLABEL(l.Key, lblReplacer.Replace(l.Value), ls)
 		}
 	}
 	for k, v := range j.labels {
 		if !seen[k] {
-			_ = j.api.CLABEL(k, v, LabelSourceConf)
+			j.api.CLABEL(k, lblReplacer.Replace(v), LabelSourceConf)
 		}
 	}
-	_ = j.api.CLABEL("_collect_job", j.Name(), LabelSourceAuto)
-	_ = j.api.CLABELCOMMIT()
+	j.api.CLABEL("_collect_job", lblReplacer.Replace(j.Name()), LabelSourceAuto)
+	j.api.CLABELCOMMIT()
 
 	for _, dim := range chart.Dims {
-		_ = j.api.DIMENSION(
-			firstNotEmpty(dim.Name, dim.ID),
-			dim.Name,
-			dim.Algo.String(),
-			handleZero(dim.Mul),
-			handleZero(dim.Div),
-			dim.DimOpts.String(),
-		)
+		j.api.DIMENSION(netdataapi.DimensionOpts{
+			ID:         firstNotEmpty(dim.Name, dim.ID),
+			Name:       dim.Name,
+			Algorithm:  dim.Algo.String(),
+			Multiplier: handleZero(dim.Mul),
+			Divisor:    handleZero(dim.Div),
+			Options:    dim.DimOpts.String(),
+		})
 	}
 	for _, v := range chart.Vars {
 		if v.Name != "" {
-			_ = j.api.VARIABLE(v.Name, v.Value)
+			j.api.VARIABLE(v.Name, v.Value)
 		} else {
-			_ = j.api.VARIABLE(v.ID, v.Value)
+			j.api.VARIABLE(v.ID, v.Value)
 		}
 	}
 	_ = j.api.EMPTYLINE()
@@ -536,11 +586,8 @@ func (j *Job) updateChart(chart *Chart, collected map[string]int64, sinceLastRun
 		sinceLastRun = 0
 	}
 
-	_ = j.api.BEGIN(
-		getChartType(chart, j),
-		getChartID(chart),
-		sinceLastRun,
-	)
+	j.api.BEGIN(getChartType(chart, j), getChartID(chart), sinceLastRun)
+
 	var i, updated int
 	for _, dim := range chart.Dims {
 		if dim.remove {
@@ -549,9 +596,9 @@ func (j *Job) updateChart(chart *Chart, collected map[string]int64, sinceLastRun
 		chart.Dims[i] = dim
 		i++
 		if v, ok := collected[dim.ID]; !ok {
-			_ = j.api.SETEMPTY(firstNotEmpty(dim.Name, dim.ID))
+			j.api.SETEMPTY(firstNotEmpty(dim.Name, dim.ID))
 		} else {
-			_ = j.api.SET(firstNotEmpty(dim.Name, dim.ID), v)
+			j.api.SET(firstNotEmpty(dim.Name, dim.ID), v)
 			updated++
 		}
 	}
@@ -560,14 +607,14 @@ func (j *Job) updateChart(chart *Chart, collected map[string]int64, sinceLastRun
 	for _, vr := range chart.Vars {
 		if v, ok := collected[vr.ID]; ok {
 			if vr.Name != "" {
-				_ = j.api.VARIABLE(vr.Name, v)
+				j.api.VARIABLE(vr.Name, v)
 			} else {
-				_ = j.api.VARIABLE(vr.ID, v)
+				j.api.VARIABLE(vr.ID, v)
 			}
 		}
 
 	}
-	_ = j.api.END()
+	j.api.END()
 
 	if chart.updated = updated > 0; chart.updated {
 		chart.Retries = 0
@@ -643,3 +690,10 @@ func handleZero(v int) int {
 	}
 	return v
 }
+
+func cleanPluginName(name string) string {
+	r := strings.NewReplacer(" ", "_", ".", "_")
+	return r.Replace(name)
+}
+
+var lblReplacer = strings.NewReplacer("'", "")

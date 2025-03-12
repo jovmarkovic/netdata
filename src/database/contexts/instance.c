@@ -37,6 +37,11 @@ inline STRING *rrdinstance_acquired_units_dup(RRDINSTANCE_ACQUIRED *ria) {
 
 inline RRDLABELS *rrdinstance_acquired_labels(RRDINSTANCE_ACQUIRED *ria) {
     RRDINSTANCE *ri = rrdinstance_acquired_value(ria);
+    if (rrd_flag_check(ri, RRD_FLAG_OWN_LABELS | RRD_FLAG_DEMAND_LABELS)) {
+        rrd_flag_clear(ri, RRD_FLAG_DEMAND_LABELS);
+        load_instance_labels_on_demand(uuidmap_uuid_ptr(ri->uuid), ri);
+        rrdinstance_trigger_updates(ri, __FUNCTION__ );
+    }
     return ri->rrdlabels;
 }
 
@@ -76,12 +81,15 @@ static void rrdinstance_free(RRDINSTANCE *ri) {
     string_freez(ri->title);
     string_freez(ri->units);
     string_freez(ri->family);
+    uuidmap_free(ri->uuid);
 
     ri->id = NULL;
     ri->name = NULL;
     ri->title = NULL;
     ri->units = NULL;
     ri->family = NULL;
+    ri->uuid = 0;
+
     ri->rc = NULL;
     ri->rrdlabels = NULL;
     ri->rrdmetrics = NULL;
@@ -101,11 +109,11 @@ static void rrdinstance_insert_callback(const DICTIONARY_ITEM *item __maybe_unus
 
     if(ri->rrdset) {
         ri->rrdlabels = ri->rrdset->rrdlabels;
-        ri->flags &= ~RRD_FLAG_OWN_LABELS; // no need of atomics at the constructor
+        ri->flags &= ~(RRD_FLAG_OWN_LABELS| RRD_FLAG_DEMAND_LABELS); // no need of atomics at the constructor
     }
     else {
         ri->rrdlabels = rrdlabels_create();
-        ri->flags |= RRD_FLAG_OWN_LABELS; // no need of atomics at the constructor
+        ri->flags |= (RRD_FLAG_OWN_LABELS | RRD_FLAG_DEMAND_LABELS); // no need of atomics at the constructor
     }
 
     if(ri->rrdset) {
@@ -117,6 +125,9 @@ static void rrdinstance_insert_callback(const DICTIONARY_ITEM *item __maybe_unus
 
     rrdmetrics_create_in_rrdinstance(ri);
 
+    // update the count of instances
+    __atomic_add_fetch(&ri->rc->rrdhost->rrdctx.instances_count, 1, __ATOMIC_RELAXED);
+
     // signal the react callback to do the job
     rrd_flag_set_updated(ri, RRD_FLAG_UPDATE_REASON_NEW_OBJECT);
 }
@@ -125,6 +136,9 @@ static void rrdinstance_delete_callback(const DICTIONARY_ITEM *item __maybe_unus
     RRDINSTANCE *ri = (RRDINSTANCE *)value;
 
     internal_error(ri->rrdset, "RRDINSTANCE: '%s' is freed but there is a RRDSET linked to it.", string2str(ri->id));
+
+    // update the count of instances
+    __atomic_sub_fetch(&ri->rc->rrdhost->rrdctx.instances_count, 1, __ATOMIC_RELAXED);
 
     rrdinstance_free(ri);
 }
@@ -137,58 +151,36 @@ static bool rrdinstance_conflict_callback(const DICTIONARY_ITEM *item __maybe_un
                    "RRDINSTANCE: '%s' cannot change id to '%s'",
                    string2str(ri->id), string2str(ri_new->id));
 
-    if(!uuid_eq(ri->uuid, ri_new->uuid)) {
+    if(ri->uuid != ri_new->uuid) {
 #ifdef NETDATA_INTERNAL_CHECKS
         char uuid1[UUID_STR_LEN], uuid2[UUID_STR_LEN];
-        uuid_unparse(ri->uuid, uuid1);
-        uuid_unparse(ri_new->uuid, uuid2);
+        uuid_unparse(*uuidmap_uuid_ptr(ri->uuid), uuid1);
+        uuid_unparse(*uuidmap_uuid_ptr(ri_new->uuid), uuid2);
         internal_error(true, "RRDINSTANCE: '%s' of host '%s' changed UUID from '%s' to '%s'",
                        string2str(ri->id), rrdhost_hostname(ri->rc->rrdhost), uuid1, uuid2);
 #endif
 
-        uuid_copy(ri->uuid, ri_new->uuid);
+        SWAP(ri->uuid, ri_new->uuid);
         rrd_flag_set_updated(ri, RRD_FLAG_UPDATE_REASON_CHANGED_METADATA);
     }
 
-    if(ri->rrdset && ri_new->rrdset && ri->rrdset != ri_new->rrdset) {
-        ri->rrdset = ri_new->rrdset;
-        rrd_flag_set_updated(ri, RRD_FLAG_UPDATE_REASON_CHANGED_LINKING);
-    }
-
-#ifdef NETDATA_INTERNAL_CHECKS
-    if(ri->rrdset && !uuid_eq(ri->uuid, ri->rrdset->chart_uuid)) {
-        char uuid1[UUID_STR_LEN], uuid2[UUID_STR_LEN];
-        uuid_unparse(ri->uuid, uuid1);
-        uuid_unparse(ri->rrdset->chart_uuid, uuid2);
-        internal_error(true, "RRDINSTANCE: '%s' is linked to RRDSET '%s' but they have different UUIDs. RRDINSTANCE has '%s', RRDSET has '%s'", string2str(ri->id), rrdset_id(ri->rrdset), uuid1, uuid2);
-    }
-#endif
-
     if(ri->name != ri_new->name) {
-        STRING *old = ri->name;
-        ri->name = string_dup(ri_new->name);
-        string_freez(old);
+        SWAP(ri->name, ri_new->name);
         rrd_flag_set_updated(ri, RRD_FLAG_UPDATE_REASON_CHANGED_METADATA);
     }
 
     if(ri->title != ri_new->title) {
-        STRING *old = ri->title;
-        ri->title = string_dup(ri_new->title);
-        string_freez(old);
+        SWAP(ri->title, ri_new->title);
         rrd_flag_set_updated(ri, RRD_FLAG_UPDATE_REASON_CHANGED_METADATA);
     }
 
     if(ri->units != ri_new->units) {
-        STRING *old = ri->units;
-        ri->units = string_dup(ri_new->units);
-        string_freez(old);
+        SWAP(ri->units, ri_new->units);
         rrd_flag_set_updated(ri, RRD_FLAG_UPDATE_REASON_CHANGED_METADATA);
     }
 
     if(ri->family != ri_new->family) {
-        STRING *old = ri->family;
-        ri->family = string_dup(ri_new->family);
-        string_freez(old);
+        SWAP(ri->family, ri_new->family);
         rrd_flag_set_updated(ri, RRD_FLAG_UPDATE_REASON_CHANGED_METADATA);
     }
 
@@ -207,18 +199,23 @@ static bool rrdinstance_conflict_callback(const DICTIONARY_ITEM *item __maybe_un
         rrd_flag_set_updated(ri, RRD_FLAG_UPDATE_REASON_CHANGED_METADATA);
     }
 
+    if(ri->rrdset && ri_new->rrdset && ri->rrdset != ri_new->rrdset) {
+        ri->rrdset = ri_new->rrdset;
+        rrd_flag_set_updated(ri, RRD_FLAG_UPDATE_REASON_CHANGED_LINKING);
+    }
+
     if(ri->rrdset != ri_new->rrdset) {
         ri->rrdset = ri_new->rrdset;
 
         if(ri->rrdset && rrd_flag_check(ri, RRD_FLAG_OWN_LABELS)) {
             RRDLABELS *old = ri->rrdlabels;
             ri->rrdlabels = ri->rrdset->rrdlabels;
-            rrd_flag_clear(ri, RRD_FLAG_OWN_LABELS);
+            rrd_flag_clear(ri, RRD_FLAG_OWN_LABELS| RRD_FLAG_DEMAND_LABELS);
             rrdlabels_destroy(old);
         }
         else if(!ri->rrdset && !rrd_flag_check(ri, RRD_FLAG_OWN_LABELS)) {
             ri->rrdlabels = rrdlabels_create();
-            rrd_flag_set(ri, RRD_FLAG_OWN_LABELS);
+            rrd_flag_set(ri, RRD_FLAG_OWN_LABELS | RRD_FLAG_DEMAND_LABELS);
         }
     }
 
@@ -232,7 +229,7 @@ static bool rrdinstance_conflict_callback(const DICTIONARY_ITEM *item __maybe_un
     rrd_flag_set(ri, ri_new->flags & RRD_FLAGS_ALLOWED_EXTERNALLY_ON_NEW_OBJECTS); // no need for atomics on ri_new
 
     if(rrd_flag_is_collected(ri) && rrd_flag_is_archived(ri))
-        rrd_flag_set_collected(ri);
+        rrdinstance_set_collected(ri);
 
     if(rrd_flag_is_updated(ri))
         rrd_flag_set(ri, RRD_FLAG_UPDATE_REASON_UPDATED_OBJECT);
@@ -285,7 +282,7 @@ void rrdinstance_trigger_updates(RRDINSTANCE *ri, const char *function) {
     else if(unlikely(rrd_flag_is_collected(ri))) {
         // there is no rrdset, but we have it as collected!
 
-        rrd_flag_set_archived(ri);
+        rrdinstance_set_archived(ri);
         rrd_flag_set_updated(ri, RRD_FLAG_UPDATE_REASON_CHANGED_LINKING);
     }
 
@@ -314,18 +311,18 @@ inline void rrdinstance_from_rrdset(RRDSET *st) {
     RRDCONTEXT *rc = rrdcontext_acquired_value(rca);
 
     RRDINSTANCE tri = {
-            .id = string_dup(st->id),
-            .name = string_dup(st->name),
-            .units = string_dup(st->units),
-            .family = string_dup(st->family),
-            .title = string_dup(st->title),
-            .chart_type = st->chart_type,
-            .priority = st->priority,
-            .update_every_s = st->update_every,
-            .flags = RRD_FLAG_NONE, // no need for atomics
-            .rrdset = st,
+        .uuid = uuidmap_create(st->chart_uuid),
+        .id = string_dup(st->id),
+        .name = string_dup(st->name),
+        .units = string_dup(st->units),
+        .family = string_dup(st->family),
+        .title = string_dup(st->title),
+        .chart_type = st->chart_type,
+        .priority = st->priority,
+        .update_every_s = st->update_every,
+        .flags = RRD_FLAG_NONE, // no need for atomics
+        .rrdset = st,
     };
-    uuid_copy(tri.uuid, st->chart_uuid);
 
     RRDINSTANCE_ACQUIRED *ria = (RRDINSTANCE_ACQUIRED *)dictionary_set_and_acquire_item(rc->rrdinstances, string2str(tri.id), &tri, sizeof(tri));
 
@@ -357,7 +354,7 @@ inline void rrdinstance_from_rrdset(RRDSET *st) {
                     if (!rd->rrdcontexts.rrdmetric) continue;
 
                     RRDMETRIC *rm_old = rrdmetric_acquired_value(rd->rrdcontexts.rrdmetric);
-                    rrd_flags_replace(rm_old, RRD_FLAG_DELETED|RRD_FLAG_UPDATED|RRD_FLAG_LIVE_RETENTION|RRD_FLAG_UPDATE_REASON_UNUSED|RRD_FLAG_UPDATE_REASON_ZERO_RETENTION);
+                    rrdmetric_set_deleted_overwrite(rm_old, RRD_FLAG_UPDATED|RRD_FLAG_LIVE_RETENTION|RRD_FLAG_UPDATE_REASON_UNUSED|RRD_FLAG_UPDATE_REASON_ZERO_RETENTION);
                     rm_old->rrddim = NULL;
                     rm_old->first_time_s = 0;
                     rm_old->last_time_s = 0;
@@ -373,7 +370,7 @@ inline void rrdinstance_from_rrdset(RRDSET *st) {
         if(!rrd_flag_check(ri_old, RRD_FLAG_OWN_LABELS))
             ri_old->rrdlabels = rrdlabels_create();
 
-        rrd_flags_replace(ri_old, RRD_FLAG_OWN_LABELS|RRD_FLAG_DELETED|RRD_FLAG_UPDATED|RRD_FLAG_LIVE_RETENTION|RRD_FLAG_UPDATE_REASON_UNUSED|RRD_FLAG_UPDATE_REASON_ZERO_RETENTION);
+        rrdinstance_set_deleted_overwrite(ri_old, RRD_FLAG_UPDATED|RRD_FLAG_OWN_LABELS|RRD_FLAG_LIVE_RETENTION|RRD_FLAG_UPDATE_REASON_UNUSED|RRD_FLAG_UPDATE_REASON_ZERO_RETENTION);
         ri_old->rrdset = NULL;
         ri_old->first_time_s = 0;
         ri_old->last_time_s = 0;
@@ -423,16 +420,29 @@ static inline RRDINSTANCE *rrdset_get_rrdinstance_with_trace(RRDSET *st, const c
     return ri;
 }
 
+ALWAYS_INLINE void rrdinstance_rrdset_not_collected(RRDSET *st) {
+    st->rrdcontexts.collected = false;
+
+    RRDDIM *rd;
+    rrddim_foreach_read(rd, st) {
+        rrdmetric_not_collected_rrddim(rd);
+    }
+    rrddim_foreach_done(rd);
+}
+
 inline void rrdinstance_rrdset_is_freed(RRDSET *st) {
+    rrdinstance_rrdset_not_collected(st);
+
     RRDINSTANCE *ri = rrdset_get_rrdinstance(st);
     if(unlikely(!ri)) return;
 
-    rrd_flag_set_archived(ri);
+    rrdinstance_set_archived(ri);
 
     if(!rrd_flag_check(ri, RRD_FLAG_OWN_LABELS)) {
         ri->rrdlabels = rrdlabels_create();
-        rrdlabels_copy(ri->rrdlabels, st->rrdlabels);
-        rrd_flag_set(ri, RRD_FLAG_OWN_LABELS);
+        // Do not load copy labels, just load on demand
+        //rrdlabels_copy(ri->rrdlabels, st->rrdlabels);
+        rrd_flag_set(ri, RRD_FLAG_OWN_LABELS | RRD_FLAG_DEMAND_LABELS);
     }
 
     ri->rrdset = NULL;
@@ -444,11 +454,10 @@ inline void rrdinstance_rrdset_is_freed(RRDSET *st) {
 
     rrdcontext_release(st->rrdcontexts.rrdcontext);
     st->rrdcontexts.rrdcontext = NULL;
-    st->rrdcontexts.collected = false;
 }
 
-inline void rrdinstance_rrdset_has_updated_retention(RRDSET *st) {
-    st->rrdcontexts.collected = false;
+ALWAYS_INLINE void rrdinstance_rrdset_has_updated_retention(RRDSET *st) {
+    // rrdinstance_rrdset_not_collected(st);
 
     RRDINSTANCE *ri = rrdset_get_rrdinstance(st);
     if(unlikely(!ri)) return;
@@ -458,7 +467,7 @@ inline void rrdinstance_rrdset_has_updated_retention(RRDSET *st) {
 }
 
 inline void rrdinstance_updated_rrdset_name(RRDSET *st) {
-    st->rrdcontexts.collected = false;
+    rrdinstance_rrdset_not_collected(st);
 
     // the chart may not be initialized when this is called
     if(unlikely(!st->rrdcontexts.rrdinstance)) return;
@@ -496,20 +505,20 @@ inline void rrdinstance_updated_rrdset_flags_no_action(RRDINSTANCE *ri, RRDSET *
 }
 
 inline void rrdinstance_updated_rrdset_flags(RRDSET *st) {
-    st->rrdcontexts.collected = false;
+    rrdinstance_rrdset_not_collected(st);
 
     RRDINSTANCE *ri = rrdset_get_rrdinstance(st);
     if(unlikely(!ri)) return;
 
     if(unlikely(rrdset_flag_check(st, RRDSET_FLAG_OBSOLETE)))
-        rrd_flag_set_archived(ri);
+        rrdinstance_set_archived(ri);
 
     rrdinstance_updated_rrdset_flags_no_action(ri, st);
 
     rrdinstance_trigger_updates(ri, __FUNCTION__ );
 }
 
-inline void rrdinstance_collected_rrdset(RRDSET *st) {
+ALWAYS_INLINE void rrdinstance_collected_rrdset(RRDSET *st) {
     if(st->rrdcontexts.collected)
         return;
 
@@ -526,11 +535,10 @@ inline void rrdinstance_collected_rrdset(RRDSET *st) {
     rrdinstance_updated_rrdset_flags_no_action(ri, st);
 
     if(unlikely(ri->internal.collected_metrics_count && !rrd_flag_is_collected(ri)))
-        rrd_flag_set_collected(ri);
+        rrdinstance_set_collected(ri);
 
     // we use this variable to detect BEGIN/END without SET
     ri->internal.collected_metrics_count = 0;
 
     rrdinstance_trigger_updates(ri, __FUNCTION__ );
 }
-

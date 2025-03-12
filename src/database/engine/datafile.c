@@ -33,12 +33,12 @@ static struct rrdengine_datafile *datafile_alloc_and_init(struct rrdengine_insta
 
     spinlock_init(&datafile->users.spinlock);
     spinlock_init(&datafile->writers.spinlock);
-    spinlock_init(&datafile->extent_queries.spinlock);
+    rw_spinlock_init(&datafile->extent_epdl.spinlock);
 
     return datafile;
 }
 
-bool datafile_acquire(struct rrdengine_datafile *df, DATAFILE_ACQUIRE_REASONS reason) {
+ALWAYS_INLINE bool datafile_acquire(struct rrdengine_datafile *df, DATAFILE_ACQUIRE_REASONS reason) {
     bool ret;
 
     spinlock_lock(&df->users.spinlock);
@@ -56,17 +56,19 @@ bool datafile_acquire(struct rrdengine_datafile *df, DATAFILE_ACQUIRE_REASONS re
     return ret;
 }
 
-void datafile_release(struct rrdengine_datafile *df, DATAFILE_ACQUIRE_REASONS reason) {
+void datafile_release_with_trace(struct rrdengine_datafile *df, DATAFILE_ACQUIRE_REASONS reason, const char *func) {
     spinlock_lock(&df->users.spinlock);
     if(!df->users.lockers)
-        fatal("DBENGINE DATAFILE: cannot release a datafile that is not acquired");
+        fatal("DBENGINE DATAFILE: cannot release datafile %u of tier %u - it is not acquired, called from %s() with reason %u",
+              df->fileno, df->tier, func, reason);
 
     df->users.lockers--;
     df->users.lockers_by_reason[reason]--;
     spinlock_unlock(&df->users.spinlock);
 }
 
-bool datafile_acquire_for_deletion(struct rrdengine_datafile *df) {
+bool datafile_acquire_for_deletion(struct rrdengine_datafile *df, bool is_shutdown)
+{
     bool can_be_deleted = false;
 
     spinlock_lock(&df->users.spinlock);
@@ -107,7 +109,7 @@ bool datafile_acquire_for_deletion(struct rrdengine_datafile *df) {
 
                 if(!df->users.time_to_evict) {
                     // first time we did the above
-                    df->users.time_to_evict = now_s + 120;
+                    df->users.time_to_evict = now_s + (is_shutdown ? DATAFILE_DELETE_TIMEOUT_SHORT : DATAFILE_DELETE_TIMEOUT_LONG);
                     internal_error(true, "DBENGINE: datafile %u of tier %d is not used by any open cache pages, "
                                          "but it has %u lockers (oc:%u, pd:%u), "
                                          "%zu clean and %zu hot open cache pages "
@@ -250,7 +252,7 @@ int create_data_file(struct rrdengine_datafile *datafile)
     char path[RRDENG_PATH_MAX];
 
     generate_datafilepath(datafile, path, sizeof(path));
-    fd = open_file_for_io(path, O_CREAT | O_RDWR | O_TRUNC, &file, use_direct_io);
+    fd = open_file_for_io(path, O_CREAT | O_RDWR | O_TRUNC, &file, dbengine_use_direct_io);
     if (fd < 0) {
         ctx_fs_error(ctx);
         return fd;
@@ -258,10 +260,7 @@ int create_data_file(struct rrdengine_datafile *datafile)
     datafile->file = file;
     __atomic_add_fetch(&ctx->stats.datafile_creations, 1, __ATOMIC_RELAXED);
 
-    ret = posix_memalign((void *)&superblock, RRDFILE_ALIGNMENT, sizeof(*superblock));
-    if (unlikely(ret)) {
-        fatal("DBENGINE: posix_memalign:%s", strerror(ret));
-    }
+    (void)posix_memalignz((void *)&superblock, RRDFILE_ALIGNMENT, sizeof(*superblock));
     memset(superblock, 0, sizeof(*superblock));
     (void) strncpy(superblock->magic_number, RRDENG_DF_MAGIC, RRDENG_MAGIC_SZ);
     (void) strncpy(superblock->version, RRDENG_DF_VER, RRDENG_VER_SZ);
@@ -276,7 +275,7 @@ int create_data_file(struct rrdengine_datafile *datafile)
         ctx_io_error(ctx);
     }
     uv_fs_req_cleanup(&req);
-    posix_memfree(superblock);
+    posix_memalign_freez(superblock);
     if (ret < 0) {
         destroy_data_file_unsafe(datafile);
         return ret;
@@ -295,10 +294,7 @@ static int check_data_file_superblock(uv_file file)
     uv_buf_t iov;
     uv_fs_t req;
 
-    ret = posix_memalign((void *)&superblock, RRDFILE_ALIGNMENT, sizeof(*superblock));
-    if (unlikely(ret)) {
-        fatal("DBENGINE: posix_memalign:%s", strerror(ret));
-    }
+    (void)posix_memalignz((void *)&superblock, RRDFILE_ALIGNMENT, sizeof(*superblock));
     iov = uv_buf_init((void *)superblock, sizeof(*superblock));
 
     ret = uv_fs_read(NULL, &req, file, &iov, 1, 0, NULL);
@@ -319,7 +315,7 @@ static int check_data_file_superblock(uv_file file)
         ret = 0;
     }
     error:
-    posix_memfree(superblock);
+        posix_memalign_freez(superblock);
     return ret;
 }
 
@@ -333,7 +329,7 @@ static int load_data_file(struct rrdengine_datafile *datafile)
     char path[RRDENG_PATH_MAX];
 
     generate_datafilepath(datafile, path, sizeof(path));
-    fd = open_file_for_io(path, O_RDWR, &file, use_direct_io);
+    fd = open_file_for_io(path, O_RDWR, &file, dbengine_use_direct_io);
     if (fd < 0) {
         ctx_fs_error(ctx);
         return fd;
@@ -572,8 +568,8 @@ void finalize_data_files(struct rrdengine_instance *ctx)
         struct rrdengine_journalfile *journalfile = datafile->journalfile;
 
         logged = false;
-        size_t iterations = 100;
-        while(!datafile_acquire_for_deletion(datafile) && datafile != ctx->datafiles.first->prev && --iterations > 0) {
+        size_t iterations = 10;
+        while(!datafile_acquire_for_deletion(datafile, true) && datafile != ctx->datafiles.first->prev && --iterations > 0) {
             if(!logged) {
                 netdata_log_info("Waiting to acquire data file %u of tier %d to close it...", datafile->fileno, ctx->config.tier);
                 logged = true;

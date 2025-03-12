@@ -27,12 +27,12 @@ static struct {
     } used;
 } query_target_base = {
         .available = {
-                .spinlock = NETDATA_SPINLOCK_INITIALIZER,
+                .spinlock = SPINLOCK_INITIALIZER,
                 .base = NULL,
                 .count = 0,
         },
         .used = {
-                .spinlock = NETDATA_SPINLOCK_INITIALIZER,
+                .spinlock = SPINLOCK_INITIALIZER,
                 .base = NULL,
                 .count = 0,
         },
@@ -210,7 +210,7 @@ typedef struct query_target_locals {
     QUERY_NODE *qn; // temp to pass on callbacks, ignore otherwise - no need to free
 } QUERY_TARGET_LOCALS;
 
-struct storage_engine *query_metric_storage_engine(QUERY_TARGET *qt, QUERY_METRIC *qm, size_t tier) {
+struct storage *query_metric_storage_engine(QUERY_TARGET *qt, QUERY_METRIC *qm, size_t tier) {
     QUERY_NODE *qn = query_node(qt, qm->link.query_node_id);
     return qn->rrdhost->db[tier].eng;
 }
@@ -219,7 +219,7 @@ static inline void query_metric_release(QUERY_TARGET *qt, QUERY_METRIC *qm) {
     qm->plan.used = 0;
 
     // reset the tiers
-    for(size_t tier = 0; tier < storage_tiers ;tier++) {
+    for(size_t tier = 0; tier < nd_profile.storage_tiers;tier++) {
         if(qm->tiers[tier].smh) {
             STORAGE_ENGINE *eng = query_metric_storage_engine(qt, qm, tier);
             eng->api.metric_release(qm->tiers[tier].smh);
@@ -244,9 +244,9 @@ static bool query_metric_add(QUERY_TARGET_LOCALS *qtl, QUERY_NODE *qn, QUERY_CON
         time_t db_first_time_s;
         time_t db_last_time_s;
         time_t db_update_every_s;
-    } tier_retention[storage_tiers];
+    } tier_retention[nd_profile.storage_tiers];
 
-    for (size_t tier = 0; tier < storage_tiers; tier++) {
+    for (size_t tier = 0; tier < nd_profile.storage_tiers; tier++) {
         STORAGE_ENGINE *eng = qn->rrdhost->db[tier].eng;
         tier_retention[tier].eng = eng;
         tier_retention[tier].db_update_every_s = (time_t) (qn->rrdhost->db[tier].tier_grouping * ri->update_every_s);
@@ -254,7 +254,7 @@ static bool query_metric_add(QUERY_TARGET_LOCALS *qtl, QUERY_NODE *qn, QUERY_CON
         if(rm->rrddim && rm->rrddim->tiers[tier].smh)
             tier_retention[tier].smh = eng->api.metric_dup(rm->rrddim->tiers[tier].smh);
         else
-            tier_retention[tier].smh = eng->api.metric_get(qn->rrdhost->db[tier].si, &rm->uuid);
+            tier_retention[tier].smh = eng->api.metric_get_by_id(qn->rrdhost->db[tier].si, rm->uuid);
 
         if(tier_retention[tier].smh) {
             tier_retention[tier].db_first_time_s = storage_engine_oldest_time_s(tier_retention[tier].eng->seb, tier_retention[tier].smh);
@@ -284,7 +284,7 @@ static bool query_metric_add(QUERY_TARGET_LOCALS *qtl, QUERY_NODE *qn, QUERY_CON
         }
     }
 
-    for (size_t tier = 0; tier < storage_tiers; tier++) {
+    for (size_t tier = 0; tier < nd_profile.storage_tiers; tier++) {
         if(!qt->db.tiers[tier].update_every || (tier_retention[tier].db_update_every_s && tier_retention[tier].db_update_every_s < qt->db.tiers[tier].update_every))
             qt->db.tiers[tier].update_every = tier_retention[tier].db_update_every_s;
 
@@ -328,7 +328,7 @@ static bool query_metric_add(QUERY_TARGET_LOCALS *qtl, QUERY_NODE *qn, QUERY_CON
         if (!qt->db.last_time_s || common_last_time_s > qt->db.last_time_s)
             qt->db.last_time_s = common_last_time_s;
 
-        for (size_t tier = 0; tier < storage_tiers; tier++) {
+        for (size_t tier = 0; tier < nd_profile.storage_tiers; tier++) {
             internal_fatal(tier_retention[tier].eng != query_metric_storage_engine(qt, qm, tier), "QUERY TARGET: storage engine mismatch");
             qm->tiers[tier].smh = tier_retention[tier].smh;
             qm->tiers[tier].db_first_time_s = tier_retention[tier].db_first_time_s;
@@ -340,7 +340,7 @@ static bool query_metric_add(QUERY_TARGET_LOCALS *qtl, QUERY_NODE *qn, QUERY_CON
     }
 
     // cleanup anything we allocated to the retention we will not use
-    for(size_t tier = 0; tier < storage_tiers ;tier++) {
+    for(size_t tier = 0; tier < nd_profile.storage_tiers;tier++) {
         if (tier_retention[tier].smh) {
             tier_retention[tier].eng->api.metric_release(tier_retention[tier].smh);
             tier_retention[tier].smh = NULL;
@@ -897,9 +897,9 @@ static ssize_t query_node_add(void *data, RRDHOST *host, bool queryable_host) {
     QUERY_TARGET *qt = qtl->qt;
     QUERY_NODE *qn = query_node_allocate(qt, host);
 
-    if(host->node_id) {
+    if(!UUIDiszero(host->node_id)) {
         if(!qtl->host_node_id_str[0])
-            uuid_unparse_lower(*host->node_id, qn->node_id);
+            uuid_unparse_lower(host->node_id.uuid, qn->node_id);
         else
             memcpy(qn->node_id, qtl->host_node_id_str, sizeof(qn->node_id));
     }
@@ -958,7 +958,7 @@ static ssize_t query_node_add(void *data, RRDHOST *host, bool queryable_host) {
 
 void query_target_generate_name(QUERY_TARGET *qt) {
     char options_buffer[100 + 1];
-    web_client_api_request_v1_data_options_to_string(options_buffer, 100, qt->request.options);
+    web_client_api_request_data_vX_options_to_string(options_buffer, 100, qt->request.options);
 
     char resampling_buffer[20 + 1] = "";
     if(qt->request.resampling_time > 1)
@@ -1035,8 +1035,8 @@ void query_target_generate_name(QUERY_TARGET *qt) {
 }
 
 QUERY_TARGET *query_target_create(QUERY_TARGET_REQUEST *qtr) {
-    if(!service_running(ABILITY_DATA_QUERIES))
-        return NULL;
+    //if(!service_running(ABILITY_DATA_QUERIES))
+    //    return NULL;
 
     QUERY_TARGET *qt = query_target_get();
 
@@ -1120,8 +1120,8 @@ QUERY_TARGET *query_target_create(QUERY_TARGET_REQUEST *qtr) {
     }
 
     if(host) {
-        if(host->node_id)
-            uuid_unparse_lower(*host->node_id, qtl.host_node_id_str);
+        if(!UUIDiszero(host->node_id))
+            uuid_unparse_lower(host->node_id.uuid, qtl.host_node_id_str);
         else
             qtl.host_node_id_str[0] = '\0';
 

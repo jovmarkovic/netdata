@@ -21,25 +21,17 @@
 // Contexts
 #define NETDATA_CGROUP_SWAP_READ_CONTEXT "cgroup.swap_read"
 #define NETDATA_CGROUP_SWAP_WRITE_CONTEXT "cgroup.swap_write"
-#define NETDATA_SYSTEMD_SWAP_READ_CONTEXT "systemd.services.swap_read"
-#define NETDATA_SYSTEMD_SWAP_WRITE_CONTEXT "systemd.services.swap_write"
+#define NETDATA_SYSTEMD_SWAP_READ_CONTEXT "systemd.service.swap_read"
+#define NETDATA_SYSTEMD_SWAP_WRITE_CONTEXT "systemd.service.swap_write"
 
-typedef struct netdata_publish_swap {
+typedef struct __attribute__((packed)) netdata_publish_swap {
     uint64_t ct;
-    uint32_t tgid;
-    uint32_t uid;
-    uint32_t gid;
-    char name[TASK_COMM_LEN];
 
-    uint64_t read;
-    uint64_t write;
+    uint32_t read;
+    uint32_t write;
 } netdata_publish_swap_t;
 
-enum swap_tables {
-    NETDATA_PID_SWAP_TABLE,
-    NETDATA_SWAP_CONTROLLER,
-    NETDATA_SWAP_GLOBAL_TABLE
-};
+enum swap_tables { NETDATA_PID_SWAP_TABLE, NETDATA_SWAP_CONTROLLER, NETDATA_SWAP_GLOBAL_TABLE };
 
 enum swap_counters {
     NETDATA_KEY_SWAP_READPAGE_CALL,

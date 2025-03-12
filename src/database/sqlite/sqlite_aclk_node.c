@@ -6,8 +6,6 @@
 #include "../../aclk/aclk_contexts_api.h"
 #include "../../aclk/aclk_capas.h"
 
-#ifdef ENABLE_ACLK
-
 DICTIONARY *collectors_from_charts(RRDHOST *host, DICTIONARY *dict) {
     RRDSET *st;
     char name[500];
@@ -32,16 +30,18 @@ static void build_node_collectors(RRDHOST *host)
     struct update_node_collectors upd_node_collectors;
     DICTIONARY *dict = dictionary_create(DICT_OPTION_SINGLE_THREADED);
 
+    CLAIM_ID claim_id = claim_id_get();
     upd_node_collectors.node_id = wc->node_id;
-    upd_node_collectors.claim_id = get_agent_claimid();
+    upd_node_collectors.claim_id = claim_id_is_set(claim_id) ? claim_id.str : NULL;
 
     upd_node_collectors.node_collectors = collectors_from_charts(host, dict);
     aclk_update_node_collectors(&upd_node_collectors);
 
     dictionary_destroy(dict);
-    freez(upd_node_collectors.claim_id);
 
-    nd_log(NDLS_ACCESS, NDLP_DEBUG, "ACLK RES [%s (%s)]: NODE COLLECTORS SENT", wc->node_id, rrdhost_hostname(host));
+    nd_log(NDLS_ACCESS, NDLP_DEBUG,
+           "ACLK RES [%s (%s)]: NODE COLLECTORS SENT",
+           wc->node_id, rrdhost_hostname(host));
 }
 
 static void build_node_info(RRDHOST *host)
@@ -50,9 +50,11 @@ static void build_node_info(RRDHOST *host)
 
     struct aclk_sync_cfg_t *wc = host->aclk_config;
 
+    CLAIM_ID claim_id = claim_id_get();
+
     rrd_rdlock();
     node_info.node_id = wc->node_id;
-    node_info.claim_id = get_agent_claimid();
+    node_info.claim_id = claim_id_is_set(claim_id) ? claim_id.str : NULL;
     node_info.machine_guid = host->machine_guid;
     node_info.child = (host != localhost);
     node_info.ml_info.ml_capable = ml_capable();
@@ -63,45 +65,20 @@ static void build_node_info(RRDHOST *host)
     now_realtime_timeval(&node_info.updated_at);
 
     char *host_version = NULL;
-    if (host != localhost) {
-        netdata_mutex_lock(&host->receiver_lock);
-        host_version = strdupz(
-            host->receiver && host->receiver->program_version ? host->receiver->program_version :
-                                                                rrdhost_program_version(host));
-        netdata_mutex_unlock(&host->receiver_lock);
-    }
+    if (host != localhost)
+        host_version = stream_receiver_program_version_strdupz(host);
 
     node_info.data.name = rrdhost_hostname(host);
     node_info.data.os = rrdhost_os(host);
-    node_info.data.os_name = host->system_info->host_os_name;
-    node_info.data.os_version = host->system_info->host_os_version;
-    node_info.data.kernel_name = host->system_info->kernel_name;
-    node_info.data.kernel_version = host->system_info->kernel_version;
-    node_info.data.architecture = host->system_info->architecture;
-    node_info.data.cpus = host->system_info->host_cores ? str2uint32_t(host->system_info->host_cores, NULL) : 0;
-    node_info.data.cpu_frequency = host->system_info->host_cpu_freq ? host->system_info->host_cpu_freq : "0";
-    node_info.data.memory = host->system_info->host_ram_total ? host->system_info->host_ram_total : "0";
-    node_info.data.disk_space = host->system_info->host_disk_space ? host->system_info->host_disk_space : "0";
     node_info.data.version = host_version ? host_version : NETDATA_VERSION;
     node_info.data.release_channel = get_release_channel();
     node_info.data.timezone = rrdhost_abbrev_timezone(host);
-    node_info.data.virtualization_type = host->system_info->virtualization ? host->system_info->virtualization : "unknown";
-    node_info.data.container_type = host->system_info->container ? host->system_info->container : "unknown";
-    node_info.data.custom_info = config_get(CONFIG_SECTION_WEB, "custom dashboard_info.js", "");
+    node_info.data.custom_info = inicfg_get(&netdata_config, CONFIG_SECTION_WEB, "custom dashboard_info.js", "");
     node_info.data.machine_guid = host->machine_guid;
-
-    struct capability node_caps[] = {
-        {.name = "ml", .version = host->system_info->ml_capable, .enabled = host->system_info->ml_enabled},
-        {.name = "mc",
-         .version = host->system_info->mc_version ? host->system_info->mc_version : 0,
-         .enabled = host->system_info->mc_version ? 1 : 0},
-        {.name = NULL, .version = 0, .enabled = 0}};
-    node_info.node_capabilities = node_caps;
-
-    node_info.data.ml_info.ml_capable = host->system_info->ml_capable;
-    node_info.data.ml_info.ml_enabled = host->system_info->ml_enabled;
-
+    node_info.node_capabilities = (struct capability *)aclk_get_agent_capas();
     node_info.data.host_labels_ptr = host->rrdlabels;
+
+    rrdhost_system_info_to_node_info(host->system_info, &node_info);
 
     aclk_update_node_info(&node_info);
     nd_log(
@@ -114,37 +91,32 @@ static void build_node_info(RRDHOST *host)
         host == localhost ? "parent" : "child");
 
     rrd_rdunlock();
-    freez(node_info.claim_id);
     freez(node_info.node_instance_capabilities);
     freez(host_version);
 
     wc->node_collectors_send = now_realtime_sec();
 }
 
-static bool host_is_replicating(RRDHOST *host)
-{
-    bool replicating = false;
-    RRDSET *st;
-    rrdset_foreach_reentrant(st, host) {
-        if (rrdset_is_replicating(st)) {
-            replicating = true;
-            break;
-        }
-    }
-    rrdset_foreach_done(st);
-    return replicating;
-}
-
 void aclk_check_node_info_and_collectors(void)
 {
     RRDHOST *host;
 
-    if (unlikely(!aclk_connected))
+    if (unlikely(!aclk_online_for_nodes()))
         return;
 
     size_t context_loading = 0;
-    size_t replicating = 0;
+    size_t replicating_rcv = 0;
+    size_t replicating_snd = 0;
     size_t context_pp = 0;
+
+    STRING *context_loading_host = NULL;
+    STRING *replicating_rcv_host = NULL;
+    STRING *replicating_snd_host = NULL;
+    STRING *context_pp_host = NULL;
+
+#ifdef REPLICATION_TRACKING
+    struct replay_who_counters replay_counters = { 0 };
+#endif
 
     time_t now = now_realtime_sec();
     dfe_start_reentrant(rrdhost_root_index, host)
@@ -156,23 +128,43 @@ void aclk_check_node_info_and_collectors(void)
         if (unlikely(rrdhost_flag_check(host, RRDHOST_FLAG_PENDING_CONTEXT_LOAD))) {
             internal_error(true, "ACLK SYNC: Context still pending for %s", rrdhost_hostname(host));
             context_loading++;
+            context_loading_host = host->hostname;
             continue;
         }
 
-        if (unlikely(host_is_replicating(host))) {
-            internal_error(true, "ACLK SYNC: Host %s is still replicating", rrdhost_hostname(host));
-            replicating++;
+        if (!wc->node_info_send_time && !wc->node_collectors_send)
             continue;
+
+        if (unlikely(rrdhost_receiver_replicating_charts(host))) {
+            internal_error(true, "ACLK SYNC: Host %s is still replicating in", rrdhost_hostname(host));
+            replicating_rcv++;
+            replicating_rcv_host = host->hostname;
         }
+
+        if (unlikely(rrdhost_sender_replicating_charts(host))) {
+            internal_error(true, "ACLK SYNC: Host %s is still replicating out", rrdhost_hostname(host));
+            replicating_snd++;
+            replicating_snd_host = host->hostname;
+        }
+
+#ifdef REPLICATION_TRACKING
+        replication_tracking_counters(host, &replay_counters);
+#endif
+
+        if(replicating_rcv)
+            continue;
 
         bool pp_queue_empty = !(host->rrdctx.pp_queue && dictionary_entries(host->rrdctx.pp_queue));
 
-        if (!pp_queue_empty && (wc->node_info_send_time || wc->node_collectors_send))
+        if (!pp_queue_empty && (wc->node_info_send_time || wc->node_collectors_send)) {
             context_pp++;
+            context_pp_host = host->hostname;
+        }
 
         if (pp_queue_empty && wc->node_info_send_time && wc->node_info_send_time + 30 < now) {
             wc->node_info_send_time = 0;
             build_node_info(host);
+            schedule_node_state_update(host, 10000);
             internal_error(true, "ACLK SYNC: Sending node info for %s", rrdhost_hostname(host));
         }
 
@@ -184,17 +176,55 @@ void aclk_check_node_info_and_collectors(void)
     }
     dfe_done(host);
 
-    if (context_loading || replicating || context_pp) {
-        nd_log_limit_static_thread_var(erl, 10, 100 * USEC_PER_MS);
-        nd_log_limit(
-            &erl,
-            NDLS_DAEMON,
-            NDLP_INFO,
-            "%zu nodes loading contexts, %zu replicating data, %zu pending context post processing",
-            context_loading,
-            replicating,
-            context_pp);
+    if (context_loading || replicating_rcv || replicating_snd || context_pp) {
+#ifdef REPLICATION_TRACKING
+        char replay_counters_txt[1024];
+        snprintfz(replay_counters_txt, sizeof(replay_counters_txt),
+                  " - REPLAY WHO RCV { %zu unknown, %zu me, %zu them, %zu finished } - "
+                  "REPLAY WHO SND { %zu unknown, %zu me, %zu them, %zu finished }",
+                  replay_counters.rcv[REPLAY_WHO_UNKNOWN], replay_counters.rcv[REPLAY_WHO_ME], replay_counters.rcv[REPLAY_WHO_THEM], replay_counters.rcv[REPLAY_WHO_FINISHED],
+                  replay_counters.snd[REPLAY_WHO_UNKNOWN], replay_counters.snd[REPLAY_WHO_ME], replay_counters.snd[REPLAY_WHO_THEM], replay_counters.snd[REPLAY_WHO_FINISHED]
+        );
+#else
+        char *replay_counters_txt = "";
+#endif
+
+        const char *context_loading_pre = "", *context_loading_body = "", *context_loading_post = "";
+        if(context_loading == 1) {
+            context_loading_pre = " (host '";
+            context_loading_body = string2str(context_loading_host);
+            context_loading_post = "')";
+        }
+        
+        const char *replicating_rcv_pre = "", *replicating_rcv_body = "", *replicating_rcv_post = "";
+        if(replicating_rcv == 1) {
+            replicating_rcv_pre = " (host '";
+            replicating_rcv_body = string2str(replicating_rcv_host);
+            replicating_rcv_post = "')";
+        }
+        
+        const char *replicating_snd_pre = "", *replicating_snd_body = "", *replicating_snd_post = "";
+        if(replicating_snd == 1) {
+            replicating_snd_pre = " (host '";
+            replicating_snd_body = string2str(replicating_snd_host);
+            replicating_snd_post = "')";
+        }
+        
+        const char *context_pp_pre = "", *context_pp_body = "", *context_pp_post = "";
+        if(context_pp == 1) {
+            context_pp_pre = " (host '";
+            context_pp_body = string2str(context_pp_host);
+            context_pp_post = "')";
+        }
+
+        nd_log_limit_static_global_var(erl, 10, 100 * USEC_PER_MS);
+        nd_log_limit(&erl, NDLS_DAEMON, NDLP_INFO,
+                     "NODES INFO: %zu nodes loading contexts%s%s%s, %zu receiving replication%s%s%s, %zu sending replication%s%s%s, %zu pending context post processing%s%s%s%s",
+                     context_loading, context_loading_pre, context_loading_body, context_loading_post,
+                     replicating_rcv, replicating_rcv_pre, replicating_rcv_body, replicating_rcv_post,
+                     replicating_snd, replicating_snd_pre, replicating_snd_body, replicating_snd_post,
+                     context_pp, context_pp_pre, context_pp_body, context_pp_post,
+                     replay_counters_txt
+                     );
     }
 }
-
-#endif

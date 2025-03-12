@@ -13,8 +13,7 @@ endmeta-->
 <img src="https://netdata.cloud/img/kairos.png" width="150"/>
 
 
-Use the Graphite connector for the exporting engine to archive your Netdata metrics to Graphite providers for long-term storage,
-further analysis, or correlation with data from other sources.
+Export your Netdata metrics to KairosDB using the Graphite protocol, allowing you to archive your data for long-term storage, further analysis, or correlation with data from other sources.
 
 
 
@@ -24,11 +23,7 @@ further analysis, or correlation with data from other sources.
 
 ### Prerequisites
 
-#### 
-
-- You have already installed Netdata and Graphite.
-
-
+No action required.
 
 ### Configuration
 
@@ -37,8 +32,8 @@ further analysis, or correlation with data from other sources.
 The configuration file name for this integration is `exporting.conf`.
 
 
-You can edit the configuration file using the `edit-config` script from the
-Netdata [config directory](/docs/netdata-agent/configuration/README.md#the-netdata-config-directory).
+You can edit the configuration file using the [`edit-config`](https://github.com/netdata/netdata/blob/master/docs/netdata-agent/configuration/README.md#edit-a-configuration-file-using-edit-config) script from the
+Netdata [config directory](https://github.com/netdata/netdata/blob/master/docs/netdata-agent/configuration/README.md#the-netdata-config-directory).
 
 ```bash
 cd /etc/netdata 2>/dev/null || cd /opt/netdata/etc/netdata

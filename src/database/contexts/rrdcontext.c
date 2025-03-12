@@ -40,67 +40,73 @@ void rrd_reasons_to_buffer_json_array_items(RRD_FLAGS flags, BUFFER *wb) {
 // ----------------------------------------------------------------------------
 // public API
 
-void rrdcontext_updated_rrddim(RRDDIM *rd) {
+ALWAYS_INLINE void rrdcontext_updated_rrddim(RRDDIM *rd) {
     rrdmetric_from_rrddim(rd);
 }
 
-void rrdcontext_removed_rrddim(RRDDIM *rd) {
+ALWAYS_INLINE void rrdcontext_removed_rrddim(RRDDIM *rd) {
     rrdmetric_rrddim_is_freed(rd);
 }
 
-void rrdcontext_updated_rrddim_algorithm(RRDDIM *rd) {
+ALWAYS_INLINE void rrdcontext_updated_rrddim_algorithm(RRDDIM *rd) {
     rrdmetric_updated_rrddim_flags(rd);
 }
 
-void rrdcontext_updated_rrddim_multiplier(RRDDIM *rd) {
+ALWAYS_INLINE void rrdcontext_updated_rrddim_multiplier(RRDDIM *rd) {
     rrdmetric_updated_rrddim_flags(rd);
 }
 
-void rrdcontext_updated_rrddim_divisor(RRDDIM *rd) {
+ALWAYS_INLINE void rrdcontext_updated_rrddim_divisor(RRDDIM *rd) {
     rrdmetric_updated_rrddim_flags(rd);
 }
 
-void rrdcontext_updated_rrddim_flags(RRDDIM *rd) {
+ALWAYS_INLINE void rrdcontext_updated_rrddim_flags(RRDDIM *rd) {
     rrdmetric_updated_rrddim_flags(rd);
 }
 
-void rrdcontext_collected_rrddim(RRDDIM *rd) {
+ALWAYS_INLINE void rrdcontext_collected_rrddim(RRDDIM *rd) {
     rrdmetric_collected_rrddim(rd);
 }
 
-void rrdcontext_updated_rrdset(RRDSET *st) {
+ALWAYS_INLINE void rrdcontext_updated_rrdset(RRDSET *st) {
     rrdinstance_from_rrdset(st);
 }
 
-void rrdcontext_removed_rrdset(RRDSET *st) {
+ALWAYS_INLINE void rrdcontext_removed_rrdset(RRDSET *st) {
     rrdinstance_rrdset_is_freed(st);
 }
 
-void rrdcontext_updated_retention_rrdset(RRDSET *st) {
+ALWAYS_INLINE void rrdcontext_updated_retention_rrdset(RRDSET *st) {
     rrdinstance_rrdset_has_updated_retention(st);
 }
 
-void rrdcontext_updated_rrdset_name(RRDSET *st) {
+ALWAYS_INLINE void rrdcontext_updated_rrdset_name(RRDSET *st) {
     rrdinstance_updated_rrdset_name(st);
 }
 
-void rrdcontext_updated_rrdset_flags(RRDSET *st) {
+ALWAYS_INLINE void rrdcontext_updated_rrdset_flags(RRDSET *st) {
     rrdinstance_updated_rrdset_flags(st);
 }
 
-void rrdcontext_collected_rrdset(RRDSET *st) {
+ALWAYS_INLINE void rrdcontext_collected_rrdset(RRDSET *st) {
     rrdinstance_collected_rrdset(st);
 }
 
-void rrdcontext_host_child_connected(RRDHOST *host) {
-    (void)host;
+ALWAYS_INLINE void rrdcontext_host_child_disconnected(RRDHOST *host) {
+    rrdhost_flag_set(host, RRDHOST_FLAG_RRDCONTEXT_GET_RETENTION);
+}
 
-    // no need to do anything here
-    ;
+ALWAYS_INLINE void rrdcontext_host_child_connected(RRDHOST *host) {
+    // clear the rrdcontexts status cache inside RRDSET and RRDDIM
+    RRDSET *st;
+    rrdset_foreach_read(st, host) {
+        rrdinstance_rrdset_not_collected(st);
+    }
+    rrdset_foreach_done(st);
 }
 
 usec_t rrdcontext_next_db_rotation_ut = 0;
-void rrdcontext_db_rotation(void) {
+ALWAYS_INLINE void rrdcontext_db_rotation(void) {
     // called when the db rotates its database
     rrdcontext_next_db_rotation_ut = now_realtime_usec() + FULL_RETENTION_SCAN_DELAY_AFTER_DB_ROTATION_SECS * USEC_PER_SEC;
 }
@@ -131,7 +137,7 @@ int rrdcontext_find_dimension_uuid(RRDSET *st, const char *id, nd_uuid_t *store_
 
     RRDMETRIC *rm = rrdmetric_acquired_value(rma);
 
-    uuid_copy(*store_uuid, rm->uuid);
+    uuidmap_uuid(rm->uuid, *store_uuid);
 
     rrdmetric_release(rma);
     rrdinstance_release(ria);
@@ -155,15 +161,11 @@ int rrdcontext_find_chart_uuid(RRDSET *st, nd_uuid_t *store_uuid) {
     }
 
     RRDINSTANCE *ri = rrdinstance_acquired_value(ria);
-    uuid_copy(*store_uuid, ri->uuid);
+    uuidmap_uuid(ri->uuid, *store_uuid);
 
     rrdinstance_release(ria);
     rrdcontext_release(rca);
     return 0;
-}
-
-void rrdcontext_host_child_disconnected(RRDHOST *host) {
-    rrdcontext_recalculate_host_retention(host, RRD_FLAG_UPDATE_REASON_DISCONNECTED_CHILD, false);
 }
 
 int rrdcontext_foreach_instance_with_rrdset_in_context(RRDHOST *host, const char *context, int (*callback)(RRDSET *st, void *data), void *data) {
@@ -198,26 +200,21 @@ int rrdcontext_foreach_instance_with_rrdset_in_context(RRDHOST *host, const char
 // ----------------------------------------------------------------------------
 // ACLK interface
 
-static bool rrdhost_check_our_claim_id(const char *claim_id) {
-    if(!localhost->aclk_state.claimed_id) return false;
-    return (strcasecmp(claim_id, localhost->aclk_state.claimed_id) == 0) ? true : false;
-}
-
 void rrdcontext_hub_checkpoint_command(void *ptr) {
     struct ctxs_checkpoint *cmd = ptr;
 
-    if(!rrdhost_check_our_claim_id(cmd->claim_id)) {
+    if(!claim_id_matches(cmd->claim_id)) {
+        CLAIM_ID claim_id = claim_id_get();
         nd_log(NDLS_DAEMON, NDLP_WARNING,
                "RRDCONTEXT: received checkpoint command for claim_id '%s', node id '%s', "
                "but this is not our claim id. Ours '%s', received '%s'. Ignoring command.",
                cmd->claim_id, cmd->node_id,
-               localhost->aclk_state.claimed_id?localhost->aclk_state.claimed_id:"NOT SET",
-               cmd->claim_id);
+               claim_id.str, cmd->claim_id);
 
         return;
     }
 
-    RRDHOST *host = find_host_by_node_id(cmd->node_id);
+    RRDHOST *host = rrdhost_find_by_node_id(cmd->node_id);
     if(!host) {
         nd_log(NDLS_DAEMON, NDLP_WARNING,
                "RRDCONTEXT: received checkpoint command for claim id '%s', node id '%s', "
@@ -245,11 +242,10 @@ void rrdcontext_hub_checkpoint_command(void *ptr) {
                "Sending snapshot of all contexts.",
                cmd->version_hash, rrdhost_hostname(host), our_version_hash);
 
-#ifdef ENABLE_ACLK
         // prepare the snapshot
-        char uuid[UUID_STR_LEN];
-        uuid_unparse_lower(*host->node_id, uuid);
-        contexts_snapshot_t bundle = contexts_snapshot_new(cmd->claim_id, uuid, our_version_hash);
+        char uuid_str[UUID_STR_LEN];
+        uuid_unparse_lower(host->node_id.uuid, uuid_str);
+        contexts_snapshot_t bundle = contexts_snapshot_new(cmd->claim_id, uuid_str, our_version_hash);
 
         // do a deep scan on every metric of the host to make sure all our data are updated
         rrdcontext_recalculate_host_retention(host, RRD_FLAG_NONE, false);
@@ -262,7 +258,6 @@ void rrdcontext_hub_checkpoint_command(void *ptr) {
 
         // send it
         aclk_send_contexts_snapshot(bundle);
-#endif
     }
 
     nd_log(NDLS_DAEMON, NDLP_DEBUG,
@@ -271,7 +266,7 @@ void rrdcontext_hub_checkpoint_command(void *ptr) {
 
     rrdhost_flag_set(host, RRDHOST_FLAG_ACLK_STREAM_CONTEXTS);
     char node_str[UUID_STR_LEN];
-    uuid_unparse_lower(*host->node_id, node_str);
+    uuid_unparse_lower(host->node_id.uuid, node_str);
     nd_log(NDLS_ACCESS, NDLP_DEBUG,
            "ACLK REQ [%s (%s)]: STREAM CONTEXTS ENABLED",
            node_str, rrdhost_hostname(host));
@@ -280,18 +275,18 @@ void rrdcontext_hub_checkpoint_command(void *ptr) {
 void rrdcontext_hub_stop_streaming_command(void *ptr) {
     struct stop_streaming_ctxs *cmd = ptr;
 
-    if(!rrdhost_check_our_claim_id(cmd->claim_id)) {
+    if(!claim_id_matches(cmd->claim_id)) {
+        CLAIM_ID claim_id = claim_id_get();
         nd_log(NDLS_DAEMON, NDLP_WARNING,
                "RRDCONTEXT: received stop streaming command for claim_id '%s', node id '%s', "
                "but this is not our claim id. Ours '%s', received '%s'. Ignoring command.",
                cmd->claim_id, cmd->node_id,
-               localhost->aclk_state.claimed_id?localhost->aclk_state.claimed_id:"NOT SET",
-               cmd->claim_id);
+               claim_id.str, cmd->claim_id);
 
         return;
     }
 
-    RRDHOST *host = find_host_by_node_id(cmd->node_id);
+    RRDHOST *host = rrdhost_find_by_node_id(cmd->node_id);
     if(!host) {
         nd_log(NDLS_DAEMON, NDLP_WARNING,
                "RRDCONTEXT: received stop streaming command for claim id '%s', node id '%s', "
@@ -317,6 +312,7 @@ void rrdcontext_hub_stop_streaming_command(void *ptr) {
     rrdhost_flag_clear(host, RRDHOST_FLAG_ACLK_STREAM_CONTEXTS);
 }
 
+ALWAYS_INLINE
 bool rrdcontext_retention_match(RRDCONTEXT_ACQUIRED *rca, time_t after, time_t before) {
     if(unlikely(!rca)) return false;
 

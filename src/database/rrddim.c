@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#define NETDATA_RRD_INTERNALS
 #include "rrd.h"
-#include "storage_engine.h"
+#include "storage-engine.h"
+#include "rrddim-collection.h"
 
 void rrddim_metadata_updated(RRDDIM *rd) {
     rrdcontext_updated_rrddim(rd);
@@ -19,7 +19,7 @@ struct rrddim_constructor {
     collected_number multiplier;
     collected_number divisor;
     RRD_ALGORITHM algorithm;
-    RRD_MEMORY_MODE memory_mode;
+    RRD_DB_MODE memory_mode;
 
     enum {
         RRDDIM_REACT_NONE    = 0,
@@ -53,44 +53,46 @@ static void rrddim_insert_callback(const DICTIONARY_ITEM *item __maybe_unused, v
 
     rd->rrdset = st;
 
-    rd->rrdpush.sender.dim_slot = __atomic_add_fetch(&st->rrdpush.sender.dim_last_slot_used, 1, __ATOMIC_RELAXED);
+    rd->stream.snd.dim_slot = __atomic_add_fetch(&st->stream.snd.dim_last_slot_used, 1, __ATOMIC_RELAXED);
 
     if(rrdset_flag_check(st, RRDSET_FLAG_STORE_FIRST))
         rd->collector.counter = 1;
 
-    if(ctr->memory_mode == RRD_MEMORY_MODE_RAM) {
+    if(ctr->memory_mode == RRD_DB_MODE_RAM) {
         size_t entries = st->db.entries;
         if(!entries) entries = 5;
 
-        rd->db.data = netdata_mmap(NULL, entries * sizeof(storage_number), MAP_PRIVATE, 1, false, NULL);
-        if(!rd->db.data) {
-            netdata_log_info("Failed to use memory mode ram for chart '%s', dimension '%s', falling back to alloc", rrdset_name(st), rrddim_name(rd));
-            ctr->memory_mode = RRD_MEMORY_MODE_ALLOC;
+        rd->db.data = nd_mmap_advanced(NULL, entries * sizeof(storage_number), MAP_PRIVATE, 1, false, true, NULL);
+        if(rd->db.data) {
+            rd->db.memsize = entries * sizeof(storage_number);
+            pulse_db_rrd_memory_add(rd->db.memsize);
         }
         else {
-            rd->db.memsize = entries * sizeof(storage_number);
-            __atomic_add_fetch(&rrddim_db_memory_size, rd->db.memsize, __ATOMIC_RELAXED);
+            netdata_log_info("Failed to use memory mode ram for chart '%s', dimension '%s', falling back to alloc", rrdset_name(st), rrddim_name(rd));
+            ctr->memory_mode = RRD_DB_MODE_ALLOC;
         }
     }
 
-    if(ctr->memory_mode == RRD_MEMORY_MODE_ALLOC || ctr->memory_mode == RRD_MEMORY_MODE_NONE) {
+    if(ctr->memory_mode == RRD_DB_MODE_ALLOC || ctr->memory_mode == RRD_DB_MODE_NONE) {
         size_t entries = st->db.entries;
         if(entries < 5) entries = 5;
 
         rd->db.data = rrddim_alloc_db(entries);
         rd->db.memsize = entries * sizeof(storage_number);
-        __atomic_add_fetch(&rrddim_db_memory_size, rd->db.memsize, __ATOMIC_RELAXED);
+        pulse_db_rrd_memory_add(rd->db.memsize);
     }
 
     rd->rrd_memory_mode = ctr->memory_mode;
 
-    if (unlikely(rrdcontext_find_dimension_uuid(st, rrddim_id(rd), &(rd->metric_uuid))))
-        uuid_generate(rd->metric_uuid);
+    nd_uuid_t uuid;
+    if (unlikely(rrdcontext_find_dimension_uuid(st, rrddim_id(rd), &uuid)))
+        uuid_generate(uuid);
+    rd->uuid = uuidmap_create(uuid);
 
     // initialize the db tiers
     {
         size_t initialized = 0;
-        for(size_t tier = 0; tier < storage_tiers ; tier++) {
+        for(size_t tier = 0; tier < nd_profile.storage_tiers; tier++) {
             STORAGE_ENGINE *eng = host->db[tier].eng;
             rd->tiers[tier].seb = eng->seb;
             rd->tiers[tier].tier_grouping = host->db[tier].tier_grouping;
@@ -112,10 +114,15 @@ static void rrddim_insert_callback(const DICTIONARY_ITEM *item __maybe_unused, v
     // initialize data collection for all tiers
     {
         size_t initialized = 0;
-        for (size_t tier = 0; tier < storage_tiers; tier++) {
+        for (size_t tier = 0; tier < nd_profile.storage_tiers; tier++) {
             if (rd->tiers[tier].smh) {
+                uint32_t tier_update_every = st->rrdhost->db[tier].tier_grouping * st->update_every;
+
+                rd->tiers[tier].last_completed_point_flush_modulo = rrddim_collection_modulo(st, tier_update_every);
+
                 rd->tiers[tier].sch =
-                        storage_metric_store_init(rd->tiers[tier].seb, rd->tiers[tier].smh, st->rrdhost->db[tier].tier_grouping * st->update_every, rd->rrdset->smg[tier]);
+                        storage_metric_store_init(rd->tiers[tier].seb, rd->tiers[tier].smh, tier_update_every, rd->rrdset->smg[tier]);
+
                 initialized++;
             }
         }
@@ -174,11 +181,14 @@ bool rrddim_finalize_collection_and_check_retention(RRDDIM *rd) {
 
     size_t tiers_available = 0, tiers_said_no_retention = 0;
 
-    for(size_t tier = 0; tier < storage_tiers ;tier++) {
+    for(size_t tier = 0; tier < nd_profile.storage_tiers ;tier++) {
         spinlock_lock(&rd->tiers[tier].spinlock);
 
         if(rd->tiers[tier].sch) {
             tiers_available++;
+
+            if(tier > 0)
+                store_metric_at_tier_flush_last_completed(rd, tier, &rd->tiers[tier]);
 
             if (storage_engine_store_finalize(rd->tiers[tier].sch))
                 tiers_said_no_retention++;
@@ -207,12 +217,12 @@ static void rrddim_delete_callback(const DICTIONARY_ITEM *item __maybe_unused, v
 
     netdata_log_debug(D_RRD_CALLS, "rrddim_free() %s.%s", rrdset_name(st), rrddim_name(rd));
 
-    if (!rrddim_finalize_collection_and_check_retention(rd) && rd->rrd_memory_mode == RRD_MEMORY_MODE_DBENGINE) {
+    if (!rrddim_finalize_collection_and_check_retention(rd) && rd->rrd_memory_mode == RRD_DB_MODE_DBENGINE) {
         /* This metric has no data and no references */
-        metaqueue_delete_dimension_uuid(&rd->metric_uuid);
+        metaqueue_delete_dimension_uuid(uuidmap_uuid_ptr(rd->uuid));
     }
 
-    for(size_t tier = 0; tier < storage_tiers ;tier++) {
+    for(size_t tier = 0; tier < nd_profile.storage_tiers;tier++) {
         spinlock_lock(&rd->tiers[tier].spinlock);
         if(rd->tiers[tier].smh) {
             STORAGE_ENGINE *eng = host->db[tier].eng;
@@ -223,16 +233,17 @@ static void rrddim_delete_callback(const DICTIONARY_ITEM *item __maybe_unused, v
     }
 
     if(rd->db.data) {
-        __atomic_sub_fetch(&rrddim_db_memory_size, rd->db.memsize, __ATOMIC_RELAXED);
+        pulse_db_rrd_memory_sub(rd->db.memsize);
 
-        if(rd->rrd_memory_mode == RRD_MEMORY_MODE_RAM)
-            netdata_munmap(rd->db.data, rd->db.memsize);
+        if(rd->rrd_memory_mode == RRD_DB_MODE_RAM)
+            nd_munmap(rd->db.data, rd->db.memsize);
         else
             freez(rd->db.data);
     }
 
     string_freez(rd->id);
     string_freez(rd->name);
+    uuidmap_free(rd->uuid);
 }
 
 static bool rrddim_conflict_callback(const DICTIONARY_ITEM *item __maybe_unused, void *rrddim, void *new_rrddim, void *constructor_data) {
@@ -249,7 +260,7 @@ static bool rrddim_conflict_callback(const DICTIONARY_ITEM *item __maybe_unused,
     rc += rrddim_set_multiplier(st, rd, ctr->multiplier);
     rc += rrddim_set_divisor(st, rd, ctr->divisor);
 
-    for(size_t tier = 0; tier < storage_tiers ;tier++) {
+    for(size_t tier = 0; tier < nd_profile.storage_tiers;tier++) {
         if (!rd->tiers[tier].sch)
             rd->tiers[tier].sch =
                     storage_metric_store_init(rd->tiers[tier].seb, rd->tiers[tier].smh, st->rrdhost->db[tier].tier_grouping * st->update_every, rd->rrdset->smg[tier]);
@@ -283,13 +294,13 @@ static void rrddim_react_callback(const DICTIONARY_ITEM *item __maybe_unused, vo
 }
 
 size_t rrddim_size(void) {
-    return sizeof(RRDDIM) + storage_tiers * sizeof(struct rrddim_tier);
+    return sizeof(RRDDIM) + nd_profile.storage_tiers * sizeof(struct rrddim_tier);
 }
 
 void rrddim_index_init(RRDSET *st) {
     if(!st->rrddim_root_index) {
         st->rrddim_root_index = dictionary_create_advanced(DICT_OPTION_DONT_OVERWRITE_VALUE | DICT_OPTION_FIXED_SIZE,
-                                                           &dictionary_stats_category_rrdset_rrddim, rrddim_size());
+                                                           &dictionary_stats_category_rrddim, rrddim_size());
 
         dictionary_register_insert_callback(st->rrddim_root_index, rrddim_insert_callback, NULL);
         dictionary_register_conflict_callback(st->rrddim_root_index, rrddim_conflict_callback, NULL);
@@ -406,7 +417,7 @@ inline int rrddim_set_divisor(RRDSET *st, RRDDIM *rd, int32_t divisor) {
 // ----------------------------------------------------------------------------
 
 time_t rrddim_last_entry_s_of_tier(RRDDIM *rd, size_t tier) {
-    if(unlikely(tier > storage_tiers || !rd->tiers[tier].smh))
+    if(unlikely(tier > nd_profile.storage_tiers || !rd->tiers[tier].smh))
         return 0;
 
     return storage_engine_latest_time_s(rd->tiers[tier].seb, rd->tiers[tier].smh);
@@ -416,7 +427,7 @@ time_t rrddim_last_entry_s_of_tier(RRDDIM *rd, size_t tier) {
 time_t rrddim_last_entry_s(RRDDIM *rd) {
     time_t latest_time_s = rrddim_last_entry_s_of_tier(rd, 0);
 
-    for(size_t tier = 1; tier < storage_tiers ;tier++) {
+    for(size_t tier = 1; tier < nd_profile.storage_tiers;tier++) {
         if(unlikely(!rd->tiers[tier].smh)) continue;
 
         time_t t = rrddim_last_entry_s_of_tier(rd, tier);
@@ -428,7 +439,7 @@ time_t rrddim_last_entry_s(RRDDIM *rd) {
 }
 
 time_t rrddim_first_entry_s_of_tier(RRDDIM *rd, size_t tier) {
-    if(unlikely(tier > storage_tiers || !rd->tiers[tier].smh))
+    if(unlikely(tier > nd_profile.storage_tiers || !rd->tiers[tier].smh))
         return 0;
 
     return storage_engine_oldest_time_s(rd->tiers[tier].seb, rd->tiers[tier].smh);
@@ -437,7 +448,7 @@ time_t rrddim_first_entry_s_of_tier(RRDDIM *rd, size_t tier) {
 time_t rrddim_first_entry_s(RRDDIM *rd) {
     time_t oldest_time_s = 0;
 
-    for(size_t tier = 0; tier < storage_tiers ;tier++) {
+    for(size_t tier = 0; tier < nd_profile.storage_tiers;tier++) {
         time_t t = rrddim_first_entry_s_of_tier(rd, tier);
         if(t != 0 && (oldest_time_s == 0 || t < oldest_time_s))
             oldest_time_s = t;
@@ -452,7 +463,8 @@ RRDDIM *rrddim_add_custom(RRDSET *st
                           , collected_number multiplier
                           , collected_number divisor
                           , RRD_ALGORITHM algorithm
-                          , RRD_MEMORY_MODE memory_mode
+                          ,
+    RRD_DB_MODE memory_mode
                           ) {
     struct rrddim_constructor tmp = {
         .st = st,
@@ -556,6 +568,12 @@ collected_number rrddim_timed_set_by_pointer(RRDSET *st __maybe_unused, RRDDIM *
     rd->collector.collected_value = value;
     rrddim_set_updated(rd);
     rd->collector.counter++;
+
+//    spinlock_lock(&st->rrdhost->accounting.spinlock);
+//    Pvoid_t *Pvalue = JudyLIns(&st->rrdhost->accounting.JudySecL, (Word_t) collected_time.tv_sec, PJE0);
+//    if (Pvalue)
+//        *((int64_t *)Pvalue) = *((int64_t *)Pvalue) + 1;
+//    spinlock_unlock(&st->rrdhost->accounting.spinlock);
 
     collected_number v = (value >= 0) ? value : -value;
     if (unlikely(v > rd->collector.collected_value_max))

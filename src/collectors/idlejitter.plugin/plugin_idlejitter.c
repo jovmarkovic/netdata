@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include "daemon/common.h"
+#include "database/rrd.h"
 
 #define CPU_IDLEJITTER_SLEEP_TIME_MS 20
 
@@ -10,7 +10,6 @@ static void cpuidlejitter_main_cleanup(void *pptr) {
 
     static_thread->enabled = NETDATA_MAIN_THREAD_EXITING;
 
-    collector_info("cleaning up...");
     worker_unregister();
 
     static_thread->enabled = NETDATA_MAIN_THREAD_EXITED;
@@ -22,9 +21,9 @@ void *cpuidlejitter_main(void *ptr) {
     worker_register("IDLEJITTER");
     worker_register_job_name(0, "measurements");
 
-    usec_t sleep_ut = config_get_number("plugin:idlejitter", "loop time in ms", CPU_IDLEJITTER_SLEEP_TIME_MS) * USEC_PER_MS;
+    usec_t sleep_ut = inicfg_get_duration_ms(&netdata_config, "plugin:idlejitter", "loop time", CPU_IDLEJITTER_SLEEP_TIME_MS) * USEC_PER_MS;
     if(sleep_ut <= 0) {
-        config_set_number("plugin:idlejitter", "loop time in ms", CPU_IDLEJITTER_SLEEP_TIME_MS);
+        inicfg_set_duration_ms(&netdata_config, "plugin:idlejitter", "loop time", CPU_IDLEJITTER_SLEEP_TIME_MS);
         sleep_ut = CPU_IDLEJITTER_SLEEP_TIME_MS * USEC_PER_MS;
     }
 

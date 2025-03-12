@@ -3,8 +3,8 @@
 #ifndef NETDATA_SQLITE_CONTEXT_H
 #define NETDATA_SQLITE_CONTEXT_H
 
-#include "daemon/common.h"
-#include "sqlite3.h"
+#include "database/rrd.h"
+#include "database/sqlite/vendored/sqlite3.h"
 
 int sql_context_cache_stats(int op);
 typedef struct ctx_chart {
@@ -25,6 +25,9 @@ typedef struct ctx_dimension {
     char *id;
     char *name;
     bool hidden;
+
+    char *context;
+    char *chart_id;
 } SQL_DIMENSION_DATA;
 
 typedef struct ctx_label {
@@ -56,10 +59,9 @@ void ctx_get_context_list(nd_uuid_t *host_uuid, void (*dict_cb)(VERSIONED_CONTEX
 
 void ctx_get_chart_list(nd_uuid_t *host_uuid, void (*dict_cb)(SQL_CHART_DATA *, void *), void *data);
 void ctx_get_label_list(nd_uuid_t *chart_uuid, void (*dict_cb)(SQL_CLABEL_DATA *, void *), void *data);
-void ctx_get_dimension_list(nd_uuid_t *chart_uuid, void (*dict_cb)(SQL_DIMENSION_DATA *, void *), void *data);
+void ctx_get_dimension_list(nd_uuid_t *host_uuid, void (*dict_cb)(SQL_DIMENSION_DATA *, void *), void *data);
 
 int ctx_store_context(nd_uuid_t *host_uuid, VERSIONED_CONTEXT_DATA *context_data);
-
 #define ctx_update_context(host_uuid, context_data)    ctx_store_context(host_uuid, context_data)
 
 int ctx_delete_context(nd_uuid_t *host_id, VERSIONED_CONTEXT_DATA *context_data);

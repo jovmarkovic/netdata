@@ -153,36 +153,36 @@ int do_getifaddrs(int update_every, usec_t dt) {
     static SIMPLE_PATTERN *excluded_interfaces = NULL, *physical_interfaces = NULL;
 
     if (unlikely(enable_new_interfaces == -1)) {
-        enable_new_interfaces = config_get_boolean_ondemand(CONFIG_SECTION_GETIFADDRS,
+        enable_new_interfaces = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_GETIFADDRS,
                                                               "enable new interfaces detected at runtime",
                                                               CONFIG_BOOLEAN_AUTO);
 
-        do_bandwidth_net  = config_get_boolean_ondemand(CONFIG_SECTION_GETIFADDRS, "total bandwidth for physical interfaces",
+        do_bandwidth_net  = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_GETIFADDRS, "total bandwidth for physical interfaces",
                                                        CONFIG_BOOLEAN_AUTO);
-        do_packets_net    = config_get_boolean_ondemand(CONFIG_SECTION_GETIFADDRS, "total packets for physical interfaces",
+        do_packets_net    = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_GETIFADDRS, "total packets for physical interfaces",
                                                        CONFIG_BOOLEAN_AUTO);
-        do_bandwidth_ipv4 = config_get_boolean_ondemand(CONFIG_SECTION_GETIFADDRS, "total bandwidth for ipv4 interfaces",
+        do_bandwidth_ipv4 = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_GETIFADDRS, "total bandwidth for ipv4 interfaces",
                                                         CONFIG_BOOLEAN_AUTO);
-        do_bandwidth_ipv6 = config_get_boolean_ondemand(CONFIG_SECTION_GETIFADDRS, "total bandwidth for ipv6 interfaces",
+        do_bandwidth_ipv6 = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_GETIFADDRS, "total bandwidth for ipv6 interfaces",
                                                         CONFIG_BOOLEAN_AUTO);
-        do_bandwidth      = config_get_boolean_ondemand(CONFIG_SECTION_GETIFADDRS, "bandwidth for all interfaces",
+        do_bandwidth      = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_GETIFADDRS, "bandwidth for all interfaces",
                                                         CONFIG_BOOLEAN_AUTO);
-        do_packets        = config_get_boolean_ondemand(CONFIG_SECTION_GETIFADDRS, "packets for all interfaces",
+        do_packets        = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_GETIFADDRS, "packets for all interfaces",
                                                         CONFIG_BOOLEAN_AUTO);
-        do_errors         = config_get_boolean_ondemand(CONFIG_SECTION_GETIFADDRS, "errors for all interfaces",
+        do_errors         = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_GETIFADDRS, "errors for all interfaces",
                                                         CONFIG_BOOLEAN_AUTO);
-        do_drops          = config_get_boolean_ondemand(CONFIG_SECTION_GETIFADDRS, "drops for all interfaces",
+        do_drops          = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_GETIFADDRS, "drops for all interfaces",
                                                         CONFIG_BOOLEAN_AUTO);
-        do_events         = config_get_boolean_ondemand(CONFIG_SECTION_GETIFADDRS, "collisions for all interfaces",
+        do_events         = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_GETIFADDRS, "collisions for all interfaces",
                                                         CONFIG_BOOLEAN_AUTO);
 
         excluded_interfaces = simple_pattern_create(
-            config_get(CONFIG_SECTION_GETIFADDRS, "disable by default interfaces matching", DEFAULT_EXCLUDED_INTERFACES),
+            inicfg_get(&netdata_config, CONFIG_SECTION_GETIFADDRS, "disable by default interfaces matching", DEFAULT_EXCLUDED_INTERFACES),
             NULL,
             SIMPLE_PATTERN_EXACT,
             true);
         physical_interfaces = simple_pattern_create(
-            config_get(CONFIG_SECTION_GETIFADDRS, "set physical interfaces for system.net", DEFAULT_PHYSICAL_INTERFACES),
+            inicfg_get(&netdata_config, CONFIG_SECTION_GETIFADDRS, "set physical interfaces for system.net", DEFAULT_PHYSICAL_INTERFACES),
             NULL,
             SIMPLE_PATTERN_EXACT,
             true);
@@ -297,8 +297,6 @@ int do_getifaddrs(int update_every, usec_t dt) {
                                                  RRDSET_TYPE_LINE
                                                  );
 
-                    rrdset_flag_set(st, RRDSET_FLAG_DETAIL);
-
                     rd_packets_in    = rrddim_add(st, "received",           NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
                     rd_packets_out   = rrddim_add(st, "sent",               NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
                     rd_packets_m_in  = rrddim_add(st, "multicast_received", NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
@@ -408,16 +406,16 @@ int do_getifaddrs(int update_every, usec_t dt) {
                         ifm->enabled = !simple_pattern_matches(excluded_interfaces, ifa->ifa_name);
 
                     snprintfz(var_name, 4096, "%s:%s", CONFIG_SECTION_GETIFADDRS, ifa->ifa_name);
-                    ifm->enabled = config_get_boolean_ondemand(var_name, "enabled", ifm->enabled);
+                    ifm->enabled = inicfg_get_boolean_ondemand(&netdata_config, var_name, "enabled", ifm->enabled);
 
                     if (unlikely(ifm->enabled == CONFIG_BOOLEAN_NO))
                         continue;
 
-                    ifm->do_bandwidth = config_get_boolean_ondemand(var_name, "bandwidth", do_bandwidth);
-                    ifm->do_packets   = config_get_boolean_ondemand(var_name, "packets",   do_packets);
-                    ifm->do_errors    = config_get_boolean_ondemand(var_name, "errors",    do_errors);
-                    ifm->do_drops     = config_get_boolean_ondemand(var_name, "drops",     do_drops);
-                    ifm->do_events    = config_get_boolean_ondemand(var_name, "events",    do_events);
+                    ifm->do_bandwidth = inicfg_get_boolean_ondemand(&netdata_config, var_name, "bandwidth", do_bandwidth);
+                    ifm->do_packets   = inicfg_get_boolean_ondemand(&netdata_config, var_name, "packets",   do_packets);
+                    ifm->do_errors    = inicfg_get_boolean_ondemand(&netdata_config, var_name, "errors",    do_errors);
+                    ifm->do_drops     = inicfg_get_boolean_ondemand(&netdata_config, var_name, "drops",     do_drops);
+                    ifm->do_events    = inicfg_get_boolean_ondemand(&netdata_config, var_name, "events",    do_events);
                 }
 
                 if (unlikely(!ifm->enabled))
@@ -464,8 +462,6 @@ int do_getifaddrs(int update_every, usec_t dt) {
                                                                   RRDSET_TYPE_LINE
                         );
 
-                        rrdset_flag_set(ifm->st_packets, RRDSET_FLAG_DETAIL);
-
                         ifm->rd_packets_in    = rrddim_add(ifm->st_packets, "received",           NULL,  1, 1,
                                                            RRD_ALGORITHM_INCREMENTAL);
                         ifm->rd_packets_out   = rrddim_add(ifm->st_packets, "sent",               NULL, -1, 1,
@@ -499,8 +495,6 @@ int do_getifaddrs(int update_every, usec_t dt) {
                                                                  RRDSET_TYPE_LINE
                         );
 
-                        rrdset_flag_set(ifm->st_errors, RRDSET_FLAG_DETAIL);
-
                         ifm->rd_errors_in  = rrddim_add(ifm->st_errors, "inbound",  NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
                         ifm->rd_errors_out = rrddim_add(ifm->st_errors, "outbound", NULL, -1, 1, RRD_ALGORITHM_INCREMENTAL);
                     }
@@ -525,8 +519,6 @@ int do_getifaddrs(int update_every, usec_t dt) {
                                                                 update_every,
                                                                 RRDSET_TYPE_LINE
                         );
-
-                        rrdset_flag_set(ifm->st_drops, RRDSET_FLAG_DETAIL);
 
                         ifm->rd_drops_in  = rrddim_add(ifm->st_drops, "inbound",  NULL,  1, 1, RRD_ALGORITHM_INCREMENTAL);
 #if __FreeBSD__ >= 11
@@ -556,8 +548,6 @@ int do_getifaddrs(int update_every, usec_t dt) {
                                                                  update_every,
                                                                  RRDSET_TYPE_LINE
                         );
-
-                        rrdset_flag_set(ifm->st_events, RRDSET_FLAG_DETAIL);
 
                         ifm->rd_events_coll = rrddim_add(ifm->st_events, "collisions", NULL, -1, 1,
                                                          RRD_ALGORITHM_INCREMENTAL);

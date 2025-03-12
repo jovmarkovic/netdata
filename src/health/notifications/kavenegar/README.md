@@ -38,8 +38,8 @@ You can send notifications to Kavenegar using Netdata's Agent alert notification
 The configuration file name for this integration is `health_alarm_notify.conf`.
 
 
-You can edit the configuration file using the `edit-config` script from the
-Netdata [config directory](/docs/netdata-agent/configuration/README.md#the-netdata-config-directory).
+You can edit the configuration file using the [`edit-config`](https://github.com/netdata/netdata/blob/master/docs/netdata-agent/configuration/README.md#edit-a-configuration-file-using-edit-config) script from the
+Netdata [config directory](https://github.com/netdata/netdata/blob/master/docs/netdata-agent/configuration/README.md#the-netdata-config-directory).
 
 ```bash
 cd /etc/netdata 2>/dev/null || cd /opt/netdata/etc/netdata
@@ -63,7 +63,7 @@ The following options can be defined for this notification
 All roles will default to this variable if lest unconfigured.
 
 You can then have different SMS recipients per role, by editing `DEFAULT_RECIPIENT_KAVENEGAR` with the SMS recipients you want, in the following entries at the bottom of the same file:
-```conf
+```text
 role_recipients_kavenegar[sysadmin]="09100000000"
 role_recipients_kavenegar[domainadmin]="09111111111"
 role_recipients_kavenegar[dba]="0922222222"

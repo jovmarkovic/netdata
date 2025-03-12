@@ -309,30 +309,30 @@ static inline void do_disk_space_stats(struct mountinfo *mi, int update_every) {
     if(unlikely(!dict_mountpoints)) {
         SIMPLE_PREFIX_MODE mode = SIMPLE_PATTERN_EXACT;
 
-        if(config_move("plugin:proc:/proc/diskstats", "exclude space metrics on paths", CONFIG_SECTION_DISKSPACE, "exclude space metrics on paths") != -1) {
+        if(inicfg_move(&netdata_config, "plugin:proc:/proc/diskstats", "exclude space metrics on paths", CONFIG_SECTION_DISKSPACE, "exclude space metrics on paths") != -1) {
             // old configuration, enable backwards compatibility
             mode = SIMPLE_PATTERN_PREFIX;
         }
 
         excluded_mountpoints = simple_pattern_create(
-            config_get(CONFIG_SECTION_DISKSPACE, "exclude space metrics on paths", DEFAULT_EXCLUDED_PATHS),
+            inicfg_get(&netdata_config, CONFIG_SECTION_DISKSPACE, "exclude space metrics on paths", DEFAULT_EXCLUDED_PATHS),
             NULL,
             mode,
             true);
 
         excluded_filesystems = simple_pattern_create(
-            config_get(CONFIG_SECTION_DISKSPACE, "exclude space metrics on filesystems", DEFAULT_EXCLUDED_FILESYSTEMS),
+            inicfg_get(&netdata_config, CONFIG_SECTION_DISKSPACE, "exclude space metrics on filesystems", DEFAULT_EXCLUDED_FILESYSTEMS),
             NULL,
             SIMPLE_PATTERN_EXACT,
             true);
 
         excluded_filesystems_inodes = simple_pattern_create(
-            config_get(CONFIG_SECTION_DISKSPACE, "exclude inode metrics on filesystems", DEFAULT_EXCLUDED_FILESYSTEMS_INODES),
+            inicfg_get(&netdata_config, CONFIG_SECTION_DISKSPACE, "exclude inode metrics on filesystems", DEFAULT_EXCLUDED_FILESYSTEMS_INODES),
             NULL,
             SIMPLE_PATTERN_EXACT,
             true);
 
-        dict_mountpoints = dictionary_create_advanced(DICT_OPTION_NONE, &dictionary_stats_category_collectors, 0);
+        dict_mountpoints = dictionary_create_advanced(DICT_OPTION_FIXED_SIZE, &dictionary_stats_category_collectors, sizeof(struct mount_point_metadata));
         dictionary_register_delete_callback(dict_mountpoints, mountpoint_delete_cb, NULL);
     }
 
@@ -340,8 +340,8 @@ static inline void do_disk_space_stats(struct mountinfo *mi, int update_every) {
     if(unlikely(!item)) {
         bool slow = false;
 
-        int def_space = config_get_boolean_ondemand(CONFIG_SECTION_DISKSPACE, "space usage for all disks", CONFIG_BOOLEAN_AUTO);
-        int def_inodes = config_get_boolean_ondemand(CONFIG_SECTION_DISKSPACE, "inodes usage for all disks", CONFIG_BOOLEAN_AUTO);
+        int def_space = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_DISKSPACE, "space usage for all disks", CONFIG_BOOLEAN_AUTO);
+        int def_inodes = inicfg_get_boolean_ondemand(&netdata_config, CONFIG_SECTION_DISKSPACE, "inodes usage for all disks", CONFIG_BOOLEAN_AUTO);
 
         if(unlikely(simple_pattern_matches(excluded_mountpoints, mi->mount_point))) {
             def_space = CONFIG_BOOLEAN_NO;
@@ -395,10 +395,10 @@ static inline void do_disk_space_stats(struct mountinfo *mi, int update_every) {
         do_space = def_space;
         do_inodes = def_inodes;
 
-        if (config_exists(var_name, "space usage"))
-            do_space = config_get_boolean_ondemand(var_name, "space usage", def_space);
-        if (config_exists(var_name, "inodes usage"))
-            do_inodes = config_get_boolean_ondemand(var_name, "inodes usage", def_inodes);
+        if (inicfg_exists(&netdata_config, var_name, "space usage"))
+            do_space = inicfg_get_boolean_ondemand(&netdata_config, var_name, "space usage", def_space);
+        if (inicfg_exists(&netdata_config, var_name, "inodes usage"))
+            do_inodes = inicfg_get_boolean_ondemand(&netdata_config, var_name, "inodes usage", def_inodes);
 
         struct mount_point_metadata mp = {
             .do_space = do_space,
@@ -516,8 +516,6 @@ static void diskspace_slow_worker_cleanup(void *pptr) {
     struct slow_worker_data *data = CLEANUP_FUNCTION_GET_PTR(pptr);
     if(data) return;
 
-    collector_info("cleaning up...");
-
     worker_unregister();
 }
 
@@ -544,11 +542,11 @@ void *diskspace_slow_worker(void *ptr)
     usec_t step = slow_update_every * USEC_PER_SEC;
     usec_t real_step = USEC_PER_SEC;
     heartbeat_t hb;
-    heartbeat_init(&hb);
+    heartbeat_init(&hb, USEC_PER_SEC);
 
     while(service_running(SERVICE_COLLECTORS)) {
         worker_is_idle();
-        heartbeat_next(&hb, USEC_PER_SEC);
+        heartbeat_next(&hb);
 
         if (real_step < step) {
             real_step += USEC_PER_SEC;
@@ -608,15 +606,15 @@ static void diskspace_main_cleanup(void *pptr) {
 
     static_thread->enabled = NETDATA_MAIN_THREAD_EXITING;
 
-    collector_info("cleaning up...");
-
     rrd_collector_finished();
     worker_unregister();
 
     if (diskspace_slow_thread)
         nd_thread_join(diskspace_slow_thread);
 
+    netdata_mutex_lock(&slow_mountinfo_mutex);
     free_basic_mountinfo_list(slow_mountinfo_tmp_root);
+    netdata_mutex_unlock(&slow_mountinfo_mutex);
 
     static_thread->enabled = NETDATA_MAIN_THREAD_EXITED;
 }
@@ -629,7 +627,7 @@ static void diskspace_main_cleanup(void *pptr) {
 #error WORKER_UTILIZATION_MAX_JOB_TYPES has to be at least 3
 #endif
 
-int diskspace_function_mount_points(BUFFER *wb, const char *function __maybe_unused) {
+static int diskspace_function_mount_points(BUFFER *wb, const char *function __maybe_unused, BUFFER *payload __maybe_unused, const char *source __maybe_unused) {
     netdata_mutex_lock(&slow_mountinfo_mutex);
 
     buffer_flush(wb);
@@ -849,17 +847,20 @@ void *diskspace_main(void *ptr) {
     worker_register_job_name(WORKER_JOB_CLEANUP, "cleanup");
 
     rrd_function_add_inline(localhost, NULL, "mount-points", 10,
-                            RRDFUNCTIONS_PRIORITY_DEFAULT, RRDFUNCTIONS_DISKSPACE_HELP,
+                            RRDFUNCTIONS_PRIORITY_DEFAULT, RRDFUNCTIONS_VERSION_DEFAULT,
+                            RRDFUNCTIONS_DISKSPACE_HELP,
                             "top", HTTP_ACCESS_ANONYMOUS_DATA,
                             diskspace_function_mount_points);
 
-    cleanup_mount_points = config_get_boolean(CONFIG_SECTION_DISKSPACE, "remove charts of unmounted disks" , cleanup_mount_points);
+    cleanup_mount_points = inicfg_get_boolean(&netdata_config, CONFIG_SECTION_DISKSPACE, "remove charts of unmounted disks" , cleanup_mount_points);
 
-    int update_every = (int)config_get_number(CONFIG_SECTION_DISKSPACE, "update every", localhost->rrd_update_every);
-    if(update_every < localhost->rrd_update_every)
+    int update_every = (int)inicfg_get_duration_seconds(&netdata_config, CONFIG_SECTION_DISKSPACE, "update every", localhost->rrd_update_every);
+    if(update_every < localhost->rrd_update_every) {
         update_every = localhost->rrd_update_every;
+        inicfg_set_duration_seconds(&netdata_config, CONFIG_SECTION_DISKSPACE, "update every", update_every);
+    }
 
-    check_for_new_mountpoints_every = (int)config_get_number(CONFIG_SECTION_DISKSPACE, "check for new mount points every", check_for_new_mountpoints_every);
+    check_for_new_mountpoints_every = (int)inicfg_get_duration_seconds(&netdata_config, CONFIG_SECTION_DISKSPACE, "check for new mount points every", check_for_new_mountpoints_every);
     if(check_for_new_mountpoints_every < update_every)
         check_for_new_mountpoints_every = update_every;
 
@@ -873,12 +874,11 @@ void *diskspace_main(void *ptr) {
         diskspace_slow_worker,
         &slow_worker_data);
 
-    usec_t step = update_every * USEC_PER_SEC;
     heartbeat_t hb;
-    heartbeat_init(&hb);
+    heartbeat_init(&hb, update_every * USEC_PER_SEC);
     while(service_running(SERVICE_COLLECTORS)) {
         worker_is_idle();
-        /* usec_t hb_dt = */ heartbeat_next(&hb, step);
+        /* usec_t hb_dt = */ heartbeat_next(&hb);
 
         if(unlikely(!service_running(SERVICE_COLLECTORS))) break;
 

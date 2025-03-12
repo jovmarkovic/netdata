@@ -1,18 +1,9 @@
-<!--
-title: "Monitor a Hadoop cluster with Netdata"
-sidebar_label: "Monitor a Hadoop cluster with Netdata"
-custom_edit_url: https://github.com/netdata/netdata/edit/master/docs/guides/monitor-hadoop-cluster.md
-learn_status: "Published"
-learn_topic_type: "Tasks"
-learn_rel_path: "Miscellaneous"
--->
-
 # Monitor a Hadoop cluster with Netdata
 
 Hadoop is an [Apache project](https://hadoop.apache.org/) is a framework for processing large sets of data across a
 distributed cluster of systems.
 
-And while Hadoop is designed to be a highly-available and fault-tolerant service, those who operate a Hadoop cluster
+And while Hadoop is designed to be a highly available and fault-tolerant service, those who operate a Hadoop cluster
 will want to monitor the health and performance of their [Hadoop Distributed File System
 (HDFS)](https://hadoop.apache.org/docs/r1.2.1/hdfs_design.html) and [Zookeeper](https://zookeeper.apache.org/)
 implementations.
@@ -27,8 +18,8 @@ alternative, like the guide available from
 
 For more specifics on the collection modules used in this guide, read the respective pages in our documentation:
 
--   [HDFS](/src/go/plugin/go.d/modules/hdfs/README.md)
--   [Zookeeper](/src/go/plugin/go.d/modules/zookeeper/README.md)
+- [HDFS](/src/go/plugin/go.d/collector/hdfs/README.md)
+- [Zookeeper](/src/go/plugin/go.d/collector/zookeeper/README.md)
 
 ## Set up your HDFS and Zookeeper installations
 
@@ -99,7 +90,7 @@ The JSON result for a DataNode's `/jmx` endpoint is slightly different:
 If Netdata can't access the `/jmx` endpoint for either a NameNode or DataNode, it will not be able to auto-detect and
 collect metrics from your HDFS implementation.
 
-Zookeeper auto-detection relies on an accessible client port and a allow-listed `mntr` command. For more details on
+Zookeeper auto-detection relies on an accessible client port and an allow-listed `mntr` command. For more details on
 `mntr`, see Zookeeper's documentation on [cluster
 options](https://zookeeper.apache.org/doc/current/zookeeperAdmin.html#sc_clusterOptions) and [Zookeeper
 commands](https://zookeeper.apache.org/doc/current/zookeeperAdmin.html#sc_zkCommands).
@@ -127,7 +118,7 @@ At the bottom of the file, you will see two example jobs, both of which are comm
 ```
 
 Uncomment these lines and edit the `url` value(s) according to your setup. Now's the time to add any other configuration
-details, which you can find inside of the `hdfs.conf` file itself. Most production implementations will require TLS
+details, which you can find inside the `hdfs.conf` file itself. Most production implementations will require TLS
 certificates.
 
 The result for a simple HDFS setup, running entirely on `localhost` and without certificate authentication, might look
@@ -164,7 +155,7 @@ jobs:
     address : 203.0.113.10:2182
 ```
 
-Finally, [restart Netdata](/packaging/installer/README.md#maintaining-a-netdata-agent-installation).
+Finally, [restart Netdata](/docs/netdata-agent/start-stop-restart.md).
 
 ```sh
 sudo systemctl restart netdata
@@ -178,7 +169,7 @@ showing real-time metrics for both in your Netdata dashboard. 🎉
 The Netdata community helped us create sane defaults for alerts related to both HDFS and Zookeeper. You may want to
 investigate these to ensure they work well with your Hadoop implementation.
 
--   [HDFS alerts](https://raw.githubusercontent.com/netdata/netdata/master/src/health/health.d/hdfs.conf)
+- [HDFS alerts](https://raw.githubusercontent.com/netdata/netdata/master/src/health/health.d/hdfs.conf)
 
 You can also access/edit these files directly with `edit-config`:
 
@@ -187,5 +178,4 @@ sudo /etc/netdata/edit-config health.d/hdfs.conf
 sudo /etc/netdata/edit-config health.d/zookeeper.conf
 ```
 
-For more information about editing the defaults or writing new alert entities, see our 
-[health monitoring documentation](/src/health/README.md).
+For more information about editing the defaults or writing new alert entities, see our [health monitoring documentation](/src/health/README.md).

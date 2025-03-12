@@ -1,7 +1,5 @@
-# Macros and functions for handling of Protobuf
-#
-# Copyright (c) 2024 Netdata Inc.
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Macros and functions for handling of Protobuf
 
 # Prepare a vendored copy of Protobuf for use with Netdata.
 function(netdata_bundle_protobuf)
@@ -29,13 +27,23 @@ function(netdata_bundle_protobuf)
                 set(ABSL_PROPAGATE_CXX_STD On)
                 set(ABSL_ENABLE_INSTALL Off)
                 set(BUILD_SHARED_LIBS Off)
+                set(absl_repo https://github.com/abseil/abseil-cpp)
 
                 message(STATUS "Preparing bundled Abseil (required by bundled Protobuf)")
-                FetchContent_Declare(absl
-                        GIT_REPOSITORY https://github.com/abseil/abseil-cpp
-                        GIT_TAG ${ABSL_TAG}
-                        CMAKE_ARGS ${NETDATA_CMAKE_PROPAGATE_TOOLCHAIN_ARGS}
-                )
+                if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.28)
+                        FetchContent_Declare(absl
+                                GIT_REPOSITORY ${absl_repo}
+                                GIT_TAG ${ABSL_TAG}
+                                CMAKE_ARGS ${NETDATA_CMAKE_PROPAGATE_TOOLCHAIN_ARGS}
+                                EXCLUDE_FROM_ALL
+                        )
+                else()
+                        FetchContent_Declare(absl
+                                GIT_REPOSITORY ${absl_repo}
+                                GIT_TAG ${ABSL_TAG}
+                                CMAKE_ARGS ${NETDATA_CMAKE_PROPAGATE_TOOLCHAIN_ARGS}
+                        )
+                endif()
                 FetchContent_MakeAvailable_NoInstall(absl)
                 message(STATUS "Finished preparing bundled Abseil")
         endif()
@@ -44,13 +52,23 @@ function(netdata_bundle_protobuf)
         set(protobuf_BUILD_LIBPROTOC Off)
         set(protobuf_BUILD_TESTS Off)
         set(protobuf_BUILD_SHARED_LIBS Off)
+        set(protobuf_repo https://github.com/protocolbuffers/protobuf)
 
         message(STATUS "Preparing bundled Protobuf")
-        FetchContent_Declare(protobuf
-                GIT_REPOSITORY https://github.com/protocolbuffers/protobuf.git
-                GIT_TAG ${PROTOBUF_TAG}
-                CMAKE_ARGS ${NETDATA_CMAKE_PROPAGATE_TOOLCHAIN_ARGS}
-        )
+        if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.28)
+                FetchContent_Declare(protobuf
+                        GIT_REPOSITORY ${protobuf_repo}
+                        GIT_TAG ${PROTOBUF_TAG}
+                        CMAKE_ARGS ${NETDATA_CMAKE_PROPAGATE_TOOLCHAIN_ARGS}
+                        EXCLUDE_FROM_ALL
+                )
+        else()
+                FetchContent_Declare(protobuf
+                        GIT_REPOSITORY ${protobuf_repo}
+                        GIT_TAG ${PROTOBUF_TAG}
+                        CMAKE_ARGS ${NETDATA_CMAKE_PROPAGATE_TOOLCHAIN_ARGS}
+                )
+        endif()
         FetchContent_MakeAvailable_NoInstall(protobuf)
         message(STATUS "Finished preparing bundled Protobuf.")
 
@@ -122,48 +140,71 @@ macro(netdata_detect_protobuf)
         endif()
 endmacro()
 
+
 # Helper function to compile protocol definitions into C++ code.
-function(netdata_protoc_generate_cpp INC_DIR OUT_DIR SRCS HDRS)
-        if(NOT ARGN)
-                message(SEND_ERROR "Error: protoc_generate_cpp() called without any proto files")
-                return()
-        endif()
+function(netdata_protoc_generate_cpp PROTO_ROOT_DIR OUTPUT_ROOT_DIR GENERATED_SOURCES GENERATED_HEADERS)
+    if(NOT ARGN)
+        message(SEND_ERROR "Error: netdata_protoc_generate_cpp() called without any proto files")
+        return()
+    endif()
 
-        set(${INC_DIR})
-        set(${OUT_DIR})
-        set(${SRCS})
-        set(${HDRS})
+    # Initialize output variables
+    set(output_sources)
+    set(output_headers)
 
-        foreach(FIL ${ARGN})
-                get_filename_component(ABS_FIL ${FIL} ABSOLUTE)
-                get_filename_component(DIR ${ABS_FIL} DIRECTORY)
-                get_filename_component(FIL_WE ${FIL} NAME_WE)
+    # Setup include paths for protoc
+    set(protoc_include_paths ${PROTO_ROOT_DIR})
+    if(ENABLE_BUNDLED_PROTOBUF)
+        list(APPEND protoc_include_paths ${CMAKE_BINARY_DIR}/_deps/protobuf-src/src/)
+    endif()
 
-                set(GENERATED_PB_CC "${DIR}/${FIL_WE}.pb.cc")
-                list(APPEND ${SRCS} ${GENERATED_PB_CC})
+    # Process each proto file
+    foreach(proto_file ${ARGN})
+        # Get absolute paths and component parts
+        get_filename_component(proto_file_abs_path ${proto_file} ABSOLUTE)
+        get_filename_component(proto_file_name_no_ext ${proto_file} NAME_WE)
+        get_filename_component(proto_file_dir ${proto_file} DIRECTORY)
 
-                set(GENERATED_PB_H "${DIR}/${FIL_WE}.pb.h")
-                list(APPEND ${HDRS} ${GENERATED_PB_H})
+        # Calculate relative output path to maintain directory structure
+        get_filename_component(proto_root_abs_path ${PROTO_ROOT_DIR} ABSOLUTE)
+        get_filename_component(proto_dir_abs_path ${proto_file_dir} ABSOLUTE)
+        file(RELATIVE_PATH proto_relative_path ${proto_root_abs_path} ${proto_dir_abs_path})
 
-                list(APPEND _PROTOC_INCLUDE_DIRS ${INC_DIR})
+        # Construct output file paths
+        set(output_dir "${OUTPUT_ROOT_DIR}/${proto_relative_path}")
+        set(generated_source "${output_dir}/${proto_file_name_no_ext}.pb.cc")
+        set(generated_header "${output_dir}/${proto_file_name_no_ext}.pb.h")
 
-                if(ENABLE_BUNDLED_PROTOBUF)
-                        list(APPEND _PROTOC_INCLUDE_DIRS ${CMAKE_BINARY_DIR}/_deps/protobuf-src/src/)
-                endif()
+        # Add to output lists
+        list(APPEND output_sources "${generated_source}")
+        list(APPEND output_headers "${generated_header}")
 
-                add_custom_command(OUTPUT ${GENERATED_PB_CC} ${GENERATED_PB_H}
-                                   COMMAND ${PROTOBUF_PROTOC_EXECUTABLE}
-                                   ARGS "-I$<JOIN:${_PROTOC_INCLUDE_DIRS},;-I>" --cpp_out=${OUT_DIR} ${ABS_FIL}
-                                   DEPENDS ${ABS_FIL} ${PROTOBUF_PROTOC_EXECUTABLE}
-                                   COMMENT "Running C++ protocol buffer compiler on ${FIL}"
-                                   COMMAND_EXPAND_LISTS)
-        endforeach()
+        # Create custom command to generate the protobuf files
+        add_custom_command(
+            OUTPUT "${generated_source}" "${generated_header}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${output_dir}"
+            COMMAND ${PROTOBUF_PROTOC_EXECUTABLE}
+            ARGS "-I$<JOIN:${protoc_include_paths},;-I>" 
+                 --cpp_out=${OUTPUT_ROOT_DIR} 
+                 ${proto_file_abs_path}
+            DEPENDS ${proto_file_abs_path} ${PROTOBUF_PROTOC_EXECUTABLE}
+            COMMENT "Generating C++ protocol buffer files from ${proto_file}"
+            COMMAND_EXPAND_LISTS
+            VERBATIM
+        )
+    endforeach()
 
-        set_source_files_properties(${${SRCS}} ${${HDRS}} PROPERTIES GENERATED TRUE)
-        set_source_files_properties(${${SRCS}} ${${HDRS}} PROPERTIES COMPILE_OPTIONS -Wno-deprecated-declarations)
+    # Mark generated files with proper properties
+    set_source_files_properties(
+        ${output_sources} ${output_headers}
+        PROPERTIES 
+            GENERATED TRUE
+            COMPILE_OPTIONS -Wno-deprecated-declarations
+    )
 
-        set(${SRCS} ${${SRCS}} PARENT_SCOPE)
-        set(${HDRS} ${${HDRS}} PARENT_SCOPE)
+    # Set output variables in parent scope
+    set(${GENERATED_SOURCES} ${output_sources} PARENT_SCOPE)
+    set(${GENERATED_HEADERS} ${output_headers} PARENT_SCOPE)
 endfunction()
 
 # Add protobuf to a specified target.

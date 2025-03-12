@@ -3,6 +3,7 @@
 package functions
 
 import (
+	"bufio"
 	"context"
 	"sort"
 	"strings"
@@ -15,7 +16,7 @@ import (
 func TestNewManager(t *testing.T) {
 	mgr := NewManager()
 
-	assert.NotNilf(t, mgr.Input, "Input")
+	assert.NotNilf(t, mgr.input, "Input")
 	assert.NotNilf(t, mgr.FunctionRegistry, "FunctionRegistry")
 }
 
@@ -89,7 +90,7 @@ FUNCTION UID 1 "fn1 arg1 arg2" 0xFFFF "method=api,role=test"
 `,
 			expected: []Function{
 				{
-					key:         "FUNCTION",
+					key:         lineFunction,
 					UID:         "UID",
 					Timeout:     time.Second,
 					Name:        "fn1",
@@ -109,7 +110,7 @@ FUNCTION UID 1 "fn2 arg1 arg2" 0xFFFF "method=api,role=test"
 `,
 			expected: []Function{
 				{
-					key:         "FUNCTION",
+					key:         lineFunction,
 					UID:         "UID",
 					Timeout:     time.Second,
 					Name:        "fn1",
@@ -120,7 +121,7 @@ FUNCTION UID 1 "fn2 arg1 arg2" 0xFFFF "method=api,role=test"
 					Payload:     nil,
 				},
 				{
-					key:         "FUNCTION",
+					key:         lineFunction,
 					UID:         "UID",
 					Timeout:     time.Second,
 					Name:        "fn2",
@@ -142,7 +143,7 @@ FUNCTION_PAYLOAD_END
 `,
 			expected: []Function{
 				{
-					key:         "FUNCTION_PAYLOAD",
+					key:         lineFunctionPayload,
 					UID:         "UID",
 					Timeout:     time.Second,
 					Name:        "fn1",
@@ -169,7 +170,7 @@ FUNCTION_PAYLOAD_END
 `,
 			expected: []Function{
 				{
-					key:         "FUNCTION_PAYLOAD",
+					key:         lineFunctionPayload,
 					UID:         "UID",
 					Timeout:     time.Second,
 					Name:        "fn1",
@@ -180,7 +181,7 @@ FUNCTION_PAYLOAD_END
 					Payload:     []byte("payload line1\npayload line2"),
 				},
 				{
-					key:         "FUNCTION_PAYLOAD",
+					key:         lineFunctionPayload,
 					UID:         "UID",
 					Timeout:     time.Second,
 					Name:        "fn2",
@@ -210,7 +211,7 @@ FUNCTION_PAYLOAD_END
 `,
 			expected: []Function{
 				{
-					key:         "FUNCTION_PAYLOAD",
+					key:         lineFunctionPayload,
 					UID:         "UID",
 					Timeout:     time.Second,
 					Name:        "fn1",
@@ -221,7 +222,7 @@ FUNCTION_PAYLOAD_END
 					Payload:     []byte("payload line1\npayload line2"),
 				},
 				{
-					key:         "FUNCTION",
+					key:         lineFunction,
 					UID:         "UID",
 					Timeout:     time.Second,
 					Name:        "fn2",
@@ -232,7 +233,7 @@ FUNCTION_PAYLOAD_END
 					Payload:     nil,
 				},
 				{
-					key:         "FUNCTION",
+					key:         lineFunction,
 					UID:         "UID",
 					Timeout:     time.Second,
 					Name:        "fn3",
@@ -243,7 +244,7 @@ FUNCTION_PAYLOAD_END
 					Payload:     nil,
 				},
 				{
-					key:         "FUNCTION_PAYLOAD",
+					key:         lineFunctionPayload,
 					UID:         "UID",
 					Timeout:     time.Second,
 					Name:        "fn4",
@@ -261,7 +262,7 @@ FUNCTION_PAYLOAD_END
 		t.Run(name, func(t *testing.T) {
 			mgr := NewManager()
 
-			mgr.Input = strings.NewReader(test.input)
+			mgr.input = newMockInput(test.input)
 
 			mock := &mockFunctionExecutor{}
 			for _, v := range test.register {
@@ -274,7 +275,7 @@ FUNCTION_PAYLOAD_END
 
 			done := make(chan struct{})
 
-			go func() { defer close(done); mgr.Run(ctx) }()
+			go func() { defer close(done); mgr.Run(ctx, nil) }()
 
 			timeout := testTime + time.Second*2
 			tk := time.NewTimer(timeout)
@@ -296,4 +297,24 @@ type mockFunctionExecutor struct {
 
 func (m *mockFunctionExecutor) execute(fn Function) {
 	m.executed = append(m.executed, fn)
+}
+
+func newMockInput(data string) *mockInput {
+	m := &mockInput{chLines: make(chan string)}
+	sc := bufio.NewScanner(strings.NewReader(data))
+	go func() {
+		for sc.Scan() {
+			m.chLines <- sc.Text()
+		}
+		close(m.chLines)
+	}()
+	return m
+}
+
+type mockInput struct {
+	chLines chan string
+}
+
+func (m *mockInput) lines() chan string {
+	return m.chLines
 }

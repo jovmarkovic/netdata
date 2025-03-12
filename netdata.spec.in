@@ -120,7 +120,7 @@ AutoReqProv: yes
 # Filter known bogus deps that would be caught by AutoReqProv.
 %global __requires_exclude_from ^%{_libdir}/%{name}/system/.*$
 
-Summary:	Real-time performance monitoring, done right!
+Summary:	Netdata - X-Ray Vision for your infrastructure!
 Name:		netdata
 Version:	%{version}
 Release:	1%{?dist}
@@ -160,6 +160,7 @@ BuildRequires: pkgconfig(libcurl)
 BuildRequires: pkgconfig(liblz4)
 BuildRequires: pkgconfig(yaml-0.1)
 BuildRequires: pkgconfig(json-c)
+BuildRequires: pkgconfig(libunwind)
 %if %{_have_log2journal}
 BuildRequires: pkgconfig(libpcre2-8)
 %endif
@@ -196,6 +197,7 @@ Requires(pre): /usr/sbin/useradd
 # to support weak dependencies. Explicitly requiring our default plugins
 # makes it impossible to properly test the packages prior to upload,
 # so we just skip depending on them on CentOS 7.
+Requires: %{name}-dashboard
 %if 0%{?_have_ebpf}
 Requires: %{name}-plugin-ebpf = %{version}
 %endif
@@ -227,6 +229,7 @@ Requires: %{name}-plugin-systemd-journal = %{version}
 Requires: %{name}-plugin-network-viewer = %{version}
 %endif
 
+Obsoletes: %{name}-plugin-logs-management
 
 # #####################################################################
 # Functionality-dependent package dependencies
@@ -268,9 +271,9 @@ BuildRequires: cups-devel
 # distro handling of versioning).
 %if %{?_upstream_go_toolchain:0}%{!?_upstream_go_toolchain:1}
 %if 0%{?suse_version}
-BuildRequires: go >= 1.22
+BuildRequires: go >= 1.23
 %else
-BuildRequires: golang >= 1.22
+BuildRequires: golang >= 1.23
 %endif
 %endif
 # end - go.d.plugin plugin dependencies
@@ -314,13 +317,10 @@ BuildRequires: flex
 # #####################################################################
 
 %description
-  netdata is the fastest way to visualize metrics. It is a resource
-efficient, highly optimized system for collecting and visualizing any
-type of realtime timeseries data, from CPU usage, disk activity, SQL
-queries, API calls, web site visitors, etc.
-  netdata tries to visualize the truth of now, in its greatest detail,
-so that you can get insights of what is happening now and what just
-happened, on your systems and applications.
+ netdata is a high-resolution, real-time, low-latency observability platform.
+Per-second data collection, high-performance long-term storage, low-latency
+visualization, machine-learning based anomaly detection, alerts and notifications,
+advanced correlations and fast root cause analysis, native horizontal scalability.
 
 %prep
 %setup -q -n "%{name}-%{version}"
@@ -333,6 +333,9 @@ happened, on your systems and applications.
 	%if %{centos_ver} < 8
 	-DUSE_CXX_11=On \
 	%endif
+	%endif
+	%if 0%{?suse_version}
+	-DUSE_LTO=Off \
 	%endif
 	%if %{_have_cups}
 	-DENABLE_PLUGIN_CUPS=On \
@@ -387,22 +390,22 @@ happened, on your systems and applications.
 	%else
 	-DENABLE_EXPORTER_MONGODB=Off \
 	%endif
-	-DENABLE_ACLK=On \
-	-DENABLE_CLOUD=On \
 	-DENABLE_DBENGINE=On \
 	-DENABLE_H2O=On \
 	-DENABLE_PLUGIN_APPS=On \
 	-DENABLE_PLUGIN_CGROUP_NETWORK=On \
 	-DENABLE_PLUGIN_DEBUGFS=On \
 	-DENABLE_PLUGIN_GO=On \
+	-DENABLE_PLUGIN_PYTHON=On \
+	-DENABLE_PLUGIN_CHARTS=On \
 	-DENABLE_PLUGIN_LOCAL_LISTENERS=On \
 	-DENABLE_PLUGIN_PERF=On \
 	-DENABLE_PLUGIN_SLABINFO=On \
 	-DENABLE_PLUGIN_SYSTEMD_JOURNAL=On \
-	-DENABLE_PLUGIN_LOGS_MANAGEMENT=On \
 	-DENABLE_EXPORTER_PROMETHEUS_REMOTE_WRITE=On \
 	-DENABLE_BUNDLED_JSONC=Off \
-	-DENABLE_BUNDLED_YAML=Off
+	-DENABLE_BUNDLED_YAML=Off \
+	-DENABLE_LBIUNWIND=On
 
 # Build step
 %{cmake_build}
@@ -521,28 +524,22 @@ rm -rf "${RPM_BUILD_ROOT}"
 %{_presetdir}/50-%{name}.preset
 %{_systemd_util_dir}/journald@%{name}.conf.d/%{name}.conf
 
+%{_datarootdir}/%{name}/build-info-cmake-cache.gz
+
 %dir %{_libexecdir}/%{name}
 %dir %{_libexecdir}/%{name}/plugins.d
 %defattr(0750,root,netdata,0750)
 %{_libexecdir}/%{name}/install-service.sh
 %{_libexecdir}/%{name}/%{name}-updater.sh
 %{_libexecdir}/%{name}/%{name}-uninstaller.sh
-%{_libexecdir}/%{name}/plugins.d/acl.sh
-%{_libexecdir}/%{name}/plugins.d/alarm.sh
-%{_libexecdir}/%{name}/plugins.d/alarm-email.sh
 %{_libexecdir}/%{name}/plugins.d/alarm-notify.sh
-%{_libexecdir}/%{name}/plugins.d/alarm-test.sh
 %{_libexecdir}/%{name}/plugins.d/anonymous-statistics.sh
 %{_libexecdir}/%{name}/plugins.d/cgroup-name.sh
 %{_libexecdir}/%{name}/plugins.d/get-kubernetes-labels.sh
-%{_libexecdir}/%{name}/plugins.d/health-cmdapi-test.sh
 %{_libexecdir}/%{name}/plugins.d/ioping.plugin
 %{_libexecdir}/%{name}/plugins.d/loopsleepms.sh.inc
-%{_libexecdir}/%{name}/plugins.d/request.sh
 %{_libexecdir}/%{name}/plugins.d/system-info.sh
 %{_libexecdir}/%{name}/plugins.d/tc-qos-helper.sh
-%{_libexecdir}/%{name}/plugins.d/template_dim.sh
-%{_libexecdir}/%{name}/plugins.d/ebpf_thread_function.sh
 
 # cgroup-network detects the network interfaces of CGROUPs
 # it must be able to use setns() and run cgroup-network-helper.sh as root
@@ -559,11 +556,6 @@ rm -rf "${RPM_BUILD_ROOT}"
 # ndsudo a helper to run privileged commands
 %attr(4750,root,netdata) %{_libexecdir}/%{name}/plugins.d/ndsudo
 
-# Enforce 0644 for files and 0755 for directories
-# for the netdata web directory
-%defattr(0644,root,root,0755)
-%{_datadir}/%{name}/web
-
 # Enforce 0660 for files and 0770 for directories
 # for the netdata lib, cache and log dirs
 %defattr(0660,root,netdata,0770)
@@ -572,6 +564,9 @@ rm -rf "${RPM_BUILD_ROOT}"
 %attr(0770,netdata,netdata) %dir %{_localstatedir}/lib/%{name}
 %attr(0770,netdata,netdata) %dir %{_localstatedir}/lib/%{name}/registry
 %attr(0770,netdata,netdata) %dir %{_localstatedir}/lib/%{name}/cloud.d
+
+# Dashboard belongs to a different sub-package
+%exclude %{_datadir}/%{name}/web
 
 # Free IPMI belongs to a different sub-package
 %if %{_have_freeipmi}
@@ -624,11 +619,6 @@ rm -rf "${RPM_BUILD_ROOT}"
 
 # xenstat belongs to a different sub-package
 %exclude %{_libexecdir}/%{name}/plugins.d/xenstat.plugin
-
-# logs management belongs to a different sub-package
-%exclude %{_libexecdir}/%{name}/plugins.d/logs-management.plugin
-%exclude %{_libdir}/%{name}/conf.d/logsmanagement.d.conf
-%exclude %{_libdir}/%{name}/conf.d/logsmanagement.d
 
 # Network viewer belongs to a different sub-package
 %exclude %{_libexecdir}/%{name}/plugins.d/network-viewer.plugin
@@ -820,9 +810,6 @@ Conflicts: %{name} < %{version}
 Suggests: nvme-cli
 Suggests: sudo
 %endif
-%if 0%{?centos_ver} != 7 && 0%{?amazon_linux} != 2
-Recommends: lm_sensors
-%endif
 
 %description plugin-go
  This plugin adds a selection of additional collectors written in Go to the Netdata Agent
@@ -973,29 +960,6 @@ fi
 %attr(4750,root,netdata) %{_libexecdir}/%{name}/plugins.d/xenstat.plugin
 %endif
 
-%package plugin-logs-management
-Summary: The logs-management plugin for the Netdata Agent
-Group: Applications/System
-Requires: %{name} = %{version}
-Conflicts: %{name} < %{version}
-
-%description plugin-logs-management
- This plugin allows the Netdata Agent to collect logs from the system
- and parse them to extract metrics.
-
-%pre plugin-logs-management
-if ! getent group %{name} > /dev/null; then
-  groupadd --system %{name}
-fi
-
-%files plugin-logs-management
-%defattr(0644,root,netdata,0755)
-%{_libdir}/%{name}/conf.d/logsmanagement.d.conf
-%{_libdir}/%{name}/conf.d/logsmanagement.d
-%defattr(0750,root,netdata,0750)
-# CAP_DAC_READ_SEARCH and CAP_SYSLOG needed for data collection.
-%caps(cap_dac_read_search,cap_syslog=ep) %attr(0750,root,netdata) %{_libexecdir}/%{name}/plugins.d/logs-management.plugin
-
 %package plugin-network-viewer
 Summary: The network viewer plugin for the Netdata Agent
 Group: Applications/System
@@ -1023,7 +987,33 @@ fi
 # CAP_SYS_ADMIN, CAP_SYS_PTRACE and CAP_DAC_READ_SEARCH needed for data collection.
 %caps(cap_sys_admin,cap_sys_ptrace,cap_dac_read_search=ep) %attr(0750,root,netdata) %{_libexecdir}/%{name}/plugins.d/network-viewer.plugin
 
+%package dashboard
+Summary: The local dashboard for the Netdata Agent
+Group: Applications/System
+Requires: %{name} >= %{version}
+Conflicts: %{name} < %{version}
+
+%description dashboard
+ This allows access to the dashboard on the local node without internet access.
+
+%pre dashboard
+if ! getent group %{name} > /dev/null; then
+  groupadd --system %{name}
+fi
+
+%files dashboard
+%defattr(0644,root,root,0755)
+%{_datadir}/%{name}/web
+
 %changelog
+* Tue Jan 28 2025 Konstantin Shalygin <k0ste@k0ste.ru> 0.0.0-30
+- Removed lm_sensors dependency for plugin-go package
+* Thu Aug 29 2024 Austin Hemmelgarn <austin@netdata.cloud> 0.0.0-29
+- Split dashboard to it’s own package
+* Fri Jul 19 2024 Austin Hemmelgarn <austin@netdata.cloud> 0.0.0-28
+- Fix dependency issues with old logs-management plugin
+* Tue Jul 16 2024 Austin Hemmelgarn <austin@netdata.cloud> 0.0.0-27
+- Removed logs-management plugin
 * Wed Jul 03 2024 Konstantin Shalygin <k0ste@k0ste.ru> 0.0.0-26
 - Added lm_sensors as weak dependency for plugin-go package
 * Tue Feb 06 2024 Austin Hemmelgarn <austin@netdata.cloud> 0.0.0-25
@@ -1064,7 +1054,7 @@ fi
 - Fix /etc/netdata permissions
 * Mon Sep 23 2019 Konstantinos Natsakis <konstantinos.natsakis@gmail.com> 0.0.0-9
 - Do not build CUPS plugin subpackage on CentOS 6 and CentOS 7
-* Tue Aug 20 2019 Pavlos Emm. Katsoulakis <paul@netdat.acloud> - 0.0.0-8
+* Tue Aug 20 2019 Pavlos Emm. Katsoulakis <paul@netdata.cloud> - 0.0.0-8
 - Split CUPS functionality on separate package
 * Fri Jun 28 2019 Pavlos Emm. Katsoulakis <paul@netdata.cloud> - 0.0.0-7
 - Raise the path overrides to the spec file level, not just the configure.

@@ -17,6 +17,8 @@
 // the number of currently connected clients.
 
 static struct clients_cache {
+    unsigned long long client_id;
+
     struct {
         SPINLOCK spinlock;
         struct web_client *head;    // the structures of the currently connected clients
@@ -33,14 +35,14 @@ static struct clients_cache {
     } avail;
 } web_clients_cache = {
         .used = {
-                .spinlock = NETDATA_SPINLOCK_INITIALIZER,
+                .spinlock = SPINLOCK_INITIALIZER,
                 .head = NULL,
                 .count = 0,
                 .reused = 0,
                 .allocated = 0,
         },
         .avail = {
-                .spinlock = NETDATA_SPINLOCK_INITIALIZER,
+                .spinlock = SPINLOCK_INITIALIZER,
                 .head = NULL,
                 .count = 0,
         },
@@ -103,7 +105,7 @@ struct web_client *web_client_get_from_cache(void) {
         w = web_client_create(&netdata_buffers_statistics.buffers_web);
         spinlock_lock(&web_clients_cache.used.spinlock);
 
-        w->id = global_statistics_web_client_connected();
+        w->id = __atomic_add_fetch(&web_clients_cache.client_id, 1, __ATOMIC_RELAXED);
         web_clients_cache.used.allocated++;
     }
 
@@ -119,15 +121,13 @@ struct web_client *web_client_get_from_cache(void) {
     w->mode = HTTP_REQUEST_MODE_GET;
     web_client_reset_permissions(w);
     memset(w->transaction, 0, sizeof(w->transaction));
+    memset(&w->auth, 0, sizeof(w->auth));
 
     return w;
 }
 
 void web_client_release_to_cache(struct web_client *w) {
-
-#ifdef ENABLE_HTTPS
     netdata_ssl_close(&w->ssl);
-#endif
 
     // unlink it from the used
     spinlock_lock(&web_clients_cache.used.spinlock);

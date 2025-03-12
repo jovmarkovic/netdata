@@ -1,5 +1,5 @@
 #ifndef NETDATA_SECURITY_H
-# define NETDATA_SECURITY_H
+#define NETDATA_SECURITY_H
 
 typedef enum __attribute__((packed)) {
     NETDATA_SSL_STATE_NOT_SSL = 1,  // This connection is not SSL
@@ -11,27 +11,6 @@ typedef enum __attribute__((packed)) {
 #define NETDATA_SSL_WEB_SERVER_CTX 0
 #define NETDATA_SSL_STREAMING_SENDER_CTX 1
 #define NETDATA_SSL_EXPORTING_CTX 2
-
-# ifdef ENABLE_HTTPS
-
-#define OPENSSL_VERSION_095 0x00905100L
-#define OPENSSL_VERSION_097 0x0907000L
-#define OPENSSL_VERSION_110 0x10100000L
-#define OPENSSL_VERSION_111 0x10101000L
-#define OPENSSL_VERSION_300 0x30000000L
-
-#  include <openssl/ssl.h>
-#  include <openssl/err.h>
-#  include <openssl/evp.h>
-#  include <openssl/pem.h>
-#  if (SSLEAY_VERSION_NUMBER >= OPENSSL_VERSION_097) && (OPENSSL_VERSION_NUMBER < OPENSSL_VERSION_110)
-#   include <openssl/conf.h>
-#  endif
-
-#if OPENSSL_VERSION_NUMBER >= OPENSSL_VERSION_300
-#include <openssl/core_names.h>
-#include <openssl/decoder.h>
-#endif
 
 typedef struct netdata_ssl {
     SSL *conn;               // SSL connection
@@ -52,7 +31,7 @@ extern const char *tls_version;
 extern const char *tls_ciphers;
 extern bool netdata_ssl_validate_certificate;
 extern bool netdata_ssl_validate_certificate_sender;
-int ssl_security_location_for_context(SSL_CTX *ctx,char *file,char *path);
+int ssl_security_location_for_context(SSL_CTX *ctx, const char *file, const char *path);
 
 void netdata_ssl_initialize_openssl();
 void netdata_ssl_cleanup();
@@ -73,5 +52,4 @@ ssize_t netdata_ssl_write(NETDATA_SSL *ssl, const void *buf, size_t num);
 ssize_t netdata_ssl_pending(NETDATA_SSL *ssl);
 bool netdata_ssl_has_pending(NETDATA_SSL *ssl);
 
-# endif //ENABLE_HTTPS
 #endif //NETDATA_SECURITY_H

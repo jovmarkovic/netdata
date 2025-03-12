@@ -1,11 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/*
- * netdata cups.plugin
- * (C) Copyright 2017-2018 Simon Nagl <simon.nagl@gmx.de>
- * Released under GPL v3+
- */
-
 #include "libnetdata/libnetdata.h"
 #include "libnetdata/required_dummies.h"
 
@@ -53,9 +47,9 @@ void print_help() {
             "\n"
             "netdata cups.plugin %s\n"
             "\n"
-            "Copyright (C) 2017-2018 Simon Nagl <simon.nagl@gmx.de>\n"
+            "Copyright 2018-2025 Netdata Inc.\n"
+            "Original Author: Simon Nagl <simon.nagl@gmx.de>\n"
             "Released under GNU General Public License v3+.\n"
-            "All rights reserved.\n"
             "\n"
             "This program is a data collector plugin for netdata.\n"
             "\n"
@@ -226,14 +220,14 @@ void reset_metrics() {
 }
 
 int main(int argc, char **argv) {
-    clocks_init();
     nd_log_initialize_for_external_plugins("cups.plugin");
+    netdata_threads_init_for_external_plugins(0);
 
     parse_command_line(argc, argv);
 
     errno_clear();
 
-    dict_dest_job_metrics = dictionary_create(DICT_OPTION_SINGLE_THREADED);
+    dict_dest_job_metrics = dictionary_create_advanced(DICT_OPTION_SINGLE_THREADED | DICT_OPTION_FIXED_SIZE, NULL, sizeof(struct job_metrics));
 
     // ------------------------------------------------------------------------
     // the main loop
@@ -243,14 +237,13 @@ int main(int argc, char **argv) {
 
     time_t started_t = now_monotonic_sec();
     size_t iteration = 0;
-    usec_t step = netdata_update_every * USEC_PER_SEC;
 
     heartbeat_t hb;
-    heartbeat_init(&hb);
+    heartbeat_init(&hb, netdata_update_every * USEC_PER_SEC);
     for (iteration = 0; 1; iteration++) {
-        heartbeat_next(&hb, step);
+        heartbeat_next(&hb);
 
-        if (unlikely(netdata_exit))
+        if (unlikely(exit_initiated))
             break;
 
         reset_metrics();
@@ -322,7 +315,7 @@ int main(int argc, char **argv) {
         }
         cupsFreeDests(num_dest_total, dests);
 
-        if (unlikely(netdata_exit))
+        if (unlikely(exit_initiated))
             break;
 
         cups_job_t *jobs, *curr_job;
@@ -417,7 +410,7 @@ int main(int argc, char **argv) {
 
         fflush(stdout);
 
-        if (unlikely(netdata_exit))
+        if (unlikely(exit_initiated))
             break;
 
         // restart check (14400 seconds)

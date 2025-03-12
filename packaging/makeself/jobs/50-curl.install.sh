@@ -27,7 +27,8 @@ fi
 
 cd "${NETDATA_MAKESELF_PATH}/tmp/curl" || exit 1
 
-export CFLAGS="-I/openssl-static/include -pipe"
+export CFLAGS="${TUNING_FLAGS} -I/openssl-static/include -pipe"
+export CXXFLAGS="${CFLAGS}"
 export LDFLAGS="-static -L/openssl-static/lib64"
 export PKG_CONFIG="pkg-config --static"
 export PKG_CONFIG_PATH="/openssl-static/lib64/pkgconfig"
@@ -56,6 +57,8 @@ if [ "${CACHE_HIT:-0}" -eq 0 ]; then
         --enable-cookies \
         --with-ca-fallback \
         --with-openssl \
+        --with-ca-bundle=/opt/netdata/etc/ssl/certs/ca-certificates.crt \
+        --with-ca-path=/opt/netdata/etc/ssl/certs \
         --disable-dependency-tracking
 
     # Curl autoconf does not honour the curl_LDFLAGS environment variable

@@ -3,8 +3,6 @@
 #include "../libnetdata.h"
 #include <Judy.h>
 
-typedef int32_t REFCOUNT;
-
 // ----------------------------------------------------------------------------
 // STRING implementation - dedup all STRING
 
@@ -32,7 +30,8 @@ static struct string_partition {
     size_t deletes;             // the number of successful deleted from the index
 
     long int entries;           // the number of entries in the index
-    long int memory;            // the memory used, without the JudyHS index
+    long int memory;            // the memory used
+    long int memory_index;      // JudyHS (accurate)
 
 #ifdef NETDATA_INTERNAL_CHECKS
     // internal statistics
@@ -63,13 +62,14 @@ static struct string_partition {
 #define string_internal_stats_add(partition, var, val) do {;} while(0)
 #endif
 
-void string_statistics(size_t *inserts, size_t *deletes, size_t *searches, size_t *entries, size_t *references, size_t *memory, size_t *duplications, size_t *releases) {
+void string_statistics(size_t *inserts, size_t *deletes, size_t *searches, size_t *entries, size_t *references, size_t *memory, size_t *memory_index, size_t *duplications, size_t *releases) {
     if (inserts) *inserts = 0;
     if (deletes) *deletes = 0;
     if (searches) *searches = 0;
     if (entries) *entries = 0;
     if (references) *references = 0;
     if (memory) *memory = 0;
+    if (memory_index) *memory_index = 0;
     if (duplications) *duplications = 0;
     if (releases) *releases = 0;
 
@@ -78,6 +78,7 @@ void string_statistics(size_t *inserts, size_t *deletes, size_t *searches, size_
         if (deletes)        *deletes        += string_base[i].deletes;
         if (entries)        *entries        += (size_t) string_base[i].entries;
         if (memory)         *memory         += (size_t) string_base[i].memory;
+        if (memory_index)   *memory_index   += (string_base[i].memory_index > 0) ? string_base[i].memory_index : 0;
 
 #ifdef NETDATA_INTERNAL_CHECKS
         if (searches)       *searches       += string_base[i].atomic.searches;
@@ -88,34 +89,13 @@ void string_statistics(size_t *inserts, size_t *deletes, size_t *searches, size_
     }
 }
 
-#define string_entry_acquire(se) __atomic_add_fetch(&((se)->refcount), 1, __ATOMIC_SEQ_CST)
-#define string_entry_release(se) __atomic_sub_fetch(&((se)->refcount), 1, __ATOMIC_SEQ_CST)
-
 static inline bool string_entry_check_and_acquire(STRING *se) {
 #ifdef NETDATA_INTERNAL_CHECKS
     uint8_t partition = string_partition(se);
 #endif
 
-    REFCOUNT expected, desired, count = 0;
-
-    expected = __atomic_load_n(&se->refcount, __ATOMIC_SEQ_CST);
-
-    do {
-        count++;
-
-        if(expected <= 0) {
-            // We cannot use this.
-            // The reference counter reached value zero,
-            // so another thread is deleting this.
-            string_internal_stats_add(partition, spins, count - 1);
-            return false;
-        }
-
-        desired = expected + 1;
-
-    } while(!__atomic_compare_exchange_n(&se->refcount, &expected, desired, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST));
-
-    string_internal_stats_add(partition, spins, count - 1);
+    if(!refcount_acquire(&se->refcount))
+        return false;
 
     // statistics
     // string_base.active_references is altered at the in string_strdupz() and string_freez()
@@ -127,12 +107,8 @@ static inline bool string_entry_check_and_acquire(STRING *se) {
 STRING *string_dup(STRING *string) {
     if(unlikely(!string)) return NULL;
 
-#ifdef NETDATA_INTERNAL_CHECKS
-    if(unlikely(__atomic_load_n(&string->refcount, __ATOMIC_SEQ_CST) <= 0))
-        fatal("STRING: tried to %s() a string that is freed (it has %d references).", __FUNCTION__, string->refcount);
-#endif
-
-    string_entry_acquire(string);
+    if(!refcount_acquire(&string->refcount))
+        fatal("STRING: tried to %s() a string that is deleted (refcount %d).", __FUNCTION__, string->refcount);
 
 #ifdef NETDATA_INTERNAL_CHECKS
     uint8_t partition = string_partition(string);
@@ -196,10 +172,18 @@ static inline STRING *string_index_insert(const char *str, size_t length) {
 
     rw_spinlock_write_lock(&string_base[partition].spinlock);
 
+    int64_t judy_mem = 0;
+
     STRING **ptr;
     {
         JError_t J_Error;
+
+        JudyAllocThreadPulseReset();
+
         Pvoid_t *Rc = JudyHSIns(&string_base[partition].JudyHSArray, (void *)str, length - 1, &J_Error);
+
+        judy_mem = JudyAllocThreadPulseGetAndReset();
+
         if (unlikely(Rc == PJERR)) {
             fatal(
                 "STRING: Cannot insert entry with name '%s' to JudyHS, JU_ERRNO_* == %u, ID == %d",
@@ -212,7 +196,7 @@ static inline STRING *string_index_insert(const char *str, size_t length) {
 
     if (likely(*ptr == 0)) {
         // a new item added to the index
-        size_t mem_size = sizeof(STRING) + length;
+        long mem_size = (long)sizeof(STRING) + (long)length;
         string = mallocz(mem_size);
         strcpy((char *)string->str, str);
         string->length = length;
@@ -220,7 +204,8 @@ static inline STRING *string_index_insert(const char *str, size_t length) {
         *ptr = string;
         string_base[partition].inserts++;
         string_base[partition].entries++;
-        string_base[partition].memory += (long)(mem_size + JUDYHS_INDEX_SIZE_ESTIMATE(length));
+        string_base[partition].memory += mem_size;
+        string_base[partition].memory_index += judy_mem;
     }
     else {
         // the item is already in the index
@@ -250,16 +235,18 @@ static inline void string_index_delete(STRING *string) {
 
     rw_spinlock_write_lock(&string_base[partition].spinlock);
 
-#ifdef NETDATA_INTERNAL_CHECKS
-    if(unlikely(__atomic_load_n(&string->refcount, __ATOMIC_SEQ_CST) != 0))
-        fatal("STRING: tried to delete a string at %s() that is already freed (it has %d references).", __FUNCTION__, string->refcount);
-#endif
-
     bool deleted = false;
+    int64_t judy_mem = 0;
 
     if (likely(string_base[partition].JudyHSArray)) {
         JError_t J_Error;
+
+        JudyAllocThreadPulseReset();
+
         int ret = JudyHSDel(&string_base[partition].JudyHSArray, (void *)string->str, string->length - 1, &J_Error);
+
+        judy_mem = JudyAllocThreadPulseGetAndReset();
+
         if (unlikely(ret == JERR)) {
             netdata_log_error(
                 "STRING: Cannot delete entry with name '%s' from JudyHS, JU_ERRNO_* == %u, ID == %d",
@@ -273,10 +260,11 @@ static inline void string_index_delete(STRING *string) {
     if (unlikely(!deleted))
         netdata_log_error("STRING: tried to delete '%s' that is not in the index. Ignoring it.", string->str);
     else {
-        size_t mem_size = sizeof(STRING) + string->length;
+        long mem_size = (long)sizeof(STRING) + (long)string->length;
         string_base[partition].deletes++;
         string_base[partition].entries--;
-        string_base[partition].memory -= (long)(mem_size + JUDYHS_INDEX_SIZE_ESTIMATE(string->length));
+        string_base[partition].memory -= mem_size;
+        string_base[partition].memory_index += judy_mem;
         freez(string);
     }
 
@@ -332,14 +320,8 @@ void string_freez(STRING *string) {
 #ifdef NETDATA_INTERNAL_CHECKS
     uint8_t partition = string_partition(string);
 #endif
-    REFCOUNT refcount = string_entry_release(string);
 
-#ifdef NETDATA_INTERNAL_CHECKS
-    if(unlikely(refcount < 0))
-        fatal("STRING: tried to %s() a string that is already freed (it has %d references).", __FUNCTION__, string->refcount);
-#endif
-
-    if(unlikely(refcount == 0))
+    if(unlikely(refcount_release_and_acquire_for_deletion(&string->refcount)))
         string_index_delete(string);
 
     // statistics
@@ -347,14 +329,32 @@ void string_freez(STRING *string) {
     string_stats_atomic_increment(partition, releases);
 }
 
-inline size_t string_strlen(STRING *string) {
+inline size_t string_strlen(const STRING *string) {
     if(unlikely(!string)) return 0;
     return string->length - 1;
 }
 
-inline const char *string2str(STRING *string) {
+inline const char *string2str(const STRING *string) {
     if(unlikely(!string)) return "";
     return string->str;
+}
+
+bool string_ends_with_string(const STRING *whole, const STRING *end) {
+    if(whole == end) return true;
+    if(!whole || !end) return false;
+    if(end->length > whole->length) return false;
+    if(end->length == whole->length) return strcmp(string2str(whole), string2str(end)) == 0;
+    const char *we = string2str(whole);
+    we = &we[string_strlen(whole) - string_strlen(end)];
+    return strncmp(we, end->str, string_strlen(end)) == 0;
+}
+
+bool string_starts_with_string(const STRING *whole, const STRING *end) {
+    if(whole == end) return true;
+    if(!whole || !end) return false;
+    if(end->length > whole->length) return false;
+    if(end->length == whole->length) return strcmp(string2str(whole), string2str(end)) == 0;
+    return strncmp(string2str(whole), string2str(end), string_strlen(end)) == 0;
 }
 
 STRING *string_2way_merge(STRING *a, STRING *b) {
@@ -454,6 +454,53 @@ static long unittest_string_entries(void) {
         entries += string_base[p].entries;
 
     return entries;
+}
+
+// returns the number of strings that were freed, but were still referenced
+size_t string_destroy(void) {
+    size_t referenced = 0;
+
+    // Traverse all partitions
+    for (size_t partition = 0; partition < STRING_PARTITIONS; partition++) {
+        // Lock the partition to prevent new entries while we're cleaning up
+        rw_spinlock_write_lock(&string_base[partition].spinlock);
+
+        // Since JudyHS doesn't have simple traversal functions,
+        // we'll free the entire array at once.
+        // This is a bit inefficient because we won't be able to
+        // determine exactly how many strings were referenced.
+        if (string_base[partition].JudyHSArray) {
+            // We'll count all entries as "referenced" since we can't check them individually
+            referenced += string_base[partition].entries;
+
+            // Free the JudyHS array
+            JudyHSFreeArray(&string_base[partition].JudyHSArray, PJE0);
+            string_base[partition].JudyHSArray = NULL;
+        }
+
+        // Reset partition statistics
+        string_base[partition].inserts = 0;
+        string_base[partition].deletes = 0;
+        string_base[partition].entries = 0;
+        string_base[partition].memory = 0;
+        string_base[partition].memory_index = 0;
+
+#ifdef NETDATA_INTERNAL_CHECKS
+        string_base[partition].atomic.searches = 0;
+        string_base[partition].atomic.releases = 0;
+        string_base[partition].atomic.duplications = 0;
+        string_base[partition].atomic.active_references = 0;
+        string_base[partition].found_deleted_on_search = 0;
+        string_base[partition].found_available_on_search = 0;
+        string_base[partition].found_deleted_on_insert = 0;
+        string_base[partition].found_available_on_insert = 0;
+        string_base[partition].spins = 0;
+#endif
+
+        rw_spinlock_write_unlock(&string_base[partition].spinlock);
+    }
+
+    return referenced;
 }
 
 #ifdef NETDATA_INTERNAL_CHECKS
@@ -650,8 +697,8 @@ int string_unittest(size_t entries) {
                ospins = unittest_string_spins();
 #endif
 
-        size_t oinserts, odeletes, osearches, oentries, oreferences, omemory, oduplications, oreleases;
-        string_statistics(&oinserts, &odeletes, &osearches, &oentries, &oreferences, &omemory, &oduplications, &oreleases);
+        size_t oinserts, odeletes, osearches, oentries, oreferences, omemory, omemory_index, oduplications, oreleases;
+        string_statistics(&oinserts, &odeletes, &osearches, &oentries, &oreferences, &omemory, &omemory_index, &oduplications, &oreleases);
 
         time_t seconds_to_run = 5;
         int threads_to_create = 2;
@@ -674,8 +721,8 @@ int string_unittest(size_t entries) {
         for (int i = 0; i < threads_to_create; i++)
             nd_thread_join(threads[i]);
 
-        size_t inserts, deletes, searches, sentries, references, memory, duplications, releases;
-        string_statistics(&inserts, &deletes, &searches, &sentries, &references, &memory, &duplications, &releases);
+        size_t inserts, deletes, searches, sentries, references, memory, memory_index, duplications, releases;
+        string_statistics(&inserts, &deletes, &searches, &sentries, &references, &memory, &memory_index, &duplications, &releases);
 
         fprintf(stderr, "inserts %zu, deletes %zu, searches %zu, entries %zu, references %zu, memory %zu, duplications %zu, releases %zu\n",
                 inserts - oinserts, deletes - odeletes, searches - osearches, sentries - oentries, references - oreferences, memory - omemory, duplications - oduplications, releases - oreleases);

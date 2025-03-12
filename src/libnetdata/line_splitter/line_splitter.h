@@ -19,17 +19,19 @@ static inline void line_splitter_reset(struct line_splitter *line) {
     line->num_words = 0;
 }
 
-int pluginsd_isspace(char c);
-int config_isspace(char c);
-int group_by_label_isspace(char c);
-int dyncfg_id_isspace(char c);
+int isspace_pluginsd(char c);
+int isspace_config(char c);
+int isspace_group_by_label(char c);
+int isspace_dyncfg_id(char c);
+int isspace_whitespace(char c);
 
+extern bool isspace_map_whitespace[256];
 extern bool isspace_map_pluginsd[256];
 extern bool isspace_map_config[256];
 extern bool isspace_map_group_by_label[256];
 extern bool isspace_dyncfg_id_map[256];
 
-static inline size_t quoted_strings_splitter(char *str, char **words, size_t max_words, bool *isspace_map) {
+static ALWAYS_INLINE size_t quoted_strings_splitter(char *str, char **words, size_t max_words, bool *isspace_map) {
     char *s = str, quote = 0;
     size_t i = 0;
 
@@ -55,6 +57,9 @@ static inline size_t quoted_strings_splitter(char *str, char **words, size_t max
     while (likely(*s)) {
         // if it is an escape
         if (unlikely(*s == '\\' && s[1])) {
+            // IMPORTANT: support for escaping is incomplete!
+            // The backslash character needs to be removed
+            // from the parsed string.
             s += 2;
             continue;
         }
@@ -103,6 +108,9 @@ static inline size_t quoted_strings_splitter(char *str, char **words, size_t max
     return i;
 }
 
+#define quoted_strings_splitter_whitespace(str, words, max_words) \
+        quoted_strings_splitter(str, words, max_words, isspace_map_whitespace)
+
 #define quoted_strings_splitter_query_group_by_label(str, words, max_words) \
         quoted_strings_splitter(str, words, max_words, isspace_map_group_by_label)
 
@@ -115,7 +123,7 @@ static inline size_t quoted_strings_splitter(char *str, char **words, size_t max
 #define quoted_strings_splitter_dyncfg_id(str, words, max_words) \
         quoted_strings_splitter(str, words, max_words, isspace_dyncfg_id_map)
 
-static inline char *get_word(char **words, size_t num_words, size_t index) {
+static ALWAYS_INLINE char *get_word(char **words, size_t num_words, size_t index) {
     if (unlikely(index >= num_words))
         return NULL;
 

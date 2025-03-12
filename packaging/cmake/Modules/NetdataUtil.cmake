@@ -1,9 +1,31 @@
-# Utility functions used by other modules.
-#
-# Copyright (c) 2024 Netdata Inc.
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Utility functions used by other modules.
 
 include_guard()
+
+# Fix up CMAKE_SYSTEM_PROCESSOR to actually match the build target
+function(netdata_fixup_system_processor)
+  if(OS_WINDOWS)
+    return()
+  endif()
+
+  if(CMAKE_TOOLCHAIN_FILE)
+    return()
+  endif()
+
+  execute_process(
+    COMMAND ${CMAKE_C_COMPILER} ${CMAKE_C_FLAGS} -dumpmachine
+    COMMAND cut -f 1 -d -
+    RESULT_VARIABLE return_code
+    OUTPUT_VARIABLE output_data
+  )
+
+  if(return_code EQUAL 0)
+    set(CMAKE_SYSTEM_PROCESSOR "${output_data}" PARENT_SCOPE)
+  else()
+    message(WARNING "Failed to detect target processor architecture, using CMake default")
+  endif()
+endfunction()
 
 # Determine the version of the host kernel.
 #
@@ -143,4 +165,79 @@ function(netdata_identify_libc _libc_name)
     else()
         set(${_libc_name} ${_ND_DETECTED_LIBC} PARENT_SCOPE)
     endif()
+endfunction()
+
+# Extract a tar archive.
+#
+# This will use CMake’s native support if available, but will still
+# fall back cleanly if CMake is too old.
+function(extract_gzipped_tarball tarball target)
+  if(CMAKE_VERSION VERSION_LESS 3.18)
+    find_program(TAR NAMES tar bsdtar DOC "TAR archive program")
+
+    if(TAR STREQUAL "TAR-NOTFOUND")
+      message(FATAL_ERROR "Unable to find tar command")
+    endif()
+
+    find_program(GZIP NAMES gzip DOC "GZIP compression program")
+
+    if(GZIP STREQUAL "GZIP-NOTFOUND")
+      message(FATAL_ERROR "Unable to find gzip command")
+    endif()
+
+    file(MAKE_DIRECTORY "${target}")
+    execute_process(COMMAND tar -x -z -f "${tarball}" -C "${target}"
+                    RESULT_VARIABLE result)
+
+    if(result)
+      message(FATAL_ERROR "Failed to extract ${tarball}")
+    endif()
+  else()
+    file(ARCHIVE_EXTRACT
+         INPUT "${tarball}"
+         DESTINATION "${target}")
+  endif()
+endfunction()
+
+# Get a recursive list of all sub-directories of the specified directory,
+# relative to that directory.
+function(subdirlist result curdir)
+  file(GLOB_RECURSE children
+       LIST_DIRECTORIES TRUE
+       RELATIVE ${curdir}
+       ${curdir}/*)
+
+  set(dirlist "")
+
+  foreach(child ${children})
+    if(IS_DIRECTORY ${curdir}/${child})
+      list(APPEND dirlist ${child})
+    endif()
+  endforeach()
+
+  set(${result} ${dirlist} PARENT_SCOPE)
+endfunction()
+
+# Precompile python code in the specified directory relative to the
+# CMake install prefix at install time.
+# This must be called _after_ the install directive for the python code
+# in the specified directory
+function(precompile_python dir component)
+  find_package(Python3)
+
+  if(NOT ${Python3_Interpreter_FOUND})
+    message(STATUS "Could not find Python3, skipping precompilation of Python code.")
+    return()
+  endif()
+
+  set(prefix [=[${CMAKE_INSTALL_PREFIX}]=])
+
+  install(
+    CODE "message(STATUS \"Precompiling Python3 code in ${prefix}/${dir}\")"
+    COMPONENT ${component}
+  )
+  install(
+    CODE "execute_process(COMMAND ${Python3_Interpreter} -O -m compileall -j0 -o2 ${prefix}/${dir} WORKING_DIRECTORY ${prefix}/${dir})"
+    COMPONENT ${component}
+  )
 endfunction()

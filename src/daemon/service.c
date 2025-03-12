@@ -34,11 +34,11 @@ static void svc_rrddim_obsolete_to_archive(RRDDIM *rd) {
     rrddim_flag_set(rd, RRDDIM_FLAG_ARCHIVED);
     rrddim_flag_clear(rd, RRDDIM_FLAG_OBSOLETE);
 
-    if (rd->rrd_memory_mode == RRD_MEMORY_MODE_DBENGINE) {
+    if (rd->rrd_memory_mode == RRD_DB_MODE_DBENGINE) {
         /* only a collector can mark a chart as obsolete, so we must remove the reference */
         if (!rrddim_finalize_collection_and_check_retention(rd)) {
             /* This metric has no data and no references */
-            metaqueue_delete_dimension_uuid(&rd->metric_uuid);
+            metaqueue_delete_dimension_uuid(uuidmap_uuid_ptr(rd->uuid));
         }
         else {
             /* Do not delete this dimension */
@@ -166,7 +166,7 @@ static void svc_rrdhost_detect_obsolete_charts(RRDHOST *host) {
     time_t last_entry_t;
     RRDSET *st;
 
-    time_t child_connect_time = host->child_connect_time;
+    time_t child_connect_time = host->stream.rcv.status.last_connected;
 
     rrdset_foreach_read(st, host) {
         if(rrdset_is_replicating(st))
@@ -203,19 +203,19 @@ static void svc_rrd_cleanup_obsolete_charts_from_all_hosts() {
         if (host == localhost)
             continue;
 
-        netdata_mutex_lock(&host->receiver_lock);
+        rrdhost_receiver_lock(host);
 
         time_t now = now_realtime_sec();
 
-        if (host->trigger_chart_obsoletion_check &&
-            ((host->child_last_chart_command &&
-              host->child_last_chart_command + host->health.health_delay_up_to < now) ||
-             (host->child_connect_time + TIME_TO_RUN_OBSOLETIONS_ON_CHILD_CONNECT < now))) {
+        if (host->stream.rcv.status.check_obsolete &&
+            ((host->stream.rcv.status.last_chart &&
+              host->stream.rcv.status.last_chart + host->health.delay_up_to < now) ||
+             (host->stream.rcv.status.last_connected + TIME_TO_RUN_OBSOLETIONS_ON_CHILD_CONNECT < now))) {
             svc_rrdhost_detect_obsolete_charts(host);
-            host->trigger_chart_obsoletion_check = 0;
+            host->stream.rcv.status.check_obsolete = false;
         }
 
-        netdata_mutex_unlock(&host->receiver_lock);
+        rrdhost_receiver_unlock(host);
     }
 
     rrd_rdunlock();
@@ -223,42 +223,45 @@ static void svc_rrd_cleanup_obsolete_charts_from_all_hosts() {
 
 static void svc_rrdhost_cleanup_orphan_hosts(RRDHOST *protected_host) {
     worker_is_busy(WORKER_JOB_CLEANUP_ORPHAN_HOSTS);
-    rrd_wrlock();
 
     time_t now = now_realtime_sec();
 
-    RRDHOST *host;
+    rrd_wrlock();
+    RRDHOST *host, *next = localhost;
+    while((host = next) != NULL) {
+        next = host->next;
 
-restart_after_removal:
-    rrdhost_foreach_write(host) {
-        if(!rrdhost_should_be_removed(host, protected_host, now))
+        if(!rrdhost_should_be_cleaned_up(host, protected_host, now))
             continue;
 
-        bool force = false;
-        if (rrdhost_option_check(host, RRDHOST_OPTION_EPHEMERAL_HOST) && now - host->last_connected > rrdhost_free_ephemeral_time_s)
-            force = true;
+        bool delete = rrdhost_free_ephemeral_time_s &&
+                      now - host->stream.rcv.status.last_disconnected > rrdhost_free_ephemeral_time_s &&
+                      rrdhost_option_check(host, RRDHOST_OPTION_EPHEMERAL_HOST);
 
-        bool is_archived = rrdhost_flag_check(host, RRDHOST_FLAG_ARCHIVED);
-        if (!force && is_archived)
-            continue;
-
-       if (force) {
-            netdata_log_info("Host '%s' with machine guid '%s' is archived, ephemeral clean up.", rrdhost_hostname(host), host->machine_guid);
+        if (!delete && rrdhost_flag_check(host, RRDHOST_FLAG_ARCHIVED)) {
+            // the node is archived, so the cleanup has already run
+            // however, the node may not have any retention now
+            // so it may still need to be needed
+            time_t from_s = 0, to_s = 0;
+            rrdhost_retention(host, now, rrdhost_is_online(host), &from_s, &to_s);
+            if(!from_s && !to_s)
+                delete = true;
+            else
+                continue;
         }
 
         worker_is_busy(WORKER_JOB_FREE_HOST);
-#ifdef ENABLE_ACLK
-        // in case we have cloud connection we inform cloud
-        // a child disconnected
-        if (netdata_cloud_enabled && force) {
+
+        if (delete) {
+            netdata_log_info("Host '%s' with machine guid '%s' is archived, ephemeral clean up.", rrdhost_hostname(host), host->machine_guid);
+            // we inform cloud a child has been removed
             aclk_host_state_update(host, 0, 0);
             unregister_node(host->machine_guid);
+            rrdhost_free___while_having_rrd_wrlock(host);
         }
-#endif
-        rrdhost_free___while_having_rrd_wrlock(host, force);
-        goto restart_after_removal;
+        else
+            rrdhost_cleanup_data_collection_and_health(host);
     }
-
     rrd_wrunlock();
 }
 
@@ -269,7 +272,6 @@ static void service_main_cleanup(void *pptr)
 
     static_thread->enabled = NETDATA_MAIN_THREAD_EXITING;
 
-    netdata_log_debug(D_SYSTEM, "Cleaning up...");
     worker_unregister();
 
     static_thread->enabled = NETDATA_MAIN_THREAD_EXITED;
@@ -299,7 +301,7 @@ void *service_main(void *ptr)
     CLEANUP_FUNCTION_REGISTER(service_main_cleanup) cleanup_ptr = ptr;
 
     heartbeat_t hb;
-    heartbeat_init(&hb);
+    heartbeat_init(&hb, USEC_PER_SEC);
     usec_t step = USEC_PER_SEC * SERVICE_HEARTBEAT;
     usec_t real_step = USEC_PER_SEC;
 
@@ -307,16 +309,12 @@ void *service_main(void *ptr)
 
     while (service_running(SERVICE_MAINTENANCE)) {
         worker_is_idle();
-        heartbeat_next(&hb, USEC_PER_SEC);
+        heartbeat_next(&hb);
         if (real_step < step) {
             real_step += USEC_PER_SEC;
             continue;
         }
         real_step = USEC_PER_SEC;
-
-#ifdef ENABLE_DBENGINE
-       dbengine_retention_statistics();
-#endif
 
         svc_rrd_cleanup_obsolete_charts_from_all_hosts();
 

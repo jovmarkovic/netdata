@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include "../../daemon/common.h"
+#include "database/rrd.h"
 
 #ifdef ENABLE_DBENGINE
 
@@ -18,17 +18,17 @@ static RRDHOST *dbengine_rrdhost_find_or_create(char *name) {
         netdata_configured_utc_offset,
         program_name,
         NETDATA_VERSION,
-        default_rrd_update_every,
+        nd_profile.update_every,
         default_rrd_history_entries,
-        RRD_MEMORY_MODE_DBENGINE,
+        RRD_DB_MODE_DBENGINE,
         health_plugin_enabled(),
-        default_rrdpush_enabled,
-        default_rrdpush_destination,
-        default_rrdpush_api_key,
-        default_rrdpush_send_charts_matching,
-        default_rrdpush_enable_replication,
-        default_rrdpush_seconds_to_replicate,
-        default_rrdpush_replication_step,
+        stream_send.enabled,
+        stream_send.parents.destination,
+        stream_send.api_key,
+        stream_send.send_charts_matching,
+        stream_receive.replication.enabled,
+        stream_receive.replication.period,
+        stream_receive.replication.step,
         NULL,
         0
     );
@@ -140,7 +140,7 @@ void generate_dbengine_dataset(unsigned history_seconds)
     int i;
     time_t time_present;
 
-    default_rrd_memory_mode = RRD_MEMORY_MODE_DBENGINE;
+    default_rrd_memory_mode = RRD_DB_MODE_DBENGINE;
     default_rrdeng_page_cache_mb = 128;
     // Worst case for uncompressible data
     default_rrdeng_disk_quota_mb = (((uint64_t)DSET_DIMS * DSET_CHARTS) * sizeof(storage_number) * history_seconds) /
@@ -185,7 +185,7 @@ void generate_dbengine_dataset(unsigned history_seconds)
     }
     freez(thread_info);
     rrd_wrlock();
-    rrdhost_free___while_having_rrd_wrlock(localhost, true);
+    rrdhost_free___while_having_rrd_wrlock(localhost);
     rrd_wrunlock();
 }
 
@@ -333,7 +333,7 @@ void dbengine_stress_test(unsigned TEST_DURATION_SEC, unsigned DSET_CHARTS, unsi
     if (PAGE_CACHE_MB < RRDENG_MIN_PAGE_CACHE_SIZE_MB)
         PAGE_CACHE_MB = RRDENG_MIN_PAGE_CACHE_SIZE_MB;
 
-    default_rrd_memory_mode = RRD_MEMORY_MODE_DBENGINE;
+    default_rrd_memory_mode = RRD_DB_MODE_DBENGINE;
     default_rrdeng_page_cache_mb = PAGE_CACHE_MB;
     if (DISK_SPACE_MB) {
         fprintf(stderr, "By setting disk space limit data are allowed to be deleted. "
@@ -447,7 +447,7 @@ void dbengine_stress_test(unsigned TEST_DURATION_SEC, unsigned DSET_CHARTS, unsi
     }
     freez(query_threads);
     rrd_wrlock();
-    rrdeng_prepare_exit((struct rrdengine_instance *)host->db[0].si);
+    rrdeng_quiesce((struct rrdengine_instance *)host->db[0].si, false);
     rrdeng_exit((struct rrdengine_instance *)host->db[0].si);
     rrdeng_enq_cmd(NULL, RRDENG_OPCODE_SHUTDOWN_EVLOOP, NULL, NULL, STORAGE_PRIORITY_BEST_EFFORT, NULL, NULL);
     rrd_wrunlock();

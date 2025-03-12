@@ -13,7 +13,7 @@ endmeta-->
 <img src="https://netdata.cloud/img/mongodb.svg" width="150"/>
 
 
-Use the MongoDB connector for the exporting engine to archive your agent's metrics to a MongoDB database
+Use the MongoDB connector for the exporting engine to archive your Agent's metrics to a MongoDB database
 for long-term storage, further analysis, or correlation with data from other sources.
 
 
@@ -26,7 +26,7 @@ for long-term storage, further analysis, or correlation with data from other sou
 
 #### 
 
-- To use MongoDB as an external storage for long-term archiving, you should first [install](http://mongoc.org/libmongoc/current/installing.html) libmongoc 1.7.0 or higher.
+- To use MongoDB as an external storage for long-term archiving, you should first [install](https://www.mongodb.com/docs/languages/c/c-driver/current/libmongoc/tutorials/obtaining-libraries/installing/#std-label-installing) libmongoc 1.7.0 or higher.
 - Next, re-install Netdata from the source, which detects that the required library is now available.
 
 
@@ -38,8 +38,8 @@ for long-term storage, further analysis, or correlation with data from other sou
 The configuration file name for this integration is `exporting.conf`.
 
 
-You can edit the configuration file using the `edit-config` script from the
-Netdata [config directory](/docs/netdata-agent/configuration/README.md#the-netdata-config-directory).
+You can edit the configuration file using the [`edit-config`](https://github.com/netdata/netdata/blob/master/docs/netdata-agent/configuration/README.md#edit-a-configuration-file-using-edit-config) script from the
+Netdata [config directory](https://github.com/netdata/netdata/blob/master/docs/netdata-agent/configuration/README.md#the-netdata-config-directory).
 
 ```bash
 cd /etc/netdata 2>/dev/null || cd /opt/netdata/etc/netdata

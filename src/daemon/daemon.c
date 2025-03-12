@@ -3,35 +3,7 @@
 #include "common.h"
 #include <sched.h>
 
-char pidfile[FILENAME_MAX + 1] = "";
-char claiming_directory[FILENAME_MAX + 1];
-char netdata_exe_path[FILENAME_MAX + 1];
-char netdata_exe_file[FILENAME_MAX + 1];
-
-void get_netdata_execution_path(void) {
-    int ret;
-    size_t exepath_size = 0;
-    struct passwd *passwd = NULL;
-    char *user = NULL;
-
-    passwd = getpwuid(getuid());
-    user = (passwd && passwd->pw_name) ? passwd->pw_name : "";
-
-    exepath_size = sizeof(netdata_exe_file) - 1;
-    ret = uv_exepath(netdata_exe_file, &exepath_size);
-    if (0 != ret) {
-        netdata_log_error("uv_exepath(\"%s\", %u) (user: %s) failed (%s).", netdata_exe_file, (unsigned)exepath_size, user,
-                          uv_strerror(ret));
-        fatal("Cannot start netdata without getting execution path.");
-    }
-
-    netdata_exe_file[exepath_size] = '\0';
-
-    // macOS's dirname(3) does not modify passed string
-    char *tmpdir = strdupz(netdata_exe_file);
-    strcpy(netdata_exe_path, dirname(tmpdir));
-    freez(tmpdir);
-}
+char *pidfile = NULL;
 
 static void fix_directory_file_permissions(const char *dirname, uid_t uid, gid_t gid, bool recursive)
 {
@@ -68,7 +40,7 @@ static void change_dir_ownership(const char *dir, uid_t uid, gid_t gid, bool rec
     fix_directory_file_permissions(dir, uid, gid, recursive);
 }
 
-static void clean_directory(char *dirname)
+static inline void clean_directory(const char *dirname)
 {
     DIR *dir = opendir(dirname);
     if(!dir) return;
@@ -85,17 +57,15 @@ static void clean_directory(char *dirname)
 }
 
 static void prepare_required_directories(uid_t uid, gid_t gid) {
+    change_dir_ownership(os_run_dir(true), uid, gid, false);
     change_dir_ownership(netdata_configured_cache_dir, uid, gid, true);
     change_dir_ownership(netdata_configured_varlib_dir, uid, gid, false);
-    change_dir_ownership(netdata_configured_lock_dir, uid, gid, false);
     change_dir_ownership(netdata_configured_log_dir, uid, gid, false);
-    change_dir_ownership(claiming_directory, uid, gid, false);
+    change_dir_ownership(netdata_configured_cloud_dir, uid, gid, false);
 
     char filename[FILENAME_MAX + 1];
     snprintfz(filename, FILENAME_MAX, "%s/registry", netdata_configured_varlib_dir);
     change_dir_ownership(filename, uid, gid, false);
-
-    clean_directory(netdata_configured_lock_dir);
 }
 
 static int become_user(const char *username, int pid_fd) {
@@ -112,7 +82,7 @@ static int become_user(const char *username, int pid_fd) {
 
     prepare_required_directories(uid, gid);
 
-    if(pidfile[0]) {
+    if(pidfile && *pidfile) {
         if(chown(pidfile, uid, gid) == -1)
             netdata_log_error("Cannot chown '%s' to %u:%u", pidfile, (unsigned int)uid, (unsigned int)gid);
     }
@@ -145,6 +115,7 @@ static int become_user(const char *username, int pid_fd) {
     if(supplementary_groups)
         freez(supplementary_groups);
 
+#if !defined(FSANITIZE_ADDRESS)
     if(os_setresgid(gid, gid, gid) != 0) {
         netdata_log_error("Cannot switch to user's %s group (gid: %u).", username, gid);
         return -1;
@@ -159,10 +130,12 @@ static int become_user(const char *username, int pid_fd) {
         netdata_log_error("Cannot switch to user's %s group (gid: %u).", username, gid);
         return -1;
     }
+
     if(setegid(gid) != 0) {
         netdata_log_error("Cannot effectively switch to user's %s group (gid: %u).", username, gid);
         return -1;
     }
+
     if(setuid(uid) != 0) {
         netdata_log_error("Cannot switch to user %s (uid: %u).", username, uid);
         return -1;
@@ -171,6 +144,9 @@ static int become_user(const char *username, int pid_fd) {
         netdata_log_error("Cannot effectively switch to user %s (uid: %u).", username, uid);
         return -1;
     }
+#else
+    fprintf(stderr, "Running with a Sanitizer, skipping setuid/setgid\n");
+#endif
 
     return(0);
 }
@@ -198,14 +174,14 @@ static void oom_score_adj(void) {
     }
 
     // check the environment
-    char *s = getenv("OOMScoreAdjust");
+    const char *s = getenv("OOMScoreAdjust");
     if(!s || !*s) {
         snprintfz(buf, sizeof(buf) - 1, "%d", (int)wanted_score);
         s = buf;
     }
 
     // check netdata.conf configuration
-    s = config_get(CONFIG_SECTION_GLOBAL, "OOM score", s);
+    s = inicfg_get(&netdata_config, CONFIG_SECTION_GLOBAL, "OOM score", s);
     if(s && *s && (isdigit((uint8_t)*s) || *s == '-' || *s == '+'))
         wanted_score = atoll(s);
     else if(s && !strcmp(s, "keep")) {
@@ -258,7 +234,7 @@ static void oom_score_adj(void) {
 
 static void process_nice_level(void) {
 #ifdef HAVE_NICE
-    int nice_level = (int)config_get_number(CONFIG_SECTION_GLOBAL, "process nice level", 19);
+    int nice_level = (int)inicfg_get_number(&netdata_config, CONFIG_SECTION_GLOBAL, "process nice level", 0);
     if(nice(nice_level) == -1)
         netdata_log_error("Cannot set netdata CPU nice level to %d.", nice_level);
     else
@@ -284,6 +260,10 @@ struct sched_def {
         // the available members are important too!
         // these are all the possible scheduling policies supported by netdata
 
+    // do not change the scheduling priority
+    { "keep", 0, 0, SCHED_FLAG_KEEP_AS_IS },
+    { "none", 0, 0, SCHED_FLAG_KEEP_AS_IS },
+
 #ifdef SCHED_BATCH
         { "batch", SCHED_BATCH, 0, SCHED_FLAG_USE_NICE },
 #endif
@@ -304,10 +284,6 @@ struct sched_def {
 #ifdef SCHED_FIFO
         { "fifo", SCHED_FIFO, 0, SCHED_FLAG_PRIORITY_CONFIGURABLE },
 #endif
-
-        // do not change the scheduling priority
-        { "keep", 0, 0, SCHED_FLAG_KEEP_AS_IS },
-        { "none", 0, 0, SCHED_FLAG_KEEP_AS_IS },
 
         // array termination
         { NULL, 0, 0, 0 }
@@ -365,7 +341,7 @@ static void sched_setscheduler_set(void) {
         int found = 0;
 
         // read the configuration
-        name = config_get(CONFIG_SECTION_GLOBAL, "process scheduling policy", name);
+        name = inicfg_get(&netdata_config, CONFIG_SECTION_GLOBAL, "process scheduling policy", name);
         int i;
         for(i = 0 ; scheduler_defaults[i].name ; i++) {
             if(!strcmp(name, scheduler_defaults[i].name)) {
@@ -378,7 +354,7 @@ static void sched_setscheduler_set(void) {
                     goto report;
 
                 if(flags & SCHED_FLAG_PRIORITY_CONFIGURABLE)
-                    priority = (int)config_get_number(CONFIG_SECTION_GLOBAL, "process scheduling priority", priority);
+                    priority = (int)inicfg_get_number(&netdata_config, CONFIG_SECTION_GLOBAL, "process scheduling priority", priority);
 
 #ifdef HAVE_SCHED_GET_PRIORITY_MIN
                 errno_clear();
@@ -434,38 +410,53 @@ static void sched_setscheduler_set(void) {
 }
 #endif /* HAVE_SCHED_SETSCHEDULER */
 
-int become_daemon(int dont_fork, const char *user)
-{
+int become_daemon(int dont_fork, const char *user) {
     if(!dont_fork) {
+        daemon_status_file_startup_step("startup(become daemon - fork1)");
         int i = fork();
         if(i == -1) {
-            perror("cannot fork");
+            fatal("cannot fork");
             exit(1);
         }
         if(i != 0) {
-            exit(0); // the parent
+            // the parent
+            exit(0);
         }
+
+        // the child
+        gettid_uncached();
+        nd_initialize_signals();
+        capture_stack_trace_flush();
 
         // become session leader
         if (setsid() < 0) {
-            perror("Cannot become session leader.");
+            fatal("Cannot become session leader.");
             exit(2);
         }
 
         // fork() again
+        daemon_status_file_startup_step("startup(become daemon - fork2)");
         i = fork();
         if(i == -1) {
-            perror("cannot fork");
+            fatal("cannot fork for a second time");
             exit(1);
         }
         if(i != 0) {
-            exit(0); // the parent
+            // the parent
+            exit(0);
         }
+
+        // the child
+        gettid_uncached();
+        nd_initialize_signals();
+        capture_stack_trace_flush();
     }
 
     // generate our pid file
+    daemon_status_file_startup_step("startup(become daemon - write pid)");
+
     int pidfd = -1;
-    if(pidfile[0]) {
+    if(pidfile && *pidfile) {
         pidfd = open(pidfile, O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
         if(pidfd >= 0) {
             if(ftruncate(pidfd, 0) != 0)
@@ -485,15 +476,15 @@ int become_daemon(int dont_fork, const char *user)
     umask(0007);
 
     // adjust my Out-Of-Memory score
+    daemon_status_file_startup_step("startup(become daemon - oom)");
     oom_score_adj();
 
     // never become a problem
+    daemon_status_file_startup_step("startup(become daemon - sched)");
     sched_setscheduler_set();
 
-    // Set claiming directory based on user config directory with correct ownership
-    snprintfz(claiming_directory, FILENAME_MAX, "%s/cloud.d", netdata_configured_varlib_dir);
-
     if(user && *user) {
+        daemon_status_file_startup_step("startup(become daemon - user)");
         if(become_user(user, pidfd) != 0) {
             netdata_log_error("Cannot become user '%s'. Continuing as we are.", user);
         }
@@ -501,9 +492,11 @@ int become_daemon(int dont_fork, const char *user)
             netdata_log_debug(D_SYSTEM, "Successfully became user '%s'.", user);
     }
     else {
+        daemon_status_file_startup_step("startup(become daemon - dirs)");
         prepare_required_directories(getuid(), getgid());
     }
 
+    daemon_status_file_startup_step("startup(become daemon - done)");
     if(pidfd != -1)
         close(pidfd);
 
