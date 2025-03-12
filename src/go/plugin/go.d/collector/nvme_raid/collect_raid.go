@@ -13,9 +13,10 @@ import (
 
 type (
 	// Define structs to model JSON responses
-	nvme_RaidInfoResponse struct {
+	nvmeRaidInfoResponse struct {
 		Raids map[string]raidData `json:"-"` // Use map to dynamically hold RAID configurations
 	}
+
 	raidData struct {
 		Active              bool     `json:"active"`
 		Block_Size          int      `json:"block_size"`
@@ -72,7 +73,6 @@ func (r *raidData) UnmarshalJSON(data []byte) error {
 		if len(dev) != 3 {
 			return fmt.Errorf("unexpected device format")
 		}
-
 		id, ok := dev[0].(float64) // JSON numbers are float64 by default
 		if !ok {
 			return fmt.Errorf("unexpected type for device ID")
@@ -103,11 +103,8 @@ func (r *raidData) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (c *Collector) collectRaidInfo(raids map[string]int64, resp *nvme_RaidInfoResponse) error {
+func (c *Collector) collectRaidInfo(raids map[string]int64, resp *nvmeRaidInfoResponse) error {
 	for _, raid := range resp.Raids {
-		// raidData := raid
-		// raidName := raid.Name
-
 		// Check if the RAID has already been processed
 		if !c.raids[raid.Name] {
 			// Mark RAID as processed
@@ -115,7 +112,6 @@ func (c *Collector) collectRaidInfo(raids map[string]int64, resp *nvme_RaidInfoR
 			// Add RAID data charts
 			c.addRaidDataCharts(raid)
 		}
-
 		// Create prefix for metrics related to this RAID
 		px := fmt.Sprintf("raid_%s_", raid.Name)
 		// Define RAID states
@@ -124,7 +120,6 @@ func (c *Collector) collectRaidInfo(raids map[string]int64, resp *nvme_RaidInfoR
 			"offline", "need_recon", "need_init", "read Only", "unrecovered",
 			"none", "restriping", "need_resize", "need_restripe",
 		}
-
 		// Initialize metrics for common RAID states
 		for _, state := range raidStates {
 			// Set the initial value of each state metric to 0
@@ -159,7 +154,7 @@ func (c *Collector) collectRaidInfo(raids map[string]int64, resp *nvme_RaidInfoR
 	return nil
 }
 
-func (c *Collector) queryRaidInfo() (*nvme_RaidInfoResponse, error) {
+func (c *Collector) queryRaidInfo() (*nvmeRaidInfoResponse, error) {
 	// Call the exec method to retrieve RAID information
 	bs, err := c.exec.nvmeRaidInfo()
 	if err != nil {
@@ -178,7 +173,7 @@ func (c *Collector) queryRaidInfo() (*nvme_RaidInfoResponse, error) {
 	}
 
 	// Initialize the response
-	resp := nvme_RaidInfoResponse{
+	resp := nvmeRaidInfoResponse{
 		Raids: make(map[string]raidData),
 	}
 
