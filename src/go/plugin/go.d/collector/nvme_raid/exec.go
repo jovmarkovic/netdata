@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+//go:build linux || freebsd || openbsd || netbsd || dragonfly
+
 package nvme_raid
 
 import (
@@ -11,28 +13,42 @@ import (
 	"github.com/netdata/netdata/go/plugins/logger"
 )
 
-func newNvme_RaidExec(ndsudoPath string, timeout time.Duration, log *logger.Logger) *nvme_RaidExec {
-	return &nvme_RaidExec{
+type nvmeRaid interface {
+	nvmeRaidInfo() ([]byte, error)
+}
+
+func newNvmeRaidExec(ndsudoPath string, timeout time.Duration, log *logger.Logger) *nvmeRaidExec {
+	return &nvmeRaidExec{
 		Logger:     log,
 		ndsudoPath: ndsudoPath,
 		timeout:    timeout,
 	}
 }
 
-type nvme_RaidExec struct {
+type nvmeRaidExec struct {
 	*logger.Logger
 
 	ndsudoPath string
 	timeout    time.Duration
 }
 
+// controllersInfo implements nvmeRaid.
+func (e *nvmeRaidExec) controllersInfo() ([]byte, error) {
+	panic("unimplemented")
+}
+
+// drivesInfo implements nvmeRaid.
+func (e *nvmeRaidExec) drivesInfo() ([]byte, error) {
+	panic("unimplemented")
+}
+
 // raidInfo implements nvme_Raid.
 
-func (e *nvme_RaidExec) nvme_raidInfo() ([]byte, error) {
+func (e *nvmeRaidExec) nvmeRaidInfo() ([]byte, error) {
 	return e.execute("nvme_raid-show")
 }
 
-func (e *nvme_RaidExec) execute(args ...string) ([]byte, error) {
+func (e *nvmeRaidExec) execute(args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), e.timeout)
 	defer cancel()
 

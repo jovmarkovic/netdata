@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//go:build linux || freebsd || openbsd || netbsd || dragonfly
+
 package nvme_raid
 
 import (
@@ -85,7 +89,7 @@ var (
 // 	}
 // )
 
-func (c *Controller) addRaidDataCharts(raids raid_data) {
+func (c *Collector) addRaidDataCharts(raids raidData) {
 	charts := raidDataChartsTmpl.Copy()
 
 	// raidName := raids.Name
@@ -97,7 +101,7 @@ func (c *Controller) addRaidDataCharts(raids raid_data) {
 			// You can add more labels here if needed
 		}
 		for _, dim := range chart.Dims {
-			dim.ID = fmt.Sprintf(dim.ID, raidName)
+			dim.ID = fmt.Sprintf(dim.ID, raids.Name)
 		}
 	}
 

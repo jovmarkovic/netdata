@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+//go:build linux || freebsd || openbsd || netbsd || dragonfly
+
 package nvme_raid
 
 import (
@@ -10,14 +12,14 @@ import (
 	"github.com/netdata/netdata/go/plugins/pkg/executable"
 )
 
-func (s *Nvme_Raid) initNvme_RaidExec() (nvme_Raid, error) {
+func (c *Collector) initNvmeRaidExec() (nvmeRaid, error) {
 	ndsudoPath := filepath.Join(executable.Directory, "ndsudo")
 
 	if _, err := os.Stat(ndsudoPath); err != nil {
 		return nil, fmt.Errorf("ndsudo executable not found: %v", err)
 	}
 
-	nvme_raidExec := newNvme_RaidExec(ndsudoPath, s.Timeout.Duration(), s.Logger)
+	nvmeRaidExec := newNvmeRaidExec(ndsudoPath, c.Timeout.Duration(), c.Logger)
 
-	return nvme_raidExec, nil
+	return nvmeRaidExec, nil
 }

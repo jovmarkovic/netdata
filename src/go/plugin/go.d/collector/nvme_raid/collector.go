@@ -50,7 +50,7 @@ type Collector struct {
 
 	charts *module.Charts
 
-	exec nvme_Raid
+	exec nvmeRaid
 
 	raids map[string]bool
 }
@@ -60,11 +60,11 @@ func (c *Collector) Configuration() any {
 }
 
 func (c *Collector) Init(context.Context) error {
-	nvme_raidExec, err := c.initNvme_RaidExec()
+	nvmeRaidExec, err := c.initNvmeRaidExec()
 	if err != nil {
 		return fmt.Errorf("nvme_raid exec initialization: %v", err)
 	}
-	c.exec = nvme_raidExec
+	c.exec = nvmeRaidExec
 
 	return nil
 }

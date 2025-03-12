@@ -14,9 +14,9 @@ import (
 type (
 	// Define structs to model JSON responses
 	nvme_RaidInfoResponse struct {
-		Raids map[string]raid_data `json:"-"` // Use map to dynamically hold RAID configurations
+		Raids map[string]raidData `json:"-"` // Use map to dynamically hold RAID configurations
 	}
-	raid_data struct {
+	raidData struct {
 		Active              bool     `json:"active"`
 		Block_Size          int      `json:"block_size"`
 		Config              bool     `json:"config"`
@@ -54,8 +54,8 @@ type (
 	}
 )
 
-func (r *raid_data) UnmarshalJSON(data []byte) error {
-	type Alias raid_data // Define an alias to prevent infinite recursion
+func (r *raidData) UnmarshalJSON(data []byte) error {
+	type Alias raidData // Define an alias to prevent infinite recursion
 	aux := &struct {
 		Devices [][]interface{} `json:"devices"` // Use interface{} to handle mixed types
 		*Alias
@@ -103,21 +103,21 @@ func (r *raid_data) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (c *Collector) collectRaidInfo(mx map[string]int64, resp *nvme_RaidInfoResponse) error {
+func (c *Collector) collectRaidInfo(raids map[string]int64, resp *nvme_RaidInfoResponse) error {
 	for _, raid := range resp.Raids {
-		raidData := raid
-		raidName := raidData.Name
+		// raidData := raid
+		// raidName := raid.Name
 
 		// Check if the RAID has already been processed
-		if !c.mx[raidName] {
+		if !c.raids[raid.Name] {
 			// Mark RAID as processed
-			c.mx[raidName] = true
+			c.raids[raid.Name] = true
 			// Add RAID data charts
-			c.addRaidDataCharts(raidData)
+			c.addRaidDataCharts(raid)
 		}
 
 		// Create prefix for metrics related to this RAID
-		px := fmt.Sprintf("raid_%s_", raidName)
+		px := fmt.Sprintf("raid_%s_", raid.Name)
 		// Define RAID states
 		raidStates := []string{
 			"online", "initialized", "initing", "degraded", "reconstructing",
@@ -128,29 +128,29 @@ func (c *Collector) collectRaidInfo(mx map[string]int64, resp *nvme_RaidInfoResp
 		// Initialize metrics for common RAID states
 		for _, state := range raidStates {
 			// Set the initial value of each state metric to 0
-			mx[px+"state_"+state] = 0
+			raids[px+"state_"+state] = 0
 		}
 		// Switch statement to handle different numbers of state types
 		// Note: strings.ToLower is used to ensure consistency in the metric keys
-		switch len(raidData.State) {
+		switch len(raid.State) {
 		case 1:
 			// If there is only one RAID state, set its corresponding metric to 1
-			state := strings.ToLower(raidData.State[0])
-			mx[px+"state_"+state] = 1
+			state := strings.ToLower(raid.State[0])
+			raids[px+"state_"+state] = 1
 		case 2:
 			// If there are two RAID states, set the corresponding metrics to 1
-			state1 := strings.ToLower(raidData.State[0])
-			state2 := strings.ToLower(raidData.State[1])
-			mx[px+"state_"+state1] = 1 // Set the first state metric to 1
-			mx[px+"state_"+state2] = 1 // Set the second state metric to 1
+			state1 := strings.ToLower(raid.State[0])
+			state2 := strings.ToLower(raid.State[1])
+			raids[px+"state_"+state1] = 1 // Set the first state metric to 1
+			raids[px+"state_"+state2] = 1 // Set the second state metric to 1
 		case 3:
 			// If there are three RAID states, set the corresponding metrics to 1
-			state1 := strings.ToLower(raidData.State[0])
-			state2 := strings.ToLower(raidData.State[1])
-			state3 := strings.ToLower(raidData.State[2])
-			mx[px+"state_"+state1] = 1 // Set the first state metric to 1
-			mx[px+"state_"+state2] = 1 // Set the second state metric to 1
-			mx[px+"state_"+state3] = 1 // Set the third state metric to 1
+			state1 := strings.ToLower(raid.State[0])
+			state2 := strings.ToLower(raid.State[1])
+			state3 := strings.ToLower(raid.State[2])
+			raids[px+"state_"+state1] = 1 // Set the first state metric to 1
+			raids[px+"state_"+state2] = 1 // Set the second state metric to 1
+			raids[px+"state_"+state3] = 1 // Set the third state metric to 1
 		default:
 			// Handle the case where the number of states is unexpected
 			return errors.New("unexpected number of states")
@@ -161,7 +161,7 @@ func (c *Collector) collectRaidInfo(mx map[string]int64, resp *nvme_RaidInfoResp
 
 func (c *Collector) queryRaidInfo() (*nvme_RaidInfoResponse, error) {
 	// Call the exec method to retrieve RAID information
-	bs, err := c.exec.nvme_raidInfo()
+	bs, err := c.exec.nvmeRaidInfo()
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving RAID info: %v", err)
 	}
@@ -179,12 +179,12 @@ func (c *Collector) queryRaidInfo() (*nvme_RaidInfoResponse, error) {
 
 	// Initialize the response
 	resp := nvme_RaidInfoResponse{
-		Raids: make(map[string]raid_data),
+		Raids: make(map[string]raidData),
 	}
 
 	// Unmarshal each RAID individually
 	for key, value := range tempMap {
-		var rd raid_data
+		var rd raidData
 		if err := json.Unmarshal(value, &rd); err != nil {
 			return nil, fmt.Errorf("error unmarshalling RAID data for %s: %v", key, err)
 		}

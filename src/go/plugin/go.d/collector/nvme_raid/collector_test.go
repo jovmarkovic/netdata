@@ -34,7 +34,7 @@ func Test_testDataIsValid(t *testing.T) {
 }
 
 func TestNvme_Raid_ConfigurationSerialize(t *testing.T) {
-	module.TestConfigurationSerialize(t, &Nvme_Raid{}, dataConfigJSON, dataConfigYAML)
+	module.TestConfigurationSerialize(t, &NvmeRaid{}, dataConfigJSON, dataConfigYAML)
 }
 
 func TestNvme_Raid_Init(t *testing.T) {
@@ -63,23 +63,23 @@ func TestNvme_Raid_Init(t *testing.T) {
 
 func TestNvme_Raid_Cleanup(t *testing.T) {
 	tests := map[string]struct {
-		prepare func() *Nvme_Raid
+		prepare func() *NvmeRaid
 	}{
 		"not initialized exec": {
-			prepare: func() *Nvme_Raid {
+			prepare: func() *NvmeRaid {
 				return New()
 			},
 		},
 		"after check": {
-			prepare: func() *Nvme_Raid {
+			prepare: func() *NvmeRaid {
 				stor := New()
-				stor.exec = prepareMockNvme_RaidOK()
+				stor.exec = prepareMockNvmeRaidOK()
 				_ = stor.Check()
 				return stor
 			},
 		},
 		"after collect": {
-			prepare: func() *Nvme_Raid {
+			prepare: func() *NvmeRaid {
 				stor := New()
 				stor.exec = prepareMockNvme_RaidOK()
 				_ = stor.Collect()
