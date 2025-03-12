@@ -6,16 +6,16 @@ import (
 	"fmt"
 )
 
-func (s *Nvme_Raid) collect() (map[string]int64, error) {
-	nvme_raidResp, err := s.queryRaidInfo()
+func (c *Collector) collect() (map[string]int64, error) {
+	nvme_raidResp, err := c.queryRaidInfo()
 	if err != nil {
 		return nil, err
 	}
 
-	raids := make(map[string]int64)
+	mx := make(map[string]int64)
 
-	if err := s.collectRaidInfo(raids, nvme_raidResp); err != nil {
+	if err := c.collectRaidInfo(mx, nvme_raidResp); err != nil {
 		return nil, fmt.Errorf("error collecting raid info: %s", err)
 	}
-	return raids, nil
+	return mx, nil
 }

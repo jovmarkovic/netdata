@@ -85,15 +85,15 @@ var (
 // 	}
 // )
 
-func (s *Nvme_Raid) addRaidDataCharts(raids raid_data) {
+func (c *Controller) addRaidDataCharts(raids raid_data) {
 	charts := raidDataChartsTmpl.Copy()
 
-	raidName := raids.Name
+	// raidName := raids.Name
 
 	for _, chart := range *charts {
-		chart.ID = fmt.Sprintf(chart.ID, raidName)
+		chart.ID = fmt.Sprintf(chart.ID, raids.Name)
 		chart.Labels = []module.Label{
-			{Key: "raid_name", Value: raidName},
+			{Key: "raid_name", Value: raids.Name},
 			// You can add more labels here if needed
 		}
 		for _, dim := range chart.Dims {
@@ -101,7 +101,7 @@ func (s *Nvme_Raid) addRaidDataCharts(raids raid_data) {
 		}
 	}
 
-	if err := s.Charts().Add(*charts...); err != nil {
-		s.Warning(err)
+	if err := c.Charts().Add(*charts...); err != nil {
+		c.Warning(err)
 	}
 }
