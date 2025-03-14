@@ -92,8 +92,6 @@ var (
 func (c *Collector) addRaidDataCharts(raids raidData) {
 	charts := raidDataChartsTmpl.Copy()
 
-	// raidName := raids.Name
-
 	for _, chart := range *charts {
 		chart.ID = fmt.Sprintf(chart.ID, raids.Name)
 		chart.Labels = []module.Label{

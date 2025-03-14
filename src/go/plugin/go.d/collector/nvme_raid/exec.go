@@ -32,18 +32,6 @@ type nvmeRaidExec struct {
 	timeout    time.Duration
 }
 
-// controllersInfo implements nvmeRaid.
-func (e *nvmeRaidExec) controllersInfo() ([]byte, error) {
-	panic("unimplemented")
-}
-
-// drivesInfo implements nvmeRaid.
-func (e *nvmeRaidExec) drivesInfo() ([]byte, error) {
-	panic("unimplemented")
-}
-
-// raidInfo implements nvme_Raid.
-
 func (e *nvmeRaidExec) nvmeRaidInfo() ([]byte, error) {
 	return e.execute("nvme_raid-show")
 }
