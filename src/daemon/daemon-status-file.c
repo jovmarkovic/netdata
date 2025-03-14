@@ -9,7 +9,7 @@
 #include <openssl/pem.h>
 #include <openssl/err.h>
 
-#define STATUS_FILE_VERSION 14
+#define STATUS_FILE_VERSION 15
 
 #define STATUS_FILENAME "status-netdata.json"
 
@@ -866,13 +866,15 @@ enum crash_report_t {
 };
 
 static enum crash_report_t check_crash_reports_config(void) {
-    bool analytics = analytics_check_enabled();
+    bool default_enabled = analytics_check_enabled() ||
+                           !UUIDiszero(session_status.node_id) || !UUIDiszero(last_session_status.node_id) ||
+                           !UUIDiszero(session_status.claim_id) || !UUIDiszero(last_session_status.claim_id);
 
-    const char *t = inicfg_get(&netdata_config, CONFIG_SECTION_GLOBAL, "crash reports", analytics ? "all" : "off");
+    const char *t = inicfg_get(&netdata_config, CONFIG_SECTION_GLOBAL, "crash reports", default_enabled ? "all" : "off");
 
     enum crash_report_t rc;
     if(!t || !*t)
-        rc = analytics ? DSF_REPORT_ALL : DSF_REPORT_DISABLED;
+        rc = default_enabled ? DSF_REPORT_ALL : DSF_REPORT_DISABLED;
     else if(strcmp(t, "all") == 0)
         rc = DSF_REPORT_ALL;
     else if(strcmp(t, "crashes") == 0)
@@ -1113,6 +1115,22 @@ void daemon_status_file_check_crash(void) {
     }
 }
 
+static void daemon_status_file_save_again_if_we_can_get_stack_trace(void) {
+    if(!session_status.fatal.stack_trace[0]) {
+        buffer_flush(static_save_buffer);
+        capture_stack_trace(static_save_buffer);
+
+        if(buffer_strlen(static_save_buffer) > 0) {
+            strncpyz(
+                session_status.fatal.stack_trace,
+                buffer_tostring(static_save_buffer),
+                sizeof(session_status.fatal.stack_trace) - 1);
+
+            daemon_status_file_save(static_save_buffer, &session_status, false);
+        }
+    }
+}
+
 // --------------------------------------------------------------------------------------------------------------------
 // ng_log() hook for receiving fatal message information
 
@@ -1154,6 +1172,8 @@ void daemon_status_file_register_fatal(const char *filename, const char *functio
     freez((void *)message);
     freez((void *)errno_str);
     freez((void *)stack_trace);
+
+    daemon_status_file_save_again_if_we_can_get_stack_trace();
 }
 
 // --------------------------------------------------------------------------------------------------------------------
@@ -1179,6 +1199,7 @@ static void daemon_status_file_out_of_memory(void) {
     dsf_release(session_status);
 
     daemon_status_file_save(static_save_buffer, &session_status, false);
+    daemon_status_file_save_again_if_we_can_get_stack_trace();
 }
 
 void daemon_status_file_deadly_signal_received(EXIT_REASON reason) {
@@ -1200,14 +1221,8 @@ void daemon_status_file_deadly_signal_received(EXIT_REASON reason) {
     // save what we know already
     daemon_status_file_save(static_save_buffer, &session_status, false);
 
-    bool can_safely_capture_stack_trace = reason != EXIT_REASON_SIGABRT || capture_stack_trace_is_async_signal_safe();
-
-    if(can_safely_capture_stack_trace && !session_status.fatal.stack_trace[0]) {
-        buffer_flush(static_save_buffer);
-        capture_stack_trace(static_save_buffer);
-        strncpyz(session_status.fatal.stack_trace, buffer_tostring(static_save_buffer), sizeof(session_status.fatal.stack_trace) - 1);
-        daemon_status_file_save(static_save_buffer, &session_status, false);
-    }
+    if(reason != EXIT_REASON_SIGABRT || capture_stack_trace_is_async_signal_safe())
+        daemon_status_file_save_again_if_we_can_get_stack_trace();
 }
 
 bool daemon_status_file_has_last_crashed(void) {
