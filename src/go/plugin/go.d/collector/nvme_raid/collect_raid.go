@@ -18,35 +18,35 @@ type (
 	}
 
 	raidData struct {
-		Active              bool     `json:"active"`
-		Block_Size          int      `json:"block_size"`
-		Config              bool     `json:"config"`
-		Devices             []device `json:"devices"`
-		Devices_Health      []string `json:"devices_health"`
-		Devices_Wear        []string `json:"devices_wear,omitempty"` // Handle optional field
-		Group_Size          int      `json:"group_size"`
-		Init_Depth          int      `json:"init_depth"`
-		Init_Prio           int      `json:"init_prio"`
-		Level               string   `json:"level"`
-		Memory_Limit_Mb     int      `json:"memory_limit_mb"`
-		Memory_Usage_Mb     string   `json:"memory_usage_mb"`
-		Merge_Max_Usecs     int      `json:"merge_max_usecs"`
-		Merge_Read_Enabled  int      `json:"merge_read_enabled"`
-		Merge_Wait_Usecs    int      `json:"merge_wait_usecs"`
-		Merge_Write_Enabled int      `json:"merge_write_enabled"`
-		Name                string   `json:"name"`
-		Recon_Depth         int      `json:"recon_depth"`
-		Recon_Prio          int      `json:"recon_prio"`
-		Request_Limit       int      `json:"request_limit"`
-		Restripe_Prio       int      `json:"restripe_prio"`
-		Resync_Enabled      int      `json:"resync_enabled"`
-		Sched_Enabled       int      `json:"sched_enabled"`
-		Serials             []string `json:"serials"`
-		Size                string   `json:"size"`
-		Sparepool           string   `json:"sparepool"`
-		State               []string `json:"state"`
-		Strip_Size          int      `json:"strip_size"`
-		UUID                string   `json:"uuid"`
+		Active            bool     `json:"active"`
+		BlockSize         int      `json:"block_size"`
+		Config            bool     `json:"config"`
+		Devices           []device `json:"devices"`
+		DevicesHealth     []string `json:"devices_health"`
+		DevicesWear       []string `json:"devices_wear,omitempty"` // Handle optional field
+		GroupSize         int      `json:"group_size"`
+		InitDepth         int      `json:"init_depth"`
+		InitPrio          int      `json:"init_prio"`
+		Level             string   `json:"level"`
+		MemoryLimitMb     int      `json:"memory_limit_mb"`
+		MemoryUsageMb     string   `json:"memory_usage_mb"`
+		MergeMaxUsecs     int      `json:"merge_max_usecs"`
+		MergeReadEnabled  int      `json:"merge_read_enabled"`
+		MergeWaitUsecs    int      `json:"merge_wait_usecs"`
+		MergeWriteEnabled int      `json:"merge_write_enabled"`
+		Name              string   `json:"name"`
+		ReconDepth        int      `json:"recon_depth"`
+		ReconPrio         int      `json:"recon_prio"`
+		RequestLimit      int      `json:"request_limit"`
+		RestripePrio      int      `json:"restripe_prio"`
+		ResyncEnabled     int      `json:"resync_enabled"`
+		SchedEnabled      int      `json:"sched_enabled"`
+		Serials           []string `json:"serials"`
+		Size              string   `json:"size"`
+		Sparepool         string   `json:"sparepool"`
+		State             []string `json:"state"`
+		StripSize         int      `json:"strip_size"`
+		UUID              string   `json:"uuid"`
 	}
 	device struct {
 		ID     int      `json:"-"`
@@ -105,52 +105,30 @@ func (r *raidData) UnmarshalJSON(data []byte) error {
 
 func (c *Collector) collectRaidInfo(raids map[string]int64, resp *nvmeRaidInfoResponse) error {
 	for _, raid := range resp.Raids {
-		// Check if the RAID has already been processed
+		// Mark RAID as processed if it hasn't been processed yet
 		if !c.raids[raid.Name] {
-			// Mark RAID as processed
 			c.raids[raid.Name] = true
-			// Add RAID data charts
 			c.addRaidDataCharts(raid)
 		}
-		// Create prefix for metrics related to this RAID
+
+		// Create prefix for RAID-related metrics
 		px := fmt.Sprintf("raid_%s_", raid.Name)
-		// Define RAID states
-		raidStates := []string{
+
+		// Initialize all possible RAID state metrics to 0
+		for _, st := range []string{
 			"online", "initialized", "initing", "degraded", "reconstructing",
-			"offline", "need_recon", "need_init", "read Only", "unrecovered",
+			"offline", "need_recon", "need_init", "read_only", "unrecovered",
 			"none", "restriping", "need_resize", "need_restripe",
+		} {
+			raids[px+"state_"+st] = 0
 		}
-		// Initialize metrics for common RAID states
-		for _, state := range raidStates {
-			// Set the initial value of each state metric to 0
-			raids[px+"state_"+state] = 0
-		}
-		// Switch statement to handle different numbers of state types
-		// Note: strings.ToLower is used to ensure consistency in the metric keys
-		switch len(raid.State) {
-		case 1:
-			// If there is only one RAID state, set its corresponding metric to 1
-			state := strings.ToLower(raid.State[0])
-			raids[px+"state_"+state] = 1
-		case 2:
-			// If there are two RAID states, set the corresponding metrics to 1
-			state1 := strings.ToLower(raid.State[0])
-			state2 := strings.ToLower(raid.State[1])
-			raids[px+"state_"+state1] = 1 // Set the first state metric to 1
-			raids[px+"state_"+state2] = 1 // Set the second state metric to 1
-		case 3:
-			// If there are three RAID states, set the corresponding metrics to 1
-			state1 := strings.ToLower(raid.State[0])
-			state2 := strings.ToLower(raid.State[1])
-			state3 := strings.ToLower(raid.State[2])
-			raids[px+"state_"+state1] = 1 // Set the first state metric to 1
-			raids[px+"state_"+state2] = 1 // Set the second state metric to 1
-			raids[px+"state_"+state3] = 1 // Set the third state metric to 1
-		default:
-			// Handle the case where the number of states is unexpected
-			return errors.New("unexpected number of states")
+
+		// Set metrics for RAID's current states
+		for _, st := range raid.State {
+			raids[px+"state_"+strings.ToLower(st)] = 1
 		}
 	}
+
 	return nil
 }
 
