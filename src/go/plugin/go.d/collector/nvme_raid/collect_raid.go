@@ -58,7 +58,7 @@ type (
 func (r *raidData) UnmarshalJSON(data []byte) error {
 	type Alias raidData // Define an alias to prevent infinite recursion
 	aux := &struct {
-		Devices [][]interface{} `json:"devices"` // Use interface{} to handle mixed types
+		Devices [][]any `json:"devices"` // Use any to handle mixed types
 		*Alias
 	}{
 		Alias: (*Alias)(r),
@@ -71,25 +71,26 @@ func (r *raidData) UnmarshalJSON(data []byte) error {
 	r.Devices = make([]device, len(aux.Devices))
 	for i, dev := range aux.Devices {
 		if len(dev) != 3 {
-			return fmt.Errorf("unexpected device format")
+			return fmt.Errorf("invalid device format at index %d", i)
 		}
 		id, ok := dev[0].(float64) // JSON numbers are float64 by default
 		if !ok {
-			return fmt.Errorf("unexpected type for device ID")
+			return fmt.Errorf("device ID at index %d should be a number", i)
 		}
 		devicePath, ok := dev[1].(string)
 		if !ok {
-			return fmt.Errorf("unexpected type for device path")
+			return fmt.Errorf("device path at index %d should be a string", i)
 		}
-		status, ok := dev[2].([]interface{})
+		status, ok := dev[2].([]any)
 		if !ok {
-			return fmt.Errorf("unexpected type for device status")
+			return fmt.Errorf("device status at index %d should be a list", i)
 		}
 		statusStr := make([]string, len(status))
 		for j, s := range status {
-			statusStr[j], ok = s.(string)
-			if !ok {
-				return fmt.Errorf("unexpected type in device status")
+			if str, ok := s.(string); ok {
+				statusStr[j] = str
+			} else {
+				return fmt.Errorf("device status entry at index [%d][%d] should be a string", i, j)
 			}
 		}
 
