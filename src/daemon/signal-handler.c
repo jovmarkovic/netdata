@@ -3,6 +3,10 @@
 #include "common.h"
 #include "daemon/daemon-status-file.h"
 
+#ifdef ENABLE_SENTRY
+#include "sentry-native/sentry-native.h"
+#endif
+
 typedef enum signal_action {
     NETDATA_SIGNAL_IGNORE,
     NETDATA_SIGNAL_EXIT_CLEANLY,
@@ -35,9 +39,16 @@ static struct {
     { SIGFPE,  "SIGFPE",  0, NETDATA_SIGNAL_DEADLY, EXIT_REASON_SIGFPE },
     { SIGILL,  "SIGILL",  0, NETDATA_SIGNAL_DEADLY, EXIT_REASON_SIGILL },
     { SIGABRT, "SIGABRT", 0, NETDATA_SIGNAL_DEADLY, EXIT_REASON_SIGABRT },
+    { SIGSYS,  "SIGSYS",  0, NETDATA_SIGNAL_DEADLY, EXIT_REASON_SIGSYS },
+    { SIGXCPU, "SIGXCPU", 0, NETDATA_SIGNAL_DEADLY, EXIT_REASON_SIGXCPU },
+    { SIGXFSZ, "SIGXFSZ", 0, NETDATA_SIGNAL_DEADLY, EXIT_REASON_SIGXFSZ },
 };
 
-static void signal_handler(int signo) {
+static void (*original_handlers[NSIG])(int) = {0};
+static void (*original_sigactions[NSIG])(int, siginfo_t *, void *) = {0};
+
+void nd_signal_handler(int signo, siginfo_t *info, void *context __maybe_unused) {
+
     for(size_t i = 0; i < _countof(signals_waiting) ; i++) {
         if(signals_waiting[i].signo != signo)
             continue;
@@ -50,31 +61,67 @@ static void signal_handler(int signo) {
 #endif
 
         if(signals_waiting[i].action == NETDATA_SIGNAL_DEADLY) {
+            bool chained_handler = original_sigactions[signo] || (original_handlers[signo] && original_handlers[signo] != SIG_IGN && original_handlers[signo] != SIG_DFL);
+
             // Update the status file
-            daemon_status_file_deadly_signal_received(signals_waiting[i].reason);
+            SIGNAL_CODE sc = info ? signal_code(signo, info->si_code) : 0;
+
+            // Get fault address based on signal type
+            void *fault_address = NULL;
+            if (info && (signo == SIGSEGV || signo == SIGBUS || signo == SIGILL || signo == SIGFPE))
+                fault_address = info->si_addr;
+
+            if(daemon_status_file_deadly_signal_received(signals_waiting[i].reason, sc, fault_address, chained_handler)) {
+                // this is a duplicate event, do not send it to sentry
+#ifdef ENABLE_SENTRY
+                nd_sentry_crash_report(false);
+#else
+                chained_handler = false;
+#endif
+            }
 
             // log it
-            char b[512];
-            strncpyz(b, "SIGNAL HANDLER: received deadly signal: ", sizeof(b) - 1);
-            strcat(b, signals_waiting[i].name);
-            strcat(b, " in thread ");
-            print_uint64(&b[strlen(b)], gettid_cached());
-            strcat(b, " ");
-            strcat(b, nd_thread_tag_async_safe());
-            strcat(b, "!\n");
+            char b[1024];
+            size_t len = 0;
+            len = strcatz(b, len, sizeof(b), "SIGNAL HANDLER: received deadly signal: ");
+            len = strcatz(b, len, sizeof(b), signals_waiting[i].name);
+            if(sc) {
+                char buf[128];
+                SIGNAL_CODE_2str_h(sc, buf, sizeof(buf));
+                len = strcatz(b, len, sizeof(b), " (");
+                len = strcatz(b, len, sizeof(b), buf);
+                len = strcatz(b, len, sizeof(b), ")");
+            }
+            len = strcatz(b, len, sizeof(b), " in thread ");
+            print_uint64(&b[len], gettid_cached());
+            len = strcatz(b, len, sizeof(b), " ");
+            len = strcatz(b, len, sizeof(b), nd_thread_tag_async_safe());
+            len = strcatz(b, len, sizeof(b), "!\n");
 
             if(write(STDERR_FILENO, b, strlen(b)) == -1) {
                 // nothing to do - we cannot write but there is no way to complain about it
                 ;
             }
 
-            // Reset the signal's disposition to the default handler.
+            // Chain to the original handler if it exists
+            if(chained_handler) {
+                if (original_sigactions[signo]) {
+                    original_sigactions[signo](signo, info, context);
+                    return; // Original handler should handle the signal
+                }
 
+                if (original_handlers[signo]) {
+                    original_handlers[signo](signo);
+                    return; // Original handler should handle the signal
+                }
+            }
+
+            // If there's no original handler or we can't chain, reset to default and re-raise
             struct sigaction sa;
             sa.sa_handler = SIG_DFL;
             sigemptyset(&sa.sa_mask);
             sa.sa_flags = 0;
-            sigaction(signo, &sa, NULL);
+            if(sigaction(signo, &sa, NULL) < 0) { ; }
 
             // Re-raise the signal, which now uses the default action.
             raise(signo);
@@ -97,27 +144,64 @@ static void posix_unmask_my_signals(void) {
         netdata_log_error("SIGNAL: cannot unmask netdata signals");
 }
 
-void nd_initialize_signals(void) {
-    signals_block_all_except_deadly();
-
-    // Catch signals which we want to use
-    struct sigaction sa;
-    sa.sa_flags = 0;
+void nd_cleanup_deadly_signals(void) {
+    struct sigaction act;
+    memset(&act, 0, sizeof(struct sigaction));
 
     // ignore all signals while we run in a signal handler
-    sigfillset(&sa.sa_mask);
+    sigfillset(&act.sa_mask);
 
-    for (size_t i = 0; i < _countof(signals_waiting) ; i++) {
-        switch (signals_waiting[i].action) {
-        case NETDATA_SIGNAL_IGNORE:
-            sa.sa_handler = SIG_IGN;
-            break;
-        default:
-            sa.sa_handler = signal_handler;
-            break;
+    for (size_t i = 0; i < _countof(signals_waiting); i++) {
+        if(signals_waiting[i].action != NETDATA_SIGNAL_DEADLY)
+            continue;
+
+        act.sa_flags = 0;
+        act.sa_handler = SIG_DFL;
+
+        if (sigaction(signals_waiting[i].signo, &act, NULL) == -1)
+            netdata_log_error("SIGNAL: Failed to cleanup signal handler for: %s", signals_waiting[i].name);
+    }
+
+    memset(original_handlers, 0, sizeof(original_handlers));
+    memset(original_sigactions, 0, sizeof(original_sigactions));
+}
+
+void nd_initialize_signals(bool chain_existing) {
+    signals_block_all_except_deadly();
+
+    struct sigaction act;
+    memset(&act, 0, sizeof(struct sigaction));
+
+    // ignore all signals while we run in a signal handler
+    sigfillset(&act.sa_mask);
+
+    for (size_t i = 0; i < _countof(signals_waiting); i++) {
+        int signo = signals_waiting[i].signo;
+
+        // If chaining is requested, get the current handler first
+        struct sigaction old_act;
+        if (chain_existing &&
+            sigaction(signo, NULL, &old_act) == 0 &&
+            (uintptr_t)old_act.sa_handler != (uintptr_t)nd_signal_handler) {
+            // Save the original handlers for chaining
+            if (old_act.sa_flags & SA_SIGINFO)
+                original_sigactions[signo] = old_act.sa_sigaction;
+            else
+                original_handlers[signo] = old_act.sa_handler;
         }
 
-        if(sigaction(signals_waiting[i].signo, &sa, NULL) == -1)
+        switch (signals_waiting[i].action) {
+            case NETDATA_SIGNAL_IGNORE:
+                act.sa_flags = 0;
+                act.sa_handler = SIG_IGN;
+                break;
+            default:
+                act.sa_flags = SA_SIGINFO;
+                act.sa_sigaction = nd_signal_handler;
+                break;
+        }
+
+        if (sigaction(signals_waiting[i].signo, &act, NULL) == -1)
             netdata_log_error("SIGNAL: Failed to change signal handler for: %s", signals_waiting[i].name);
     }
 }
@@ -153,13 +237,10 @@ static void process_triggered_signals(void) {
                     nd_log_limits_unlimited();
                     netdata_log_info("SIGNAL: Received %s. Cleaning up to exit...", name);
                     commands_exit();
-                    netdata_cleanup_and_exit(signals_waiting[i].reason, NULL, NULL, NULL);
-                    exit(0);
+                    netdata_exit_gracefully(signals_waiting[i].reason, true);
                     break;
 
                 case NETDATA_SIGNAL_DEADLY:
-                    nd_log_limits_unlimited();
-                    daemon_status_file_deadly_signal_received(signals_waiting[i].reason);
                     _exit(1);
                     break;
 
@@ -183,7 +264,8 @@ void nd_process_signals(void) {
             last_update_mt += save_every_ut;
         }
 
-        poll(NULL, 0, 13 * MSEC_PER_SEC + 379);
+        if(poll(NULL, 0, 13 * MSEC_PER_SEC + 379) < 0) { ; }
+
         process_triggered_signals();
     }
 }

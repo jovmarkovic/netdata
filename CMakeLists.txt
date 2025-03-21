@@ -487,12 +487,13 @@ check_function_exists(sysinfo HAVE_SYSINFO)
 
 check_function_exists(timegm HAVE_TIMEGM)
 
-# Add -rdynamic when backtrace is available but libunwind is not
-if(HAVE_BACKTRACE AND NOT ENABLE_LIBUNWIND AND NOT STATIC_BUILD)
-    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-        add_link_options(-rdynamic)
-        message(STATUS "Adding -rdynamic to link options for better backtrace support")
-    endif()
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    # -fno-omit-frame-pointer = add frame pointers to all functions
+    # -funwind-tables = generate unwind tables for all functions
+    # -fasynchronous-unwind-tables = the unwind table generated is precise at instruction boundary, instead of function boundary
+    add_compile_options(-fno-omit-frame-pointer -funwind-tables -fasynchronous-unwind-tables)
+    add_link_options(-rdynamic)
+    message(STATUS "Added compiler and linker flags for better stack trace support")
 endif()
 
 #
@@ -1071,6 +1072,8 @@ set(LIBNETDATA_FILES
         src/libnetdata/signals/signals.h
         src/libnetdata/os/machine_id.c
         src/libnetdata/os/machine_id.h
+        src/libnetdata/signals/signal-code.c
+        src/libnetdata/signals/signal-code.h
 )
 
 list(APPEND LIBNETDATA_FILES ${INICFG_FILES})
@@ -1330,7 +1333,6 @@ set(API_PLUGIN_FILES
         src/web/api/v2/api_v2_functions.c
         src/web/api/v2/api_v2_alerts.c
         src/web/api/v2/api_v2_alert_transitions.c
-        src/web/api/v2/api_v2_ilove/ilove.c
         src/web/api/v2/api_v2_bearer.c
         src/web/api/v2/api_v2_calls.h
         src/web/api/v2/api_v2_data.c
@@ -3676,7 +3678,6 @@ if(ENABLE_DASHBOARD)
   bundle_dashboard()
 
   install(FILES
-          src/web/gui/ilove.html
           COMPONENT dashboard
           DESTINATION ${WEB_DEST})
 

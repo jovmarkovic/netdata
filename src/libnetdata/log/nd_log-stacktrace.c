@@ -12,6 +12,10 @@ bool nd_log_forked = false;
 #endif
 #include <libunwind.h>
 
+const char *capture_stack_trace_backend(void) {
+    return "libunwind";
+}
+
 void capture_stack_trace_init(void) {
     unw_set_caching_policy(unw_local_addr_space, UNW_CACHE_NONE);
 }
@@ -26,6 +30,10 @@ bool capture_stack_trace_is_async_signal_safe(void) {
 #else
     return true;
 #endif
+}
+
+bool capture_stack_trace_available(void) {
+    return true;
 }
 
 void capture_stack_trace(BUFFER *wb) {
@@ -75,6 +83,14 @@ void capture_stack_trace(BUFFER *wb) {
 }
 
 #elif defined(HAVE_BACKTRACE)
+
+const char *capture_stack_trace_backend(void) {
+    return "backtrace";
+}
+
+bool capture_stack_trace_available(void) {
+    return true;
+}
 
 void capture_stack_trace_init(void) {
     ;
@@ -142,6 +158,14 @@ void capture_stack_trace(BUFFER *wb) {
 }
 
 #else
+
+const char *capture_stack_trace_backend(void) {
+    return "none";
+}
+
+bool capture_stack_trace_available(void) {
+    return false;
+}
 
 void capture_stack_trace_init(void) {
     ;
