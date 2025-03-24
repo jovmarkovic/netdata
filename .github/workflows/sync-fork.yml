@@ -37,6 +37,6 @@ jobs:
       - name: Sync nvme_raid branch
         run: |
           git checkout nvme_raid
-          git merge upstream/master --no-ff --commit -m "Sync with upstream master"
+          git merge master
           git push origin nvme_raid
 
