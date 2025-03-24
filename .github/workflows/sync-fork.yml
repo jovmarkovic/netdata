@@ -13,23 +13,6 @@ jobs:
       # Checkout the forked repository
       - name: Checkout repository
         uses: actions/checkout@v3
-        
-      # Set up Git user to commit changes
-      - name: Set up Git configuration
-        run: |
-          if ! git config --global user.name; then
-            git config --global user.name "GitHub Actions"
-          fi
-          if ! git config --global user.email; then
-            git config --global user.email "actions@github.com"
-          fi
-
-      # Add the upstream repository as a remote if needed
-      - name: Add upstream remote
-        run: |
-          if ! git remote get-url upstream; then
-            git remote add upstream https://github.com/netdata/netdata.git
-          fi
           
       - name: Fetch upstream
         run: |
