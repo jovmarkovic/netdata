@@ -27,7 +27,7 @@ jobs:
       # Add the upstream repository as a remote
       - name: Add upstream remote
         run: |
-          if ! git remote get-url upstream; then
+          if ! git remote get-url upstream 2>/dev/null; then
             git remote add upstream https://github.com/netdata/netdata.git
           fi
           git fetch upstream
