@@ -25,7 +25,7 @@ jobs:
           
       - name: Sync master branch
         run: |
-          git checkout -b master origin/master
+          git checkout --track origin/master
           git merge --ff-only upstream/master
           git push origin master
       
