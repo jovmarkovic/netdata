@@ -27,10 +27,10 @@ jobs:
       # Add the upstream repository as a remote
       - name: Add upstream remote
         run: |
-          # if ! git remote get-url upstream; then
-          #   git remote add upstream https://github.com/netdata/netdata.git
-          # fi
-          git fetch upstream
+          if ! git remote get-url upstream; then
+            git remote add upstream https://github.com/netdata/netdata.git
+          fi
+          # git fetch upstream
           
       # Fetch and fast-forward merge changes into the master branch
       - name: Sync master branch
