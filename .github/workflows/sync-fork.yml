@@ -14,10 +14,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
           
-      - name: Fetch upstream
-        run: |
-          git fetch upstream
-
       # Fetch and fast-forward merge changes into the master branch
       - name: Sync master branch
         run: |
