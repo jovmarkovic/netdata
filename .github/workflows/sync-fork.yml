@@ -2,8 +2,8 @@ name: Sync Fork with Upstream
 
 on:
   schedule:
-    # This will run every hour
-    - cron: '0 * * * *'
+    # This will run every 50 min
+    - cron: '*/50 * * * *'
   workflow_dispatch: # Allows manual triggering from GitHub UI
 
 jobs:
