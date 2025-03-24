@@ -13,6 +13,8 @@ jobs:
       # Checkout the forked repository
       - name: Checkout repository
         uses: actions/checkout@v3
+        with: 
+          fetch-depth: 0 
 
       # Set up Git user to commit changes
       - name: Set up Git configuration
@@ -24,12 +26,15 @@ jobs:
             git config --global user.email "actions@github.com"
           fi
 
-      # Add the upstream repository as a remote
+      # Add the upstream repository as a remote if needed
       - name: Add upstream remote
         run: |
           if ! git remote get-url upstream; then
             git remote add upstream https://github.com/netdata/netdata.git
           fi
+          
+      - name: Fetch upstream
+        run: |
           git fetch upstream
 
       # Fetch and fast-forward merge changes into the master branch
