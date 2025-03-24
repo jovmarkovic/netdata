@@ -14,22 +14,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # Set up Git configuration
-      - name: Set up Git configuration
-        run: |
-          if ! git config --global user.name; then
-            git config --global user.name "GitHub Actions"
-          fi
-          if ! git config --global user.email; then
-            git config --global user.email "actions@github.com"
-          fi
+      # # Set up Git configuration
+      # - name: Set up Git configuration
+      #   run: |
+      #     if ! git config --global user.name; then
+      #       git config --global user.name "GitHub Actions"
+      #     fi
+      #     if ! git config --global user.email; then
+      #       git config --global user.email "actions@github.com"
+      #     fi
 
       # Add the upstream repository as a remote
       - name: Add upstream remote
         run: |
-          if ! git remote get-url upstream; then
-            git remote add upstream https://github.com/netdata/netdata.git
-          fi
+          # if ! git remote get-url upstream; then
+          #   git remote add upstream https://github.com/netdata/netdata.git
+          # fi
           git fetch upstream
           
       # Fetch and fast-forward merge changes into the master branch
