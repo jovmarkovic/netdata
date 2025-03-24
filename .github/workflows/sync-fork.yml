@@ -13,9 +13,7 @@ jobs:
       # Checkout the forked repository
       - name: Checkout repository
         uses: actions/checkout@v3
-        with: 
-          fetch-depth: 0 
-
+        
       # Set up Git user to commit changes
       - name: Set up Git configuration
         run: |
