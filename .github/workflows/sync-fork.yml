@@ -6,6 +6,10 @@ on:
     - cron: '*/50 * * * *'
   workflow_dispatch: # Allows manual triggering from GitHub UI
 
+permissions:
+  contents: write
+  actions: write
+
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -14,8 +18,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0 
-
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          
       - name: Add upstream remote
         run: |
           if ! git remote get-url upstream 2>/dev/null; then
