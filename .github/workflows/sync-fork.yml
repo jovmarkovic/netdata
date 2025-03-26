@@ -33,6 +33,6 @@ jobs:
       - name: Rebase nvme_raid onto master
         run: |
           git checkout nvme_raid
-          git merge origin/master
+          git merge --ff-only origin/master
           git push origin nvme_raid
           
