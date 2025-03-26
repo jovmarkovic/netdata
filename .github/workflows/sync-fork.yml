@@ -16,6 +16,11 @@ jobs:
           repository: jovmarkovic/netdata
           token: ${{ secrets.FORK_SYNC }}  
           fetch-depth: 0
+
+      - name: Set Git user details
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
           
       - name: Add upstream remote
         run: |
@@ -27,12 +32,12 @@ jobs:
       - name: Sync master branch
         run: |
           git checkout --track origin/master
-          git merge --ff-only upstream/master
+          git merge upstream/master
           git push origin master
       
-      - name: Rebase nvme_raid onto master
+      - name: Merge master with nvme_raid 
         run: |
           git checkout nvme_raid
-          git merge --ff-only origin/master
+          git merge origin/master -m "sync-fork workflow: Merge branch 'netdata:master' into nvme_raid"
           git push origin nvme_raid
           
