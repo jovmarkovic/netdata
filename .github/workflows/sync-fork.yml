@@ -10,12 +10,12 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      # Checkout the forked repository
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
+          repository: jovmarkovic/netdata
+          token: ${{ secrets.FORK_SYNC }}  
           fetch-depth: 0
-          token: ${{ secrets.PAT_TOKEN }}
           
       - name: Add upstream remote
         run: |
