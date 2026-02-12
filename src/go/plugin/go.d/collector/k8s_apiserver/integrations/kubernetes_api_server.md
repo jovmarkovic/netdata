@@ -46,14 +46,13 @@ The ServiceAccount used must have permissions to access the `/metrics` endpoint.
 In most clusters, this requires cluster-admin or a custom ClusterRole with metrics access.
 
 
- can be monitored further using the following other integrations:
+Kubernetes API Server can be monitored further using the following other integrations:
 
-- {% relatedResource id="go.d.plugin-k8s_kubelet-Kubelet</summary>
-Kubelet{% /relatedResource %}
-- {% relatedResource id="go.d.plugin-k8s_kubeproxy-Kubeproxy</summary>
-Kubeproxy{% /relatedResource %}
-- {% relatedResource id="go.d.plugin-k8s_state-Kubernetes_Cluster_State</summary>
-Kubernetes Cluster State{% /relatedResource %}
+- [Kubelet](/src/go/plugin/go.d/collector/k8s_kubelet/integrations/kubelet.md)
+- [Kubeproxy](/src/go/plugin/go.d/collector/k8s_kubeproxy/integrations/kubeproxy.md)
+- [Kubernetes Cluster State](/src/go/plugin/go.d/collector/k8s_state/integrations/kubernetes_cluster_state.md)
+- [Kubernetes Containers](/src/collectors/cgroups.plugin/integrations/kubernetes_containers.md)
+- [CoreDNS](/src/go/plugin/go.d/collector/coredns/integrations/coredns.md)
 
 ### Default Behavior
 

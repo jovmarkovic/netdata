@@ -9,7 +9,7 @@ modules:
         link: https://github.com/NVIDIA/dcgm-exporter
         icon_filename: nvidia.svg
         categories:
-          - data-collection.hardware-devices-and-sensors
+          - data-collection.hardware-and-iot
       keywords:
         - nvidia
         - gpu
@@ -17,7 +17,9 @@ modules:
         - dcgm-exporter
       related_resources:
         integrations:
-          list: []
+          list:
+            - plugin_name: go.d.plugin
+              module_name: nvidia_smi
       info_provided_to_referring_integrations:
         description: ""
       most_popular: false
