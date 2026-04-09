@@ -269,6 +269,9 @@
 - Update to the latest version of Sentry Native to fix build issues. ([#22159](https://github.com/netdata/netdata/issues/22159))
 - Feat(scripts.d/nagios): auto-invoke Windows script files (.ps1, .bat, .cmd) through their interpreters ([#22162](https://github.com/netdata/netdata/issues/22162))
 - Regenerate integrations docs ([#22161](https://github.com/netdata/netdata/issues/22161))
+- MCP Streamable HTTP: add stateless Mcp-Session-Id support ([#22000](https://github.com/netdata/netdata/issues/22000))
+- Docs: correct Discord invite URL in 3 files ([#22149](https://github.com/netdata/netdata/issues/22149))
+- Fix(packaging): disable MongoDB exporter for EL10 ([#22163](https://github.com/netdata/netdata/issues/22163))
 
 ## [2.9.0] - 2026-02-16
 
