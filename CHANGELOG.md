@@ -272,6 +272,9 @@
 - MCP Streamable HTTP: add stateless Mcp-Session-Id support ([#22000](https://github.com/netdata/netdata/issues/22000))
 - Docs: correct Discord invite URL in 3 files ([#22149](https://github.com/netdata/netdata/issues/22149))
 - Fix(packaging): disable MongoDB exporter for EL10 ([#22163](https://github.com/netdata/netdata/issues/22163))
+- Build(deps): bump go.opentelemetry.io/otel/sdk from 1.40.0 to 1.43.0 in /src/go ([#22171](https://github.com/netdata/netdata/issues/22171))
+- Fix: bearer token creation truncates client_name and returns wrong expiry for existing tokens ([#22167](https://github.com/netdata/netdata/issues/22167))
+- Make scripts plugin optional but installed by default for native packages. ([#22155](https://github.com/netdata/netdata/issues/22155))
 
 ## [2.9.0] - 2026-02-16
 
