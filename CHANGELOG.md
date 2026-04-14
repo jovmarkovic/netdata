@@ -17,6 +17,11 @@
 - Go.d/snmp: add reusable profile engine helpers ([#22181](https://github.com/netdata/netdata/issues/22181))
 - Refactor(go.d): share ping probing between ping and snmp ([#22189](https://github.com/netdata/netdata/issues/22189))
 - Regenerate integrations docs ([#22182](https://github.com/netdata/netdata/issues/22182))
+- Fix ZFS bugs (diskspace.plugin) ([#22188](https://github.com/netdata/netdata/issues/22188))
+- Build(deps): bump golang.org/x/net from 0.52.0 to 0.53.0 in /src/go ([#22199](https://github.com/netdata/netdata/issues/22199))
+- Build(deps): bump github.com/mattn/go-isatty from 0.0.20 to 0.0.21 in /src/go ([#22197](https://github.com/netdata/netdata/issues/22197))
+- Feat(go.d/snmp): add structured mapping config and bitmask value mappings ([#22200](https://github.com/netdata/netdata/issues/22200))
+- Fix(go.d/dyncfg): remove wait-decision timeout and make handoff non-droppable ([#22201](https://github.com/netdata/netdata/issues/22201))
 
 ## [2.10.0] - 2026-04-09
 
