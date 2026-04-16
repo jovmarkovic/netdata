@@ -34,6 +34,7 @@
 - Fix TOCTOU race in dictionary_destroy() ([#22108](https://github.com/netdata/netdata/issues/22108))
 - Remove VLA (variable-length arrays) (claim and daemon) ([#22114](https://github.com/netdata/netdata/issues/22114))
 - Fix pluginsd cleanup race with active collector ([#22207](https://github.com/netdata/netdata/issues/22207))
+- Add SQLite version to build details and startup log message ([#22208](https://github.com/netdata/netdata/issues/22208))
 
 ## [2.10.0] - 2026-04-09
 
