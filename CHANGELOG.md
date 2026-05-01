@@ -92,6 +92,14 @@
 - Docs: add Docker container update instructions ([#22311](https://github.com/netdata/netdata/issues/22311))
 - Docs: add Log sources section to Logs tab documentation ([#22312](https://github.com/netdata/netdata/issues/22312))
 - Fix(packaging): Reduce docker image size by setting the permission bits in the builder stage ([#21902](https://github.com/netdata/netdata/issues/21902))
+- Docs: add FAQ on vnode rename and node identity ([#22278](https://github.com/netdata/netdata/issues/22278))
+- Docs: fix build dependency versions in source.md ([#22282](https://github.com/netdata/netdata/issues/22282))
+- Regenerate integrations docs ([#22290](https://github.com/netdata/netdata/issues/22290))
+- Feat(go.d/mssql): add transaction log monitoring ([#22319](https://github.com/netdata/netdata/issues/22319))
+- Regenerate integrations docs ([#22325](https://github.com/netdata/netdata/issues/22325))
+- Feat: add ENABLE_ND_MCP cmake flag to build nd-mcp independently of go.d.plugin ([#22313](https://github.com/netdata/netdata/issues/22313))
+- Fix(journal): improve journal file access error handling and validation ([#22310](https://github.com/netdata/netdata/issues/22310))
+- Fix(jsonwrap): handle potential null keys ([#22326](https://github.com/netdata/netdata/issues/22326))
 
 ## [2.10.0] - 2026-04-09
 
