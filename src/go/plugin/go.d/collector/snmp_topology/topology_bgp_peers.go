@@ -3,9 +3,9 @@
 package snmptopology
 
 import (
-	"github.com/netdata/netdata/go/plugins/plugin/go.d/collector/snmp_topology/internal/topologyutil"
-	"sort"
 	"strings"
+
+	"github.com/netdata/netdata/go/plugins/plugin/go.d/collector/snmp_topology/internal/topologyutil"
 
 	"github.com/netdata/netdata/go/plugins/plugin/go.d/collector/snmp/ddsnmp"
 	"github.com/netdata/netdata/go/plugins/plugin/go.d/collector/snmp/ddsnmp/ddprofiledefinition"
@@ -49,9 +49,9 @@ func topologyBGPPeerFromRow(row ddsnmp.BGPRow) (topologyBGPPeer, bool) {
 
 	peer := topologyBGPPeer{
 		RoutingInstance:       topologyBGPRoutingInstance(row),
-		NeighborIP:            topologyBGPPeerAddressValue(neighbor),
+		NeighborIP:            topologyutil.NormalizeBGPPeerAddress(neighbor),
 		RemoteAS:              strings.TrimSpace(remoteAS),
-		LocalIP:               topologyBGPPeerAddressValue(row.Descriptors.LocalAddress),
+		LocalIP:               topologyutil.NormalizeBGPPeerAddress(row.Descriptors.LocalAddress),
 		LocalAS:               strings.TrimSpace(row.Descriptors.LocalAS),
 		LocalIdentifier:       topologyutil.NormalizeBGPRouterID(row.Descriptors.LocalIdentifier),
 		PeerIdentifier:        topologyutil.NormalizeBGPRouterID(row.Descriptors.PeerIdentifier),
@@ -66,20 +66,6 @@ func topologyBGPPeerFromRow(row ddsnmp.BGPRow) (topologyBGPPeer, bool) {
 	return peer, true
 }
 
-func topologyBGPPeerAddressValue(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-	if ip := topologyutil.NormalizeNonUnspecifiedIPAddress(value); ip != "" {
-		return ip
-	}
-	if topologyutil.NormalizeIPAddress(value) != "" {
-		return ""
-	}
-	return value
-}
-
 func topologyBGPRoutingInstance(row ddsnmp.BGPRow) string {
 	return topologyutil.FirstNonEmptyString(row.Identity.RoutingInstance, row.Tags["routing_instance"], "default")
 }
@@ -88,7 +74,7 @@ func topologyBGPPeerCacheKey(row ddsnmp.BGPRow, peer topologyBGPPeer) string {
 	if key := strings.TrimSpace(row.StructuralID); key != "" {
 		return key
 	}
-	return topologyL3SubnetLinkKeyParts(
+	return topologyutil.JoinKeyParts(
 		row.OriginProfileID,
 		row.Table,
 		row.RowKey,
@@ -163,24 +149,4 @@ func topologyBGPInt64Ptr(value ddsnmp.BGPInt64) *int64 {
 	}
 	v := value.Value
 	return &v
-}
-
-func isBGPPeerEstablished(row topologyBGPPeer) bool {
-	return strings.EqualFold(strings.TrimSpace(row.State), string(ddprofiledefinition.BGPPeerStateEstablished))
-}
-
-func sortTopologyBGPPeerDetailRows(rows []topologyBGPPeerDetailRow) {
-	sort.Slice(rows, func(i, j int) bool {
-		return topologyBGPPeerActorRowSortKey(rows[i]) < topologyBGPPeerActorRowSortKey(rows[j])
-	})
-}
-
-func topologyBGPPeerActorRowSortKey(row topologyBGPPeerDetailRow) string {
-	return strings.Join([]string{
-		row.RoutingInstance,
-		row.RemoteAS,
-		topologyBGPPeerAddressValue(row.NeighborIP),
-		row.PeerIdentifier,
-		row.State,
-	}, "\x00")
 }

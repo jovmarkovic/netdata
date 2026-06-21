@@ -10,6 +10,7 @@ import (
 	"github.com/netdata/netdata/go/plugins/pkg/topology/graph"
 	"github.com/netdata/netdata/go/plugins/plugin/go.d/collector/snmp/ddsnmp"
 	"github.com/netdata/netdata/go/plugins/plugin/go.d/collector/snmp_topology/internal/topologymodel"
+	"github.com/netdata/netdata/go/plugins/plugin/go.d/collector/snmp_topology/internal/topologyshape"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -78,9 +79,9 @@ func TestTopologyRegistry_SnapshotAggregatesAcrossCaches(t *testing.T) {
 	require.Equal(t, "snmp", data.Source)
 	require.Equal(t, "summary", data.View)
 
-	require.GreaterOrEqual(t, topologyStatsToV1(data.Stats)["devices_total"].(int), 2)
-	require.GreaterOrEqual(t, topologyStatsToV1(data.Stats)["links_total"].(int), 1)
-	require.GreaterOrEqual(t, topologyStatsToV1(data.Stats)["links_lldp"].(int), 1)
+	require.GreaterOrEqual(t, topologyStatsToV1ForTest(t, data.Stats)["devices_total"].(int), 2)
+	require.GreaterOrEqual(t, topologyStatsToV1ForTest(t, data.Stats)["links_total"].(int), 1)
+	require.GreaterOrEqual(t, topologyStatsToV1ForTest(t, data.Stats)["links_lldp"].(int), 1)
 }
 
 func TestTopologyRegistry_SnapshotSingleCacheKeepsLLDPUnidirectional(t *testing.T) {
@@ -120,8 +121,8 @@ func TestTopologyRegistry_SnapshotSingleCacheKeepsLLDPUnidirectional(t *testing.
 	require.Equal(t, "lldp", data.Links[0].Protocol)
 	require.Equal(t, "unidirectional", data.Links[0].Direction)
 	require.Nil(t, data.Links[0].L2)
-	require.Equal(t, 1, topologyStatsToV1(data.Stats)["links_unidirectional"].(int))
-	require.Equal(t, 0, topologyStatsToV1(data.Stats)["links_bidirectional"].(int))
+	require.Equal(t, 1, topologyStatsToV1ForTest(t, data.Stats)["links_unidirectional"].(int))
+	require.Equal(t, 0, topologyStatsToV1ForTest(t, data.Stats)["links_bidirectional"].(int))
 }
 
 func TestTopologyRegistry_DefaultMapEmitsL3SubnetForManagedRoutersWithoutLLDP(t *testing.T) {
@@ -180,14 +181,15 @@ func TestTopologyRegistry_DefaultMapEmitsL3SubnetForManagedRoutersWithoutLLDP(t 
 	require.Equal(t, topologyL3SubnetLinkType, link.Protocol)
 	require.Equal(t, topologyL3SubnetLinkType, link.LinkType)
 	require.Equal(t, "observed", link.Direction)
-	require.Equal(t, "198.51.100.0/30", topologyL3Subnet(link))
 	require.Equal(t, "shared_subnet", topologymodel.LinkInferenceValue(link))
 	require.Equal(t, "logical_l3_subnet", topologymodel.LinkAttachmentModeValue(link))
-	require.Equal(t, "198.51.100.1", topologyEvidenceSrcIP(link))
-	require.Equal(t, "198.51.100.2", topologyEvidenceDstIP(link))
-	require.Equal(t, 1, topologyStatsToV1(data.Stats)["l3_subnet_emitted_links"])
-	require.Equal(t, 1, topologyStatsToV1(data.Stats)["l3_subnet_visible_links"])
-	require.Equal(t, 1, topologyStatsToV1(data.Stats)["links_total"])
+	require.NotNil(t, link.Detail.L3Subnet)
+	require.Equal(t, "198.51.100.0/30", link.Detail.L3Subnet.Subnet)
+	require.Equal(t, "198.51.100.1", link.Detail.L3Subnet.SrcIP)
+	require.Equal(t, "198.51.100.2", link.Detail.L3Subnet.DstIP)
+	require.Equal(t, 1, topologyStatsToV1ForTest(t, data.Stats)["l3_subnet_emitted_links"])
+	require.Equal(t, 1, topologyStatsToV1ForTest(t, data.Stats)["l3_subnet_visible_links"])
+	require.Equal(t, 1, topologyStatsToV1ForTest(t, data.Stats)["links_total"])
 }
 
 func TestTopologyRegistry_OSPFSnapshotEnrichesSubnetAfterNeighborIngest(t *testing.T) {
@@ -251,12 +253,12 @@ func TestTopologyRegistry_OSPFSnapshotEnrichesSubnetAfterNeighborIngest(t *testi
 
 	require.True(t, ok)
 	require.Len(t, data.Links, 2)
-	require.Equal(t, 1, countTopologyLinksByType(data.Links, topologyL3SubnetLinkType))
-	require.Equal(t, 1, countTopologyLinksByType(data.Links, topologyOSPFAdjacencyLinkType))
-	require.Equal(t, 1, topologyStatsToV1(data.Stats)["l3_subnet_emitted_links"])
-	require.Equal(t, 1, topologyStatsToV1(data.Stats)["l3_subnet_visible_links"])
-	require.Equal(t, 1, topologyStatsToV1(data.Stats)["ospf_adjacency_emitted_links"])
-	require.Equal(t, 1, topologyStatsToV1(data.Stats)["ospf_adjacency_visible_links"])
+	require.Equal(t, 1, testCountTopologyLinksByType(data.Links, topologyL3SubnetLinkType))
+	require.Equal(t, 1, testCountTopologyLinksByType(data.Links, topologyOSPFAdjacencyLinkType))
+	require.Equal(t, 1, topologyStatsToV1ForTest(t, data.Stats)["l3_subnet_emitted_links"])
+	require.Equal(t, 1, topologyStatsToV1ForTest(t, data.Stats)["l3_subnet_visible_links"])
+	require.Equal(t, 1, topologyStatsToV1ForTest(t, data.Stats)["ospf_adjacency_emitted_links"])
+	require.Equal(t, 1, topologyStatsToV1ForTest(t, data.Stats)["ospf_adjacency_visible_links"])
 }
 
 func TestTopologyRegistry_BGPAdjacencyEmitsEstablishedManagedPeerLinkAndDetailRows(t *testing.T) {
@@ -319,14 +321,15 @@ func TestTopologyRegistry_BGPAdjacencyEmitsEstablishedManagedPeerLinkAndDetailRo
 	require.Equal(t, "established", link.State)
 	require.Equal(t, "bgp_established_adjacency", topologymodel.LinkInferenceValue(link))
 	require.Equal(t, "logical_l3_bgp", topologymodel.LinkAttachmentModeValue(link))
-	require.Equal(t, "default", topologyBGPLinkRoutingInstance(link))
-	require.Equal(t, "65001", topologyBGPLocalAS(link))
-	require.Equal(t, "65002", topologyBGPRemoteAS(link))
-	require.Equal(t, 2, topologyStatsToV1(data.Stats)["bgp_peer_rows"])
-	require.Equal(t, 2, topologyStatsToV1(data.Stats)["bgp_peer_detail_rows"])
-	require.Equal(t, 1, topologyStatsToV1(data.Stats)["bgp_adjacency_emitted_links"])
-	require.Equal(t, 1, topologyStatsToV1(data.Stats)["bgp_adjacency_suppressed_duplicate_link"])
-	require.Equal(t, 1, topologyStatsToV1(data.Stats)["bgp_adjacency_visible_links"])
+	require.NotNil(t, link.Detail.BGP)
+	require.Equal(t, "default", link.Detail.BGP.RoutingInstance)
+	require.Equal(t, "65001", link.Detail.BGP.LocalAS)
+	require.Equal(t, "65002", link.Detail.BGP.RemoteAS)
+	require.Equal(t, 2, topologyStatsToV1ForTest(t, data.Stats)["bgp_peer_rows"])
+	require.Equal(t, 2, topologyStatsToV1ForTest(t, data.Stats)["bgp_peer_detail_rows"])
+	require.Equal(t, 1, topologyStatsToV1ForTest(t, data.Stats)["bgp_adjacency_emitted_links"])
+	require.Equal(t, 1, topologyStatsToV1ForTest(t, data.Stats)["bgp_adjacency_suppressed_duplicate_link"])
+	require.Equal(t, 1, topologyStatsToV1ForTest(t, data.Stats)["bgp_adjacency_visible_links"])
 
 	routerA := findDeviceActorBySysName(data, "router-a")
 	require.NotNil(t, routerA)
@@ -376,11 +379,11 @@ func TestTopologyRegistry_BGPAdjacencyKeepsUnresolvedAndNonEstablishedPeersAsDet
 
 	require.True(t, ok)
 	require.Empty(t, data.Links)
-	require.Equal(t, 2, topologyStatsToV1(data.Stats)["bgp_peer_rows"])
-	require.Equal(t, 2, topologyStatsToV1(data.Stats)["bgp_peer_detail_rows"])
-	require.Equal(t, 1, topologyStatsToV1(data.Stats)["bgp_adjacency_suppressed_unresolved_neighbor"])
-	require.Equal(t, 1, topologyStatsToV1(data.Stats)["bgp_adjacency_suppressed_non_established_state"])
-	require.Equal(t, 0, topologyStatsToV1(data.Stats)["bgp_adjacency_visible_links"])
+	require.Equal(t, 2, topologyStatsToV1ForTest(t, data.Stats)["bgp_peer_rows"])
+	require.Equal(t, 2, topologyStatsToV1ForTest(t, data.Stats)["bgp_peer_detail_rows"])
+	require.Equal(t, 1, topologyStatsToV1ForTest(t, data.Stats)["bgp_adjacency_suppressed_unresolved_neighbor"])
+	require.Equal(t, 1, topologyStatsToV1ForTest(t, data.Stats)["bgp_adjacency_suppressed_non_established_state"])
+	require.Equal(t, 0, topologyStatsToV1ForTest(t, data.Stats)["bgp_adjacency_visible_links"])
 
 	routerA := findDeviceActorBySysName(data, "router-a")
 	require.NotNil(t, routerA)
@@ -388,24 +391,6 @@ func TestTopologyRegistry_BGPAdjacencyKeepsUnresolvedAndNonEstablishedPeersAsDet
 	for _, row := range routerA.Detail.BGP {
 		require.Empty(t, row.RemoteActorID)
 	}
-}
-
-func TestCompareCollapseActorPriorityPrefersNonEmptyActorID(t *testing.T) {
-	left := topologyActor{
-		ActorID:   "",
-		ActorType: "device",
-		Layer:     "2",
-		Source:    "snmp",
-	}
-	right := topologyActor{
-		ActorID:   "device-1",
-		ActorType: "device",
-		Layer:     "2",
-		Source:    "snmp",
-	}
-
-	assert.Greater(t, compareCollapseActorPriority(left, right), 0)
-	assert.Less(t, compareCollapseActorPriority(right, left), 0)
 }
 
 func TestTopologyRegistry_SnapshotWithOptions_LLDPManagedKeepsRequestedMapType(t *testing.T) {
@@ -431,8 +416,8 @@ func TestTopologyRegistry_SnapshotWithOptions_LLDPManagedKeepsRequestedMapType(t
 		Depth:                  topologyDepthAllInternal,
 	})
 	require.True(t, ok)
-	require.Equal(t, topologyMapTypeLLDPCDPManaged, topologyStatsToV1(data.Stats)["map_type"])
-	require.Equal(t, topologyInferenceStrategyFDBMinimumKnowledge, topologyStatsToV1(data.Stats)["inference_strategy"])
+	require.Equal(t, topologyMapTypeLLDPCDPManaged, topologyStatsToV1ForTest(t, data.Stats)["map_type"])
+	require.Equal(t, topologyInferenceStrategyFDBMinimumKnowledge, topologyStatsToV1ForTest(t, data.Stats)["inference_strategy"])
 }
 
 func TestTopologyRegistry_SnapshotWithOptions_CollapseByIPPreservesEngineManagedOverlapPruning(t *testing.T) {
@@ -495,7 +480,7 @@ func TestTopologyRegistry_SnapshotWithOptions_CollapseByIPPreservesEngineManaged
 	require.True(t, ok)
 	require.NotNil(t, findActorByMAC(withCollapse, "9c:6b:00:7b:98:c6"))
 	require.Nil(t, findActorByMAC(withCollapse, "9c:6b:00:7b:98:c7"))
-	require.Equal(t, 1, topologyStatsToV1(withCollapse.Stats)["actors_unlinked_suppressed"])
+	require.Equal(t, 1, topologyStatsToV1ForTest(t, withCollapse.Stats)["actors_unlinked_suppressed"])
 }
 
 func TestTopologyRegistry_ManagedDeviceFocusTargets_ReturnsPerDeviceIPTargets(t *testing.T) {
@@ -751,7 +736,7 @@ func TestTopologyRegistry_SnapshotDeduplicatesDuplicateDeviceObservations(t *tes
 	require.True(t, ok)
 
 	require.Len(t, data.Links, 1)
-	require.Equal(t, 1, topologyStatsToV1(data.Stats)["links_total"])
+	require.Equal(t, 1, topologyStatsToV1ForTest(t, data.Stats)["links_total"])
 	require.Equal(t, 2, countActorsByType(data, "device"))
 }
 
@@ -794,14 +779,14 @@ func TestApplySNMPTopologyShapePolicies_CollapsesActorsByIP(t *testing.T) {
 		},
 	}
 
-	applySNMPTopologyShapePolicies(&data, topologyQueryOptions{
+	topologyshape.ApplyPolicies(&data, topologyQueryOptions{
 		CollapseActorsByIP: true,
 		MapType:            topologyMapTypeHighConfidenceInferred,
 	})
 
 	require.Len(t, data.Actors, 1)
 	require.Len(t, data.Links, 0)
-	require.Equal(t, 1, topologyStatsToV1(data.Stats)["actors_collapsed_by_ip"])
+	require.Equal(t, 1, topologyStatsToV1ForTest(t, data.Stats)["actors_collapsed_by_ip"])
 }
 
 func TestApplySNMPTopologyShapePolicies_EliminatesNonIPInferredActorsAndSparseSegments(t *testing.T) {
@@ -832,15 +817,15 @@ func TestApplySNMPTopologyShapePolicies_EliminatesNonIPInferredActorsAndSparseSe
 		},
 	}
 
-	applySNMPTopologyShapePolicies(&data, topologyQueryOptions{
+	topologyshape.ApplyPolicies(&data, topologyQueryOptions{
 		EliminateNonIPInferred: true,
 		MapType:                topologyMapTypeHighConfidenceInferred,
 	})
 
 	require.Len(t, data.Actors, 0)
 	require.Len(t, data.Links, 0)
-	require.Equal(t, 1, topologyStatsToV1(data.Stats)["actors_non_ip_inferred_suppressed"])
-	require.Equal(t, 1, topologyStatsToV1(data.Stats)["segments_sparse_suppressed"])
+	require.Equal(t, 1, topologyStatsToV1ForTest(t, data.Stats)["actors_non_ip_inferred_suppressed"])
+	require.Equal(t, 1, topologyStatsToV1ForTest(t, data.Stats)["segments_sparse_suppressed"])
 }
 
 func TestApplySNMPTopologyShapePolicies_HighConfidenceSuppressesUnlinkedInferredEndpoints(t *testing.T) {
@@ -875,12 +860,12 @@ func TestApplySNMPTopologyShapePolicies_HighConfidenceSuppressesUnlinkedInferred
 		},
 	}
 
-	applySNMPTopologyShapePolicies(&data, topologyQueryOptions{
+	topologyshape.ApplyPolicies(&data, topologyQueryOptions{
 		MapType: topologyMapTypeHighConfidenceInferred,
 	})
 
 	require.Len(t, data.Actors, 2)
-	require.Equal(t, 1, topologyStatsToV1(data.Stats)["actors_map_type_suppressed"])
+	require.Equal(t, 1, topologyStatsToV1ForTest(t, data.Stats)["actors_map_type_suppressed"])
 	for _, actor := range data.Actors {
 		require.NotEqual(t, "endpoint:unlinked", actor.ActorID)
 	}
@@ -924,14 +909,14 @@ func TestApplySNMPTopologyShapePolicies_LLDPManagedMapKeepsOnlyLLDPCDPAndManaged
 		},
 	}
 
-	applySNMPTopologyShapePolicies(&data, topologyQueryOptions{
+	topologyshape.ApplyPolicies(&data, topologyQueryOptions{
 		MapType: topologyMapTypeLLDPCDPManaged,
 	})
 
 	require.Len(t, data.Actors, 2)
 	require.Len(t, data.Links, 1)
 	require.Equal(t, "lldp", data.Links[0].Protocol)
-	require.Equal(t, 1, topologyStatsToV1(data.Stats)["actors_map_type_suppressed"])
+	require.Equal(t, 1, topologyStatsToV1ForTest(t, data.Stats)["actors_map_type_suppressed"])
 }
 
 func TestMarkProbableDeltaLinks_MarksAllAddedLinksAsProbable(t *testing.T) {
@@ -965,7 +950,7 @@ func TestMarkProbableDeltaLinks_MarksAllAddedLinksAsProbable(t *testing.T) {
 		},
 	}
 
-	markProbableDeltaLinks(&strictData, &probableData)
+	topologyshape.MarkProbableDeltaLinks(&strictData, &probableData)
 
 	require.Len(t, probableData.Links, 2)
 	require.Equal(t, "", probableData.Links[0].State)
@@ -1024,7 +1009,7 @@ func TestApplyTopologyDepthFocusFilter_ManagedFocusDepthZero(t *testing.T) {
 		},
 	}
 
-	applyTopologyDepthFocusFilter(&data, topologyQueryOptions{
+	topologyshape.ApplyDepthFocusFilter(&data, topologyQueryOptions{
 		ManagedDeviceFocus:     "ip:10.0.0.1",
 		Depth:                  0,
 		EliminateNonIPInferred: true,
@@ -1032,8 +1017,8 @@ func TestApplyTopologyDepthFocusFilter_ManagedFocusDepthZero(t *testing.T) {
 
 	require.Len(t, data.Actors, 1)
 	require.Len(t, data.Links, 0)
-	require.Equal(t, "ip:10.0.0.1", topologyStatsToV1(data.Stats)["managed_snmp_device_focus"])
-	require.Equal(t, 0, topologyStatsToV1(data.Stats)["depth"])
+	require.Equal(t, "ip:10.0.0.1", topologyStatsToV1ForTest(t, data.Stats)["managed_snmp_device_focus"])
+	require.Equal(t, 0, topologyStatsToV1ForTest(t, data.Stats)["depth"])
 }
 
 func TestApplyTopologyDepthFocusFilter_ManagedFocusDepthOneIncludesDirectNeighbors(t *testing.T) {
@@ -1086,7 +1071,7 @@ func TestApplyTopologyDepthFocusFilter_ManagedFocusDepthOneIncludesDirectNeighbo
 		},
 	}
 
-	applyTopologyDepthFocusFilter(&data, topologyQueryOptions{
+	topologyshape.ApplyDepthFocusFilter(&data, topologyQueryOptions{
 		ManagedDeviceFocus:     "ip:10.0.0.1",
 		Depth:                  1,
 		EliminateNonIPInferred: true,
@@ -1094,8 +1079,8 @@ func TestApplyTopologyDepthFocusFilter_ManagedFocusDepthOneIncludesDirectNeighbo
 
 	require.Len(t, data.Actors, 4)
 	require.Len(t, data.Links, 3)
-	require.Equal(t, "ip:10.0.0.1", topologyStatsToV1(data.Stats)["managed_snmp_device_focus"])
-	require.Equal(t, 1, topologyStatsToV1(data.Stats)["depth"])
+	require.Equal(t, "ip:10.0.0.1", topologyStatsToV1ForTest(t, data.Stats)["managed_snmp_device_focus"])
+	require.Equal(t, 1, topologyStatsToV1ForTest(t, data.Stats)["depth"])
 }
 
 func TestApplyTopologyDepthFocusFilter_MultiFocusDepthZeroIncludesAllShortestPaths(t *testing.T) {
@@ -1154,7 +1139,7 @@ func TestApplyTopologyDepthFocusFilter_MultiFocusDepthZeroIncludesAllShortestPat
 		},
 	}
 
-	applyTopologyDepthFocusFilter(&data, topologyQueryOptions{
+	topologyshape.ApplyDepthFocusFilter(&data, topologyQueryOptions{
 		ManagedDeviceFocus:     "ip:10.0.0.3,ip:10.0.0.1",
 		Depth:                  0,
 		EliminateNonIPInferred: true,
@@ -1170,8 +1155,8 @@ func TestApplyTopologyDepthFocusFilter_MultiFocusDepthZeroIncludesAllShortestPat
 		actorIDs,
 	)
 	require.Len(t, data.Links, 4)
-	require.Equal(t, "ip:10.0.0.1,ip:10.0.0.3", topologyStatsToV1(data.Stats)["managed_snmp_device_focus"])
-	require.Equal(t, 0, topologyStatsToV1(data.Stats)["depth"])
+	require.Equal(t, "ip:10.0.0.1,ip:10.0.0.3", topologyStatsToV1ForTest(t, data.Stats)["managed_snmp_device_focus"])
+	require.Equal(t, 0, topologyStatsToV1ForTest(t, data.Stats)["depth"])
 }
 
 func TestApplyTopologyDepthFocusFilter_DepthExpandsFromSelectedRootsOnly(t *testing.T) {
@@ -1224,7 +1209,7 @@ func TestApplyTopologyDepthFocusFilter_DepthExpandsFromSelectedRootsOnly(t *test
 		},
 	}
 
-	applyTopologyDepthFocusFilter(&data, topologyQueryOptions{
+	topologyshape.ApplyDepthFocusFilter(&data, topologyQueryOptions{
 		ManagedDeviceFocus:     "ip:10.0.0.1,ip:10.0.0.3",
 		Depth:                  1,
 		EliminateNonIPInferred: true,
