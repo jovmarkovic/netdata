@@ -7,10 +7,22 @@ void mallocz_register_out_of_memory_cb(out_of_memory_cb cb) {
     out_of_memory_callback = cb;
 }
 
+static __thread bool out_of_memory_running = false;
 
 ALWAYS_INLINE NORETURN
 void out_of_memory(const char *call, size_t size, const char *details) {
     int errno_saved = errno;
+
+    if(unlikely(out_of_memory_running)) {
+        errno = errno_saved;
+        fatal("Out of memory on %s(%zu bytes) while already handling out-of-memory.\n"
+              "Additional details: %s",
+              call, size,
+              details ? details : "none");
+    }
+
+    out_of_memory_running = true;
+
     exit_initiated_add(EXIT_REASON_OUT_OF_MEMORY);
 
     if(out_of_memory_callback)
@@ -558,7 +570,11 @@ char *strdupz_int(const char *s, const char *file, const char *function, size_t 
 
 char *strndupz_int(const char *s, size_t len, const char *file, const char *function, size_t line) {
     struct malloc_trace *p = malloc_trace_find_or_create(file, function, line);
-    size_t size = len + 1;
+    size_t bytes = strnlen(s, len);
+    if (unlikely(bytes >= SIZE_MAX - malloc_header_size))
+        fatal("strndupz() cannot allocate %zu bytes of memory.", bytes);
+
+    size_t size = bytes + 1;
 
     size_t_atomic_count(add, p->strdup_calls, 1);
     size_t_atomic_count(add, p->allocations, 1);
@@ -575,8 +591,8 @@ char *strndupz_int(const char *s, size_t len, const char *file, const char *func
         t->padding[i] = 0xFF;
 #endif
 
-    memcpy(&t->data, s, size);
-    t->data[len] = '\0';
+    memcpy(&t->data, s, bytes);
+    t->data[bytes] = '\0';
     return (char *)&t->data;
 }
 
