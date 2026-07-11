@@ -265,7 +265,9 @@ struct command {
     },
     {
         .name = "powermetrics-thermal-smc-gpu-loop",
-        .params = "-n 0 -b 0 -i {{sampleIntervalMs}} -s thermal,smc,gpu_power -f plist",
+        // no -n: powermetrics must stream until netdata stops it
+        // (-n 0 means "zero samples and exit" on current macOS)
+        .params = "-b 0 -i {{sampleIntervalMs}} -s thermal,smc,gpu_power -f plist",
         .search = {
             [0] = NDSUDO_MACOS_POWERMETRICS_PATH,
             [1] = NULL,
@@ -273,7 +275,7 @@ struct command {
     },
     {
         .name = "powermetrics-thermal-gpu-loop",
-        .params = "-n 0 -b 0 -i {{sampleIntervalMs}} -s thermal,gpu_power -f plist",
+        .params = "-b 0 -i {{sampleIntervalMs}} -s thermal,gpu_power -f plist",
         .search = {
             [0] = NDSUDO_MACOS_POWERMETRICS_PATH,
             [1] = NULL,
@@ -281,7 +283,7 @@ struct command {
     },
     {
         .name = "powermetrics-thermal-smc-loop",
-        .params = "-n 0 -b 0 -i {{sampleIntervalMs}} -s thermal,smc -f plist",
+        .params = "-b 0 -i {{sampleIntervalMs}} -s thermal,smc -f plist",
         .search = {
             [0] = NDSUDO_MACOS_POWERMETRICS_PATH,
             [1] = NULL,
@@ -289,7 +291,7 @@ struct command {
     },
     {
         .name = "powermetrics-thermal-loop",
-        .params = "-n 0 -b 0 -i {{sampleIntervalMs}} -s thermal -f plist",
+        .params = "-b 0 -i {{sampleIntervalMs}} -s thermal -f plist",
         .search = {
             [0] = NDSUDO_MACOS_POWERMETRICS_PATH,
             [1] = NULL,
