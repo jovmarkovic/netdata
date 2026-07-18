@@ -37,7 +37,7 @@ require (
 	github.com/likexian/whois v1.15.7
 	github.com/likexian/whois-parser v1.24.21
 	github.com/lmittmann/tint v1.2.0
-	github.com/mattn/go-isatty v0.0.22
+	github.com/mattn/go-isatty v0.0.23
 	github.com/mattn/go-xmlrpc v0.0.3
 	github.com/miekg/dns v1.1.72
 	github.com/mitchellh/go-homedir v1.1.0
@@ -58,7 +58,7 @@ require (
 	golang.org/x/sync v0.22.0
 	golang.org/x/text v0.40.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20220504211119-3d4a969bb56b
-	google.golang.org/grpc v1.82.0
+	google.golang.org/grpc v1.82.1
 	gopkg.in/ini.v1 v1.67.3
 	gopkg.in/rethinkdb/rethinkdb-go.v6 v6.2.2
 	gopkg.in/yaml.v2 v2.4.0
@@ -80,7 +80,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.63.1
 	github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi v1.34.1
 	github.com/aws/aws-sdk-go-v2/service/sts v1.44.1
-	github.com/aws/smithy-go v1.27.3
+	github.com/aws/smithy-go v1.27.4
 	github.com/catonetworks/cato-go-sdk v0.2.6
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/docker/go-units v0.5.0
