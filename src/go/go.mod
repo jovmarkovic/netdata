@@ -77,7 +77,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.43.1
 	github.com/aws/aws-sdk-go-v2/config v1.32.32
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.31
-	github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.65.0
+	github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.66.0
 	github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi v1.35.1
 	github.com/aws/aws-sdk-go-v2/service/sts v1.45.1
 	github.com/aws/smithy-go v1.27.5
@@ -90,7 +90,7 @@ require (
 	github.com/maxmind/mmdbwriter v1.2.0
 	github.com/microsoft/go-mssqldb v1.10.0
 	github.com/moby/moby/api v1.55.0
-	github.com/moby/moby/client v0.5.0
+	github.com/moby/moby/client v0.5.1
 	github.com/netdata/systemd-journal-sdk/go v0.8.0
 	github.com/oschwald/maxminddb-golang v1.13.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
