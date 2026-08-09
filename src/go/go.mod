@@ -24,7 +24,7 @@ require (
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/gofrs/flock v0.13.0
-	github.com/gohugoio/hashstructure v0.6.0
+	github.com/gohugoio/hashstructure v1.0.0
 	github.com/golang/mock v1.6.0
 	github.com/golangsnmp/gomib v0.12.0
 	github.com/google/uuid v1.6.0
@@ -77,8 +77,8 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.43.4
 	github.com/aws/aws-sdk-go-v2/config v1.32.35
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.34
-	github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.66.1
-	github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi v1.35.2
+	github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.66.3
+	github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi v1.35.4
 	github.com/aws/aws-sdk-go-v2/service/sts v1.45.4
 	github.com/aws/smithy-go v1.27.6
 	github.com/catonetworks/cato-go-sdk v0.3.2
@@ -86,7 +86,7 @@ require (
 	github.com/docker/go-units v0.5.0
 	github.com/grafana/regexp v0.0.0-20240518133315-a468a5bfb3bc
 	github.com/ibm-messaging/mq-golang/v5 v5.7.2
-	github.com/klauspost/compress v1.19.1
+	github.com/klauspost/compress v1.19.2
 	github.com/maxmind/mmdbwriter v1.2.0
 	github.com/microsoft/go-mssqldb v1.10.0
 	github.com/moby/moby/api v1.55.0
