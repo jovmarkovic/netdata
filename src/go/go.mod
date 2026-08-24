@@ -50,7 +50,7 @@ require (
 	github.com/stretchr/testify v1.12.1
 	github.com/tidwall/gjson v1.19.0
 	github.com/valyala/fastjson v1.6.10
-	github.com/vmware/govmomi v0.55.1
+	github.com/vmware/govmomi v0.56.0
 	go.opentelemetry.io/proto/otlp v1.11.0
 	go.uber.org/automaxprocs v1.6.0
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
@@ -58,13 +58,13 @@ require (
 	golang.org/x/sync v0.22.0
 	golang.org/x/text v0.41.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20220504211119-3d4a969bb56b
-	google.golang.org/grpc v1.83.0
+	google.golang.org/grpc v1.83.1
 	gopkg.in/ini.v1 v1.67.3
 	gopkg.in/rethinkdb/rethinkdb-go.v6 v6.2.2
 	gopkg.in/yaml.v2 v2.4.0
-	k8s.io/api v0.36.3
-	k8s.io/apimachinery v0.36.3
-	k8s.io/client-go v0.36.3
+	k8s.io/api v0.36.4
+	k8s.io/apimachinery v0.36.4
+	k8s.io/client-go v0.36.4
 	layeh.com/radius v0.0.0-20190322222518-890bc1058917
 )
 
@@ -75,9 +75,9 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resourcegraph/armresourcegraph v0.10.0
 	github.com/alexbrainman/odbc v0.0.0-20250601004241-49e6b2bc0cf0
 	github.com/aws/aws-sdk-go-v2 v1.43.7
-	github.com/aws/aws-sdk-go-v2/config v1.32.37
+	github.com/aws/aws-sdk-go-v2/config v1.32.38
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.37
-	github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.66.5
+	github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.66.6
 	github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi v1.36.2
 	github.com/aws/aws-sdk-go-v2/service/sts v1.45.7
 	github.com/aws/smithy-go v1.27.8
