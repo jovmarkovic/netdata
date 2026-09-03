@@ -43,7 +43,6 @@ jobs:
       - name: Merge master with nvme_raid
         run: |
           git fetch origin nvme_raid
-          git checkout --track nvme_raid
-          git reset --hard origin/nvme_raid
+          git checkout nvme_raid
           git merge origin/master -m "sync-fork workflow: Merge branch 'netdata:master' into nvme_raid"
           git push origin nvme_raid
