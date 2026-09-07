@@ -231,6 +231,21 @@
 - Optimize weights query arena reuse ([#23759](https://github.com/netdata/netdata/issues/23759))
 - Build(deps): bump github.com/prometheus/client_model from 0.6.2 to 0.6.3 in /src/go ([#23774](https://github.com/netdata/netdata/issues/23774))
 - Chore(skills): rename skills to area-prefixed names ([#23769](https://github.com/netdata/netdata/issues/23769))
+- Fix(skills): close the failure paths in the skill scripts the review surfaced ([#23775](https://github.com/netdata/netdata/issues/23775))
+- Topology: support generic response notifications ([#23776](https://github.com/netdata/netdata/issues/23776))
+- Reduce KS2 comparison overhead with monotonic cursors ([#23779](https://github.com/netdata/netdata/issues/23779))
+- Support ranked weights response limits across API formats ([#23777](https://github.com/netdata/netdata/issues/23777))
+- Fix(dcgm): correct GPU chart grouping, units and source selection ([#23785](https://github.com/netdata/netdata/issues/23785))
+- Docs: document chart annotations ([#23786](https://github.com/netdata/netdata/issues/23786))
+- Fix repeated socket collection attempts in network namespaces ([#23778](https://github.com/netdata/netdata/issues/23778))
+- Regenerate integrations docs ([#23787](https://github.com/netdata/netdata/issues/23787))
+- Chore(skills): slim integrations-lifecycle and drop the taxonomy authoring content ([#23784](https://github.com/netdata/netdata/issues/23784))
+- Chore(skills): rewrite collectors-snmp-trap-profiles as a rule sheet ([#23790](https://github.com/netdata/netdata/issues/23790))
+- Fix(ml): defer ML worker queue teardown until collectors stop ([#23757](https://github.com/netdata/netdata/issues/23757))
+- Fix(dbengine): repair -W createdataset ([#23758](https://github.com/netdata/netdata/issues/23758))
+- Feat(go.d/snmp): publish diagnostics independently of topology collection ([#23791](https://github.com/netdata/netdata/issues/23791))
+- Fix(ibm.d/as400): clamp row counts before converting int64 to int ([#23783](https://github.com/netdata/netdata/issues/23783))
+- Chore(skills): slim collectors-prometheus-profiles and fix its authoring scripts ([#23792](https://github.com/netdata/netdata/issues/23792))
 
 ## [2.11.0] - 2026-08-12
 
