@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/netdata/netdata/go/plugins/plugin/framework/collectorapi"
 	"github.com/netdata/netdata/go/plugins/plugin/go.d/collector/snmp/ddsnmp"
 	snmpdiag "github.com/netdata/netdata/go/plugins/plugin/go.d/collector/snmp/diagnostics"
 )
@@ -315,17 +316,34 @@ func restoreArchiveLifecycle(l snmpdiag.Lifecycle) (topologyJobLifecycleDiagnost
 		if err != nil {
 			return topologyJobLifecycleDiagnosticCut{}, fmt.Errorf("job lifecycle registration %d outcome: %w", registrationID, err)
 		}
+		if entry.LastCompleted.PreparationFailure != (collectorapi.JobConfigFailure{}) && !entry.LastCompleted.PreparationFailure.Valid() {
+			return topologyJobLifecycleDiagnosticCut{}, errors.New("invalid preparation failure")
+		}
+		if !entry.LastCompleted.CollectionFailures.Valid() {
+			return topologyJobLifecycleDiagnosticCut{}, errors.New("invalid collection failures")
+		}
+		if !entry.LastCompleted.Failure.Valid() {
+			return topologyJobLifecycleDiagnosticCut{}, errors.New("invalid lifecycle failure")
+		}
+		profileContext, err := ddsnmp.RestoreProfileContext(entry.Profiles)
+		if err != nil {
+			return topologyJobLifecycleDiagnosticCut{}, fmt.Errorf("job lifecycle profile context: %w", err)
+		}
 		result.cut.Entries = append(result.cut.Entries, ddsnmp.DeviceLifecycleEntry{
 			RegistrationID: registrationID,
 			Info: ddsnmp.DeviceLifecycleInfo{
 				Hostname:    entry.Hostname,
+				Profiles:    profileContext,
 				Port:        entry.Port,
 				SNMPVersion: entry.SNMPVersion,
 			},
 			LastCompleted: ddsnmp.DeviceLifecycleStatus{
-				Phase:       phase,
-				Outcome:     outcome,
-				CompletedAt: entry.LastCompleted.CompletedAt,
+				Phase:              phase,
+				Failure:            entry.LastCompleted.Failure,
+				PreparationFailure: entry.LastCompleted.PreparationFailure,
+				CollectionFailures: entry.LastCompleted.CollectionFailures,
+				Outcome:            outcome,
+				CompletedAt:        entry.LastCompleted.CompletedAt,
 			},
 			TopologyReady: entry.TopologyReady,
 		})
@@ -334,6 +352,7 @@ func restoreArchiveLifecycle(l snmpdiag.Lifecycle) (topologyJobLifecycleDiagnost
 }
 
 func restoreArchiveSweep(s snmpdiag.Sweep) (*topologySweepDiagnosticCut, error) {
+
 	state, err := topologyDiagnosticArchiveParseCaptureState(s.CaptureState)
 	if err != nil {
 		return nil, fmt.Errorf("topology sweep capture state: %w", err)
@@ -395,7 +414,10 @@ func restoreArchiveSweep(s snmpdiag.Sweep) (*topologySweepDiagnosticCut, error) 
 	return result, nil
 }
 
-func restoreArchiveDevice(d snmpdiag.Device, sweepGeneration uint64) (topologySweepDeviceDiagnostic, error) {
+func restoreArchiveDevice(
+	d snmpdiag.Device,
+	sweepGeneration uint64,
+) (topologySweepDeviceDiagnostic, error) {
 	registrationID := ddsnmp.DeviceRegistrationID(d.RegistrationID)
 	if registrationID == 0 {
 		return topologySweepDeviceDiagnostic{}, errors.New("topology sweep registration ID is zero")
@@ -442,7 +464,11 @@ func restoreArchiveDevice(d snmpdiag.Device, sweepGeneration uint64) (topologySw
 		}
 		for _, role := range archivedCapture.Roles {
 			if _, ok := seenRoles[role]; ok {
-				return topologySweepDeviceDiagnostic{}, fmt.Errorf("topology sweep registration %d duplicate capture role %q", registrationID, role)
+				return topologySweepDeviceDiagnostic{}, fmt.Errorf(
+					"topology sweep registration %d duplicate capture role %q",
+					registrationID,
+					role,
+				)
 			}
 			seenRoles[role] = struct{}{}
 			switch role {
@@ -451,7 +477,11 @@ func restoreArchiveDevice(d snmpdiag.Device, sweepGeneration uint64) (topologySw
 			case topologyDiagnosticArchiveCaptureRoleRetainedSuccess:
 				result.acquisition = capture
 			default:
-				return topologySweepDeviceDiagnostic{}, fmt.Errorf("topology sweep registration %d unknown capture role %q", registrationID, role)
+				return topologySweepDeviceDiagnostic{}, fmt.Errorf(
+					"topology sweep registration %d unknown capture role %q",
+					registrationID,
+					role,
+				)
 			}
 		}
 	}
@@ -527,7 +557,11 @@ func restoreArchiveEvidenceRef(r *snmpdiag.EvidenceRef,
 	}
 	registrationID := ddsnmp.DeviceRegistrationID(r.RegistrationID)
 	if registrationID == 0 || registrationID != owner {
-		return topologyEvidenceRef{}, false, fmt.Errorf("retained-success registration reference %d does not match owner %d", registrationID, owner)
+		return topologyEvidenceRef{}, false, fmt.Errorf(
+			"retained-success registration reference %d does not match owner %d",
+			registrationID,
+			owner,
+		)
 	}
 	if r.Generation == 0 {
 		return topologyEvidenceRef{}, false, errors.New("retained-success generation is zero")
@@ -569,11 +603,10 @@ func restoreArchiveAbort(a snmpdiag.Abort) (*topologyAbortedSweepDiagnostic, err
 
 var (
 	topologyDiagnosticArchiveCaptureStateNames = []string{
-		"unknown", "available", "limit_exceeded", "unavailable",
+		"unknown", "available", "unavailable",
 	}
 	topologyDiagnosticArchiveCaptureReasonNames = []string{
-		"none", "record_limit", "byte_limit", "projection_error", "projection_panic",
-		"global_record_limit", "global_byte_limit",
+		"none", "projection_error", "projection_panic",
 	}
 	topologyDiagnosticArchiveDeviceOutcomeNames = []string{
 		"unknown", "success", "no_profiles", "failed",

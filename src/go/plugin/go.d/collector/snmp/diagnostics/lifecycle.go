@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/netdata/netdata/go/plugins/plugin/go.d/collector/snmp/ddsnmp"
+	"github.com/netdata/netdata/go/plugins/plugin/go.d/pkg/snmputils"
 )
 
 var lifecyclePhases = []string{"unknown", "init", "check", "collect"}
@@ -63,13 +64,17 @@ func NewLifecycle(cut ddsnmp.DeviceLifecycleCut) (Lifecycle, error) {
 			result.Cut.Entries,
 			LifecycleEntry{
 				RegistrationID: uint64(entry.RegistrationID),
+				Profiles:       entry.Info.Profiles.Snapshot(),
 				Hostname:       entry.Info.Hostname,
 				Port:           entry.Info.Port,
 				SNMPVersion:    entry.Info.SNMPVersion,
 				LastCompleted: LifecycleStatus{
-					Phase:       phase,
-					Outcome:     outcome,
-					CompletedAt: entry.LastCompleted.CompletedAt,
+					Phase:              phase,
+					Failure:            entry.LastCompleted.Failure,
+					PreparationFailure: entry.LastCompleted.PreparationFailure,
+					CollectionFailures: entry.LastCompleted.CollectionFailures,
+					Outcome:            outcome,
+					CompletedAt:        entry.LastCompleted.CompletedAt,
 				},
 				TopologyReady: entry.TopologyReady,
 			},
@@ -78,15 +83,13 @@ func NewLifecycle(cut ddsnmp.DeviceLifecycleCut) (Lifecycle, error) {
 	return result, nil
 }
 
-const MaxRecords uint64 = 250_000
-const MaxLogicalBytes uint64 = 64 << 20
 const LifecycleCutLogicalBytes uint64 = 32
 
 type LifecycleSource interface {
 	LifecycleCut() ddsnmp.DeviceLifecycleCut
 }
 
-func CaptureLifecycle(source LifecycleSource, maxRecords, maxBytes uint64) (result Lifecycle) {
+func CaptureLifecycle(source LifecycleSource) (result Lifecycle) {
 	result = Lifecycle{
 		State:  "unavailable",
 		Reason: "projection_error",
@@ -103,28 +106,17 @@ func CaptureLifecycle(source LifecycleSource, maxRecords, maxBytes uint64) (resu
 		return result
 	}
 	cut := source.LifecycleCut()
-	records := uint64(1 + len(cut.Entries))
-	size := LifecycleCutLogicalBytes
-	for _, entry := range cut.Entries {
-		size += uint64(64 + len(entry.Info.Hostname) + len(entry.Info.SNMPVersion))
-	}
-	if records > maxRecords || size > maxBytes {
-		result = Lifecycle{
-			State:  "limit_exceeded",
-			Reason: "global_byte_limit",
-			Cut: LifecycleCut{
-				Sequence:   cut.Sequence,
-				CapturedAt: cut.CapturedAt,
-			},
-		}
-		if records > maxRecords {
-			result.Reason = "global_record_limit"
-		}
-		return result
-	}
 	projected, err := NewLifecycle(cut)
 	if err != nil {
 		return result
 	}
 	return projected
+}
+
+// LifecycleEntryLogicalBytes includes fixed failure and unavailable-context slots.
+func LifecycleEntryLogicalBytes(hostname, version string) uint64 {
+	const preparationFailureBytes = 128
+	return uint64(
+		64+len(hostname)+len(version),
+	) + snmputils.FailureLogicalBytes + preparationFailureBytes + ddsnmp.CollectionFailuresLogicalBytes + 32
 }
