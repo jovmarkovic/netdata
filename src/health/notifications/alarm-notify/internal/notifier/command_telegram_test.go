@@ -288,6 +288,12 @@ func TestAcknowledgmentCancellation(t *testing.T) {
 		"twilio deadline":      {provider: "twilio"},
 		"messagebird cancel":   {provider: "messagebird", cancel: true},
 		"messagebird deadline": {provider: "messagebird"},
+		"gotify cancel":        {provider: "gotify", cancel: true},
+		"gotify deadline":      {provider: "gotify"},
+		"ntfy cancel":          {provider: "ntfy", cancel: true},
+		"ntfy deadline":        {provider: "ntfy"},
+		"rocketchat cancel":    {provider: "rocketchat", cancel: true},
+		"rocketchat deadline":  {provider: "rocketchat"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			started, stopped, cleanup := make(chan struct{}), make(chan struct{}), make(chan struct{})
@@ -298,7 +304,7 @@ func TestAcknowledgmentCancellation(t *testing.T) {
 					"/1/messages.json",
 					"/v2/pushes",
 					twilioTestPath,
-					messagebirdTestPath:
+					messagebirdTestPath, "/message", "/topic", "/rocket-hook":
 					_, _ = io.Copy(io.Discard, r.Body)
 					if r.URL.Path == twilioTestPath || r.URL.Path == messagebirdTestPath {
 						w.WriteHeader(201)
@@ -361,6 +367,15 @@ func TestAcknowledgmentCancellation(t *testing.T) {
 					Originator: "Netdata",
 					Recipient:  "+15005550009",
 				}
+			}
+			if test.provider == "gotify" {
+				dst = Destination{Type: "gotify", APIURL: server.URL, AppToken: "synthetic-token"}
+			}
+			if test.provider == "ntfy" {
+				dst = Destination{Type: "ntfy", URL: server.URL + "/topic"}
+			}
+			if test.provider == "rocketchat" {
+				dst = Destination{Type: "rocketchat", URL: server.URL + "/rocket-hook"}
 			}
 			config, err := yaml.Marshal(Config{Version: 1, Destinations: map[string]Destination{
 				"first":   {Type: "webhook", URL: server.URL + "/first"},

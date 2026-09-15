@@ -27,11 +27,16 @@ type Routing struct {
 type Destination struct {
 	Type            string         `yaml:"type"`
 	URL             string         `yaml:"url,omitempty"`
+	Channel         string         `yaml:"channel,omitempty"`
+	Sender          string         `yaml:"sender,omitempty"`
+	IntegrationKey  string         `yaml:"integration_key,omitempty"`
 	BearerToken     string         `yaml:"bearer_token,omitempty"`
 	BotToken        string         `yaml:"bot_token,omitempty"`
 	AppToken        string         `yaml:"app_token,omitempty"`
 	UserKey         string         `yaml:"user_key,omitempty"`
 	AccessToken     string         `yaml:"access_token,omitempty"`
+	Username        string         `yaml:"username,omitempty"`
+	Password        string         `yaml:"password,omitempty"`
 	Email           string         `yaml:"email,omitempty"`
 	ChannelTag      string         `yaml:"channel_tag,omitempty"`
 	SourceDeviceID  string         `yaml:"source_device_id,omitempty"`
@@ -96,6 +101,27 @@ func readConfig(r io.Reader) (Config, error) {
 }
 
 func (dst Destination) validate() error {
+	if dst.Type == "ilert" {
+		return dst.validateIlert()
+	}
+	if dst.IntegrationKey != "" {
+		return errors.New("integration_key requires type: ilert")
+	}
+	if dst.Type == "rocketchat" || dst.Type == "flock" || dst.Type == "fleep" {
+		return dst.validateChatWebhook()
+	}
+	if dst.Channel != "" || dst.Sender != "" {
+		return errors.New("channel requires type: rocketchat; sender requires type: fleep")
+	}
+	if dst.Type == "gotify" {
+		return dst.validateGotify()
+	}
+	if dst.Type == "ntfy" {
+		return dst.validateNtfy()
+	}
+	if dst.Username != "" || dst.Password != "" {
+		return errors.New("username and password require type: ntfy")
+	}
 	if dst.Type == "messagebird" {
 		return dst.validateMessageBird()
 	}
@@ -123,15 +149,15 @@ func (dst Destination) validate() error {
 	if dst.Type == "telegram" {
 		return dst.validateTelegram()
 	}
-	if dst.Type != "webhook" && dst.Type != "slack" && dst.Type != "discord" {
+	if dst.Type != "webhook" && dst.Type != "slack" && dst.Type != "discord" && dst.Type != "signl4" {
 		return errors.New(
-			"destination.type must be webhook, slack, discord, telegram, pushover, pushbullet, twilio or messagebird; other providers are not implemented yet",
+			"destination.type must be webhook, slack, discord, telegram, pushover, pushbullet, twilio, messagebird, gotify, ntfy, rocketchat, flock, fleep, ilert or signl4; other providers are not implemented yet",
 		)
 	}
 	if dst.BotToken != "" || dst.ChatID != "" || dst.MessageThreadID != nil || dst.APIURL != "" ||
 		dst.RetriesOnLimit != nil {
 		return errors.New(
-			"bot_token, chat_id, message_thread_id and retries_on_limit require type: telegram; api_url requires telegram, pushover, pushbullet, twilio or messagebird",
+			"bot_token, chat_id, message_thread_id and retries_on_limit require type: telegram; api_url requires telegram, pushover, pushbullet, twilio, messagebird or ilert",
 		)
 	}
 	if dst.Type != "webhook" && dst.BearerToken != "" {

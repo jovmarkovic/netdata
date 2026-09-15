@@ -196,12 +196,12 @@ func testURLProviderConfiguration(t *testing.T, provider string) {
 		"legacy channel refused": {
 			url:   "https://example.com/slack",
 			extra: "    channel: synthetic-private-value\n",
-			err:   "invalid YAML",
+			err:   "channel requires type: rocketchat",
 		},
 		"legacy username refused": {
 			url:   "https://example.com/slack",
 			extra: "    username: synthetic-private-value\n",
-			err:   "invalid YAML",
+			err:   "username and password require type: ntfy",
 		},
 		"legacy icon refused": {
 			url:   "https://example.com/slack",
