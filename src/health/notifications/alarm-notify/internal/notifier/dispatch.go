@@ -33,6 +33,18 @@ func dispatch(
 			err = sendWebhook(ctx, dst, event, timeout)
 		case "slack":
 			err = sendSlack(ctx, dst, event, timeout)
+		case "discord":
+			err = sendDiscord(ctx, dst, event, timeout)
+		case "telegram":
+			err = sendTelegram(ctx, dst, event, timeout)
+		case "pushover":
+			err = sendPushover(ctx, dst, event, timeout)
+		case "pushbullet":
+			err = sendPushbullet(ctx, dst, event, timeout)
+		case "twilio":
+			err = sendTwilio(ctx, dst, event, timeout)
+		case "messagebird":
+			err = sendMessageBird(ctx, dst, event, timeout)
 		default:
 			err = errors.New("destination provider is not implemented")
 		}

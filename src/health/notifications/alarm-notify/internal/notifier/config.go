@@ -25,9 +25,42 @@ type Routing struct {
 }
 
 type Destination struct {
-	Type        string `yaml:"type"`
-	URL         string `yaml:"url"`
-	BearerToken string `yaml:"bearer_token,omitempty"`
+	Type            string         `yaml:"type"`
+	URL             string         `yaml:"url,omitempty"`
+	BearerToken     string         `yaml:"bearer_token,omitempty"`
+	BotToken        string         `yaml:"bot_token,omitempty"`
+	AppToken        string         `yaml:"app_token,omitempty"`
+	UserKey         string         `yaml:"user_key,omitempty"`
+	AccessToken     string         `yaml:"access_token,omitempty"`
+	Email           string         `yaml:"email,omitempty"`
+	ChannelTag      string         `yaml:"channel_tag,omitempty"`
+	SourceDeviceID  string         `yaml:"source_device_id,omitempty"`
+	AccountSID      string         `yaml:"account_sid,omitempty"`
+	AuthToken       string         `yaml:"auth_token,omitempty"`
+	From            string         `yaml:"from,omitempty"`
+	To              string         `yaml:"to,omitempty"`
+	AccessKey       string         `yaml:"access_key,omitempty"`
+	Originator      string         `yaml:"originator,omitempty"`
+	Recipient       string         `yaml:"recipient,omitempty"`
+	ChatID          string         `yaml:"chat_id,omitempty"`
+	MessageThreadID *configInteger `yaml:"message_thread_id,omitempty"`
+	APIURL          string         `yaml:"api_url,omitempty"`
+	RetriesOnLimit  *configInteger `yaml:"retries_on_limit,omitempty"`
+}
+
+// YAML normally truncates floats assigned to integers, which could select the wrong topic.
+type configInteger int64
+
+func (value *configInteger) UnmarshalYAML(node *yaml.Node) error {
+	if node.Tag != "!!int" {
+		return errors.New("expected an integer")
+	}
+	var integer int64
+	if err := node.Decode(&integer); err != nil {
+		return err
+	}
+	*value = configInteger(integer)
+	return nil
 }
 
 func readConfig(r io.Reader) (Config, error) {
@@ -63,11 +96,46 @@ func readConfig(r io.Reader) (Config, error) {
 }
 
 func (dst Destination) validate() error {
-	if dst.Type != "webhook" && dst.Type != "slack" {
-		return errors.New("destination.type must be webhook or slack; other providers are not implemented yet")
+	if dst.Type == "messagebird" {
+		return dst.validateMessageBird()
 	}
-	if dst.Type == "slack" && dst.BearerToken != "" {
-		return errors.New("slack destinations authenticate through their URL; bearer_token is not supported")
+	if dst.AccessKey != "" || dst.Originator != "" || dst.Recipient != "" {
+		return errors.New("access_key, originator and recipient require type: messagebird")
+	}
+	if dst.Type == "twilio" {
+		return dst.validateTwilio()
+	}
+	if dst.AccountSID != "" || dst.AuthToken != "" || dst.From != "" || dst.To != "" {
+		return errors.New("account_sid, auth_token, from and to require type: twilio")
+	}
+	if dst.Type == "pushbullet" {
+		return dst.validatePushbullet()
+	}
+	if dst.AccessToken != "" || dst.Email != "" || dst.ChannelTag != "" || dst.SourceDeviceID != "" {
+		return errors.New("access_token, email, channel_tag and source_device_id require type: pushbullet")
+	}
+	if dst.Type == "pushover" {
+		return dst.validatePushover()
+	}
+	if dst.AppToken != "" || dst.UserKey != "" {
+		return errors.New("app_token and user_key require type: pushover")
+	}
+	if dst.Type == "telegram" {
+		return dst.validateTelegram()
+	}
+	if dst.Type != "webhook" && dst.Type != "slack" && dst.Type != "discord" {
+		return errors.New(
+			"destination.type must be webhook, slack, discord, telegram, pushover, pushbullet, twilio or messagebird; other providers are not implemented yet",
+		)
+	}
+	if dst.BotToken != "" || dst.ChatID != "" || dst.MessageThreadID != nil || dst.APIURL != "" ||
+		dst.RetriesOnLimit != nil {
+		return errors.New(
+			"bot_token, chat_id, message_thread_id and retries_on_limit require type: telegram; api_url requires telegram, pushover, pushbullet, twilio or messagebird",
+		)
+	}
+	if dst.Type != "webhook" && dst.BearerToken != "" {
+		return fmt.Errorf("%s destinations authenticate through their URL; bearer_token is not supported", dst.Type)
 	}
 	reference, err := secretReference(dst.URL)
 	if err != nil {
@@ -77,12 +145,25 @@ func (dst Destination) validate() error {
 		if err := validateURL(dst.URL); err != nil {
 			return err
 		}
+		if dst.Type == "discord" {
+			if _, err := discordEndpoint(dst.URL); err != nil {
+				return err
+			}
+		}
 	}
 	if _, err := secretReference(dst.BearerToken); err != nil {
 		return fmt.Errorf("destination.bearer_token: %w", err)
 	}
 	if strings.ContainsAny(dst.BearerToken, "\r\n") {
 		return errors.New("destination.bearer_token must not contain line breaks")
+	}
+	return nil
+}
+
+func validateToken(value, provider, field string) error {
+	if value == "" || strings.Contains(value, "${") ||
+		strings.IndexFunc(value, func(r rune) bool { return r < 33 || r > 126 }) != -1 {
+		return fmt.Errorf("%s %s must be nonempty printable ASCII without whitespace", provider, field)
 	}
 	return nil
 }
@@ -124,4 +205,25 @@ func validHTTPURL(value string, allowFragment bool) bool {
 	u, err := url.Parse(value)
 	return err == nil && u.Hostname() != "" && u.Opaque == "" && u.User == nil &&
 		(allowFragment || u.Fragment == "") && (u.Scheme == "http" || u.Scheme == "https")
+}
+
+func validateAPIBase(endpoint, provider, officialHost string) error {
+	if endpoint == "" {
+		return nil // The provider uses its official HTTPS endpoint.
+	}
+	// Even an empty fragment would capture the method appended to this base.
+	if !validHTTPURL(endpoint, false) || strings.Contains(endpoint, "#") {
+		return fmt.Errorf(
+			"%s api_url must be an absolute HTTP(S) base URL without user information or fragment",
+			provider,
+		)
+	}
+	u, _ := url.Parse(endpoint)
+	if u.RawQuery != "" || u.ForceQuery {
+		return fmt.Errorf("%s api_url must not contain a query", provider)
+	}
+	if strings.EqualFold(strings.TrimSuffix(u.Hostname(), "."), officialHost) && u.Scheme != "https" {
+		return fmt.Errorf("the official %s API requires HTTPS", provider)
+	}
+	return nil
 }
