@@ -88,6 +88,8 @@ func TestPagerDutyFieldIsolation(t *testing.T) {
 			dst := pagerDutyTestDestination(2)
 			v := reflect.ValueOf(&dst).Elem().Field(i)
 			switch v.Kind() {
+			case reflect.Map:
+				v.Set(reflect.ValueOf(map[string]string{"warning": "synthetic-private-value"}))
 			case reflect.String:
 				v.SetString("synthetic-private-value")
 			case reflect.Slice:
@@ -99,7 +101,7 @@ func TestPagerDutyFieldIsolation(t *testing.T) {
 			checkFormConfig(t, dst, "fields for another provider")
 		})
 	}
-	for provider := range map[string]struct{}{"webhook": {}, "slack": {}, "discord": {}, "telegram": {}, "pushover": {}, "pushbullet": {}, "twilio": {}, "messagebird": {}, "gotify": {}, "ntfy": {}, "rocketchat": {}, "flock": {}, "fleep": {}, "ilert": {}, "signl4": {}, "alerta": {}, "dynatrace": {}, "prowl": {}, "kavenegar": {}, "smseagle": {}} {
+	for provider := range map[string]struct{}{"webhook": {}, "slack": {}, "discord": {}, "telegram": {}, "pushover": {}, "pushbullet": {}, "twilio": {}, "messagebird": {}, "gotify": {}, "ntfy": {}, "rocketchat": {}, "flock": {}, "fleep": {}, "ilert": {}, "signl4": {}, "alerta": {}, "dynatrace": {}, "prowl": {}, "kavenegar": {}, "smseagle": {}, "opsgenie": {}} {
 		t.Run(provider, func(t *testing.T) {
 			require.ErrorContains(
 				t,

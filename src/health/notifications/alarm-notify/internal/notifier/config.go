@@ -25,43 +25,49 @@ type Routing struct {
 }
 
 type Destination struct {
-	APIVersion      *configInteger `yaml:"api_version,omitempty"`
-	Recipients      []string       `yaml:"recipients,omitempty"`
-	MessageType     string         `yaml:"message_type,omitempty"`
-	CallDuration    *configInteger `yaml:"call_duration,omitempty"`
-	VoiceID         *configInteger `yaml:"voice_id,omitempty"`
-	Type            string         `yaml:"type"`
-	URL             string         `yaml:"url,omitempty"`
-	Channel         string         `yaml:"channel,omitempty"`
-	Sender          string         `yaml:"sender,omitempty"`
-	IntegrationKey  string         `yaml:"integration_key,omitempty"`
-	APIKey          string         `yaml:"api_key,omitempty"`
-	Environment     string         `yaml:"environment,omitempty"`
-	APIToken        string         `yaml:"api_token,omitempty"`
-	EntitySelector  string         `yaml:"entity_selector,omitempty"`
-	EventType       string         `yaml:"event_type,omitempty"`
-	Source          string         `yaml:"source,omitempty"`
-	BearerToken     string         `yaml:"bearer_token,omitempty"`
-	BotToken        string         `yaml:"bot_token,omitempty"`
-	AppToken        string         `yaml:"app_token,omitempty"`
-	UserKey         string         `yaml:"user_key,omitempty"`
-	AccessToken     string         `yaml:"access_token,omitempty"`
-	Username        string         `yaml:"username,omitempty"`
-	Password        string         `yaml:"password,omitempty"`
-	Email           string         `yaml:"email,omitempty"`
-	ChannelTag      string         `yaml:"channel_tag,omitempty"`
-	SourceDeviceID  string         `yaml:"source_device_id,omitempty"`
-	AccountSID      string         `yaml:"account_sid,omitempty"`
-	AuthToken       string         `yaml:"auth_token,omitempty"`
-	From            string         `yaml:"from,omitempty"`
-	To              string         `yaml:"to,omitempty"`
-	AccessKey       string         `yaml:"access_key,omitempty"`
-	Originator      string         `yaml:"originator,omitempty"`
-	Recipient       string         `yaml:"recipient,omitempty"`
-	ChatID          string         `yaml:"chat_id,omitempty"`
-	MessageThreadID *configInteger `yaml:"message_thread_id,omitempty"`
-	APIURL          string         `yaml:"api_url,omitempty"`
-	RetriesOnLimit  *configInteger `yaml:"retries_on_limit,omitempty"`
+	Executable      string            `yaml:"executable,omitempty"`
+	Args            []string          `yaml:"args,omitempty"`
+	Env             map[string]string `yaml:"env,omitempty"`
+	RoomID          string            `yaml:"room_id,omitempty"`
+	Icons           map[string]string `yaml:"icons,omitempty"`
+	Colors          map[string]string `yaml:"colors,omitempty"`
+	APIVersion      *configInteger    `yaml:"api_version,omitempty"`
+	Recipients      []string          `yaml:"recipients,omitempty"`
+	MessageType     string            `yaml:"message_type,omitempty"`
+	CallDuration    *configInteger    `yaml:"call_duration,omitempty"`
+	VoiceID         *configInteger    `yaml:"voice_id,omitempty"`
+	Type            string            `yaml:"type"`
+	URL             string            `yaml:"url,omitempty"`
+	Channel         string            `yaml:"channel,omitempty"`
+	Sender          string            `yaml:"sender,omitempty"`
+	IntegrationKey  string            `yaml:"integration_key,omitempty"`
+	APIKey          string            `yaml:"api_key,omitempty"`
+	Environment     string            `yaml:"environment,omitempty"`
+	APIToken        string            `yaml:"api_token,omitempty"`
+	EntitySelector  string            `yaml:"entity_selector,omitempty"`
+	EventType       string            `yaml:"event_type,omitempty"`
+	Source          string            `yaml:"source,omitempty"`
+	BearerToken     string            `yaml:"bearer_token,omitempty"`
+	BotToken        string            `yaml:"bot_token,omitempty"`
+	AppToken        string            `yaml:"app_token,omitempty"`
+	UserKey         string            `yaml:"user_key,omitempty"`
+	AccessToken     string            `yaml:"access_token,omitempty"`
+	Username        string            `yaml:"username,omitempty"`
+	Password        string            `yaml:"password,omitempty"`
+	Email           string            `yaml:"email,omitempty"`
+	ChannelTag      string            `yaml:"channel_tag,omitempty"`
+	SourceDeviceID  string            `yaml:"source_device_id,omitempty"`
+	AccountSID      string            `yaml:"account_sid,omitempty"`
+	AuthToken       string            `yaml:"auth_token,omitempty"`
+	From            string            `yaml:"from,omitempty"`
+	To              string            `yaml:"to,omitempty"`
+	AccessKey       string            `yaml:"access_key,omitempty"`
+	Originator      string            `yaml:"originator,omitempty"`
+	Recipient       string            `yaml:"recipient,omitempty"`
+	ChatID          string            `yaml:"chat_id,omitempty"`
+	MessageThreadID *configInteger    `yaml:"message_thread_id,omitempty"`
+	APIURL          string            `yaml:"api_url,omitempty"`
+	RetriesOnLimit  *configInteger    `yaml:"retries_on_limit,omitempty"`
 }
 
 // YAML normally truncates floats assigned to integers, which could select the wrong topic.
@@ -112,11 +118,31 @@ func readConfig(r io.Reader) (Config, error) {
 }
 
 func (dst Destination) validate() error {
+	if dst.Type == "command" || dst.Type == "smstools3" {
+		return dst.validateCommand()
+	}
+	if dst.Executable != "" || dst.Args != nil || dst.Env != nil {
+		return errors.New("destination contains fields for another provider: executable, args and env require command or smstools3")
+	}
+	if dst.Type == "msteams" {
+		return dst.validateMSTeams()
+	}
+	if dst.Type == "matrix" {
+		return dst.validateMatrix()
+	}
+	if dst.RoomID != "" || dst.Icons != nil || dst.Colors != nil {
+		return errors.New(
+			"destination contains fields for another provider: room_id requires type: matrix; icons and colors require type: msteams",
+		)
+	}
 	if dst.Type == "pagerduty" {
 		return dst.validatePagerDuty()
 	}
 	if dst.APIVersion != nil {
 		return errors.New("api_version requires type: pagerduty")
+	}
+	if dst.Type == "opsgenie" {
+		return dst.validateOpsgenie()
 	}
 	if dst.Type == "smseagle" {
 		return dst.validateSMSEagle()
@@ -134,7 +160,7 @@ func (dst Destination) validate() error {
 		dst.EventType != "" ||
 		dst.Source != "" {
 		return errors.New(
-			"api_key requires type: alerta, prowl or kavenegar; environment requires type: alerta; api_token, entity_selector, event_type and source require type: dynatrace",
+			"api_key requires type: alerta, prowl, kavenegar or opsgenie; environment requires type: alerta; api_token, entity_selector, event_type and source require type: dynatrace",
 		)
 	}
 	if dst.Type == "ilert" {
@@ -177,7 +203,7 @@ func (dst Destination) validate() error {
 	}
 	if dst.AccessToken != "" || dst.Email != "" || dst.ChannelTag != "" || dst.SourceDeviceID != "" {
 		return errors.New(
-			"access_token, email, channel_tag and source_device_id require type: pushbullet; access_token also supports ntfy and smseagle",
+			"access_token, email, channel_tag and source_device_id require type: pushbullet; access_token also supports ntfy, smseagle and matrix",
 		)
 	}
 	if dst.Type == "pushover" {
@@ -191,13 +217,13 @@ func (dst Destination) validate() error {
 	}
 	if dst.Type != "webhook" && dst.Type != "slack" && dst.Type != "discord" && dst.Type != "signl4" {
 		return errors.New(
-			"destination.type must be webhook, slack, discord, telegram, pushover, pushbullet, twilio, messagebird, gotify, ntfy, rocketchat, flock, fleep, ilert, signl4, alerta, dynatrace, prowl, kavenegar, smseagle or pagerduty; other providers are not implemented yet",
+			"destination.type must be webhook, slack, discord, telegram, pushover, pushbullet, twilio, messagebird, gotify, ntfy, rocketchat, flock, fleep, ilert, signl4, alerta, dynatrace, prowl, kavenegar, smseagle, pagerduty, opsgenie, msteams, matrix, command or smstools3; other providers are not implemented yet",
 		)
 	}
 	if dst.BotToken != "" || dst.ChatID != "" || dst.MessageThreadID != nil || dst.APIURL != "" ||
 		dst.RetriesOnLimit != nil {
 		return errors.New(
-			"bot_token, chat_id, message_thread_id and retries_on_limit require type: telegram; api_url requires telegram, pushover, pushbullet, twilio, messagebird, gotify, ilert, alerta, dynatrace, prowl, kavenegar, smseagle or pagerduty",
+			"bot_token, chat_id, message_thread_id and retries_on_limit require type: telegram; api_url requires telegram, pushover, pushbullet, twilio, messagebird, gotify, ilert, alerta, dynatrace, prowl, kavenegar, smseagle, pagerduty, opsgenie or matrix",
 		)
 	}
 	if dst.Type != "webhook" && dst.BearerToken != "" {

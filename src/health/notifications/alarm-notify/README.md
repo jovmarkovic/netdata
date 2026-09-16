@@ -2,7 +2,7 @@
 
 This standalone Go module routes JSON notifications to webhook, Slack, Discord, Telegram, Pushover, Pushbullet,
 Twilio, MessageBird, Gotify, ntfy, Rocket.Chat, Flock, Fleep, ilert, SIGNL4, Alerta, Dynatrace, Prowl, Kavenegar,
-SMSEagle and PagerDuty.
+SMSEagle, PagerDuty, Opsgenie, Microsoft Teams, Matrix, custom commands and SMS Server Tools 3.
 It has no imports from the existing `src/go` module. It is for local development and is not installed, packaged, or
 invoked by the Agent.
 The active notifier remains `../alarm-notify.sh.in` and its shell configuration.
@@ -10,7 +10,8 @@ The active notifier remains `../alarm-notify.sh.in` and its shell configuration.
 The current increments provide explicit delivery, role-based routing, modern Slack and native Discord webhooks,
 Telegram bot messages, Pushover/Pushbullet/Gotify/ntfy notifications, Twilio/MessageBird text messages and
 Rocket.Chat/Flock/Fleep webhooks, ilert/SIGNL4 incident events and recovery, Alerta/Dynatrace monitoring events,
-Prowl push notifications, Kavenegar SMS, SMSEagle SMS/MMS and voice calls, and PagerDuty v1/v2 incident events.
+Prowl push notifications, Kavenegar SMS, SMSEagle SMS/MMS and voice calls, PagerDuty v1/v2 incident events,
+Opsgenie alert creation and closure, Teams Workflows cards, Matrix room notices and foreground command delivery.
 [CAPABILITIES.md](CAPABILITIES.md) tracks the remaining Bash functionality. Configuration and code may change substantially
 before production adoption; final redesign follows the working functional baseline.
 
@@ -36,15 +37,24 @@ class Receiver(BaseHTTPRequestHandler):
     def do_POST(self):
         body = self.rfile.read(int(self.headers["Content-Length"])).decode()
         print(body, flush=True)
+        opsgenie = self.path.endswith("/v2/alerts") or (
+            "/v2/alerts/" in self.path and self.path.endswith("/close?identifierType=alias")
+        )
+        matrix = "/_matrix/client/v3/rooms/" in self.path and "/send/m.room.message/" in self.path
+        teams = self.path.split("?", 1)[0].endswith("/teams")
         status = 200
-        if self.path.endswith(("/events", "/v2/enqueue")):
+        if teams or opsgenie or self.path.endswith(("/events", "/v2/enqueue")):
             status = 202
         elif self.path.endswith(("/Messages.json", "/messages", "/signl4", "/alert", "/api/v2/events/ingest")):
             status = 201
         self.send_response(status)
         self.send_header("Content-Type", "application/xml" if self.path.endswith("/add") else "application/json")
         self.end_headers()
-        if self.path.endswith(("/api/v2/messages/sms", "/api/v2/messages/mms",
+        if matrix:
+            self.wfile.write(b'{"event_id":"$test-event"}')
+        elif opsgenie:
+            self.wfile.write(b'{"result":"Request will be processed","requestId":"test-request"}')
+        elif self.path.endswith(("/api/v2/messages/sms", "/api/v2/messages/mms",
                                "/api/v2/calls/ring", "/api/v2/calls/tts", "/api/v2/calls/tts_advanced")):
             recipients = json.loads(body)["to"]
             self.wfile.write(json.dumps([
@@ -71,6 +81,8 @@ class Receiver(BaseHTTPRequestHandler):
                 b'{"ok":true,"success":true,"status":1,"iden":"test-push","sid":"test-message",'
                 b'"id":"test-message","event":"message","result":{"message_id":1}}'
             )
+
+    do_PUT = do_POST
 
     def log_message(self, *args):
         pass  # Avoid logging credential-bearing request paths.
@@ -124,6 +136,11 @@ Prowl requires `type: prowl` and `api_key`; Kavenegar requires `type: kavenegar`
 Both accept an optional `api_url`. SMSEagle requires `type: smseagle`, `api_url`, `access_token` and a `recipients`
 array, with optional message/call settings described below.
 PagerDuty requires `type: pagerduty` and `integration_key`; `api_version` and `api_url` are optional.
+Opsgenie requires `type: opsgenie` and `api_key`, with an optional `api_url`.
+Teams requires `type: msteams` and `url`, with optional `icons`/`colors` maps.
+Matrix requires `type: matrix`, `api_url`, `access_token` and `room_id`.
+Custom commands require `type: command` and `executable`, with optional `args` and `env`.
+SMS Server Tools 3 requires `type: smstools3`, `executable` and `to`, with optional `env`.
 Destination names are nonsecret identifiers.
 The URL must be an absolute HTTP or HTTPS URL with a host and without embedded user/password information
 or a fragment. HTTP allows deliberate local or self-hosted delivery; HTTPS verifies certificates. Proxy selection
@@ -131,7 +148,7 @@ follows Go's HTTP_PROXY/HTTPS_PROXY/NO_PROXY rules.
 
 URLs, bearer tokens, Telegram bot tokens, Pushover app/user keys, Pushbullet access tokens, Twilio account credentials,
 MessageBird access keys, Gotify app tokens, ntfy credentials, ilert/PagerDuty integration keys, Alerta/Prowl/Kavenegar
-API keys, Dynatrace API tokens and SMSEagle access tokens accept literal strings or a whole `${env:VARIABLE}` or
+and Opsgenie API keys, Dynatrace API tokens, SMSEagle/Matrix access tokens and command environment values accept literal strings or a whole `${env:VARIABLE}` or
 `${file:/absolute/path}` reference.
 On Windows the file operand must be an absolute Windows path. File reads use native Go I/O under the invoking user's
 identity. Resolved values have surrounding whitespace trimmed and must be nonempty. Interpolation, command execution,
@@ -175,9 +192,9 @@ ntfy uses UTF-8 `text/plain`;
 the other providers use `application/json`.
 Generic webhooks may add `Authorization: Bearer ...`.
 Generic webhooks accept HTTP 200–299; Slack, Discord, Flock and Fleep accept HTTP 200. ilert accepts HTTP 202;
-SIGNL4 accepts HTTP 200, 201 or 202. These providers make one attempt and
+SIGNL4 accepts HTTP 200, 201 or 202. Teams Workflows accepts HTTP 200–299. These providers make one attempt and
 close response bodies without buffering or interpreting them. Telegram, Pushover, Pushbullet, Twilio, MessageBird,
-Gotify, ntfy, Rocket.Chat, Alerta, Dynatrace, Kavenegar, SMSEagle and PagerDuty check bounded JSON acknowledgments;
+Gotify, ntfy, Rocket.Chat, Alerta, Dynatrace, Kavenegar, SMSEagle, PagerDuty, Opsgenie and Matrix check bounded JSON acknowledgments;
 Prowl checks a bounded XML acknowledgment. Telegram can retry rate limits as described below.
 Redirects are never followed.
 Errors do not echo config/input values, secret contents, response text, or endpoint URLs.
@@ -1257,9 +1274,309 @@ Save as `pagerduty-local.yaml` and run:
 Repeat with WARNING, CRITICAL and CLEAR events, keeping `incident_id` unchanged. The printed requests show matching
 keys across all three statuses. The local receiver checks the wire contract; it does not simulate PagerDuty incidents.
 
+## Opsgenie alerts
+
+Use an Opsgenie **API Integration** that permits alert creation and closure, with responders configured in Opsgenie.
+This provider uses the [Alert API v2](https://docs.opsgenie.com/docs/alert-api), an approved change from Bash's
+Netdata-specific webhook. The integration key and service-side rules from that webhook are not automatically adapted.
+Opsgenie remains supported in this migration; its announced shutdown is
+[April 5, 2027](https://www.atlassian.com/licensing/opsgenie).
+
+```yaml
+version: 1
+destinations:
+  opsgenie_us:
+    type: opsgenie
+    api_key: ${env:NOTIFY_OPSGENIE_US_KEY}
+  opsgenie_eu:
+    type: opsgenie
+    api_url: https://api.eu.opsgenie.com
+    api_key: ${env:NOTIFY_OPSGENIE_EU_KEY}
+routing:
+  roles:
+    opsgenie_ops: [opsgenie_us, opsgenie_eu]
+```
+
+Configure one named destination per API integration. `api_key` and `api_url` accept literal, environment or file
+references. The key must be nonempty printable ASCII without whitespace and is sent in `Authorization: GenieKey ...`.
+`api_url` defaults to `https://api.opsgenie.com`; EU accounts use `https://api.eu.opsgenie.com`. Both official hosts
+require HTTPS. Custom bases may include a proxy prefix or use HTTP for deliberate local delivery.
+
+WARNING sends a create request with priority P3, CRITICAL sends one with P1, and CLEAR sends a close request.
+The alias is the lowercase hexadecimal SHA-256 digest of the caller's opaque `incident_id`. Keep that ID stable
+through WARNING, CRITICAL and CLEAR; changing timestamps or text does not change the alias. Separate incident IDs
+must identify separate incidents. Aliases can deduplicate across integrations in the same Opsgenie account;
+different destination names or keys do not create separate incident identities.
+
+Creation uses `/v2/alerts`; closure uses `/v2/alerts/<alias>/close?identifierType=alias`. The integration's permissions
+and rules determine final alert handling. The notifier neither creates integration settings nor looks up alert IDs.
+
+Create requests contain a node/status/summary title, the common plain-text alert content with navigation, node as
+`source`, alert name as `entity`, `user: Netdata`, and the complete native Event JSON as the string `details.event`.
+Close requests contain node, user, and a recovery note with the plain-text content and complete Event JSON.
+Unknown values remain null and zero values remain zero in that JSON.
+
+Titles are capped at 130 Unicode characters with `...`, preserving the full summary in description/details.
+Other limits fail the destination before sending without dropping content: source 100 characters, entity 512,
+description 15000, total details keys/values 8000, and recovery note 25000. Details/note counts include the serialized
+Event JSON and its escapes. The entity, description and details limits apply to creation; closure uses the note limit.
+
+Success requires HTTP 202 and a bounded JSON acknowledgment with `result: Request will be processed` and a nonempty
+`requestId`. It confirms asynchronous API acceptance, not completed creation or closure; it does not establish that
+an alias matched an existing alert. There are no retries, redirects or request-status polling. Replies are bounded
+to 256 KiB and the invocation deadline. Existing routing, any-success results and safe diagnostics apply.
+
+### Local Opsgenie exercise
+
+Use the receiver above with a synthetic key:
+
+```yaml
+version: 1
+destinations:
+  opsgenie:
+    type: opsgenie
+    api_url: http://127.0.0.1:18080
+    api_key: synthetic-opsgenie-key
+routing:
+  roles:
+    opsgenie_ops: [opsgenie]
+```
+
+Save as `opsgenie-local.yaml` and run:
+
+```sh
+/tmp/alarm-notify send --config opsgenie-local.yaml --role opsgenie_ops < examples/event.json
+```
+
+Repeat with WARNING, CRITICAL and CLEAR while retaining the same `incident_id`. The receiver prints the create and
+close bodies and returns synthetic acknowledgments; it does not create actual Opsgenie alerts.
+
+## Microsoft Teams Workflows
+
+Use a Workflows webhook with the **When a Teams webhook request is received** trigger, set to **Anyone**, and an
+appropriate posting action for a MessageCard. The workflow selects the chat/channel. Keep the complete callback URL
+secret; this mode must not send an Authorization header. Tenant-authenticated triggers and OAuth token acquisition
+are not implemented. Follow Microsoft's [Workflows setup](https://learn.microsoft.com/en-us/connectors/teams/#when-a-teams-webhook-request-is-received).
+Assign a co-owner so the workflow can remain maintained when its owner changes.
+
+This is an approved replacement for Bash's retired Office 365 Connector setup. Configure a complete URL for each
+named destination; multiple destinations preserve channel fan-out without `CHANNEL` substitution.
+
+```yaml
+version: 1
+destinations:
+  teams:
+    type: msteams
+    url: ${env:NOTIFY_TEAMS_WORKFLOW_URL}
+    icons:
+      warning: '⚠️'
+      critical: '🔥'
+      clear: '💚'
+    colors:
+      warning: 'FFA500'
+      critical: 'D93F3C'
+      clear: '65A677'
+routing:
+  roles:
+    teams_ops: [teams]
+```
+
+`url` accepts literal, environment or file references. `icons` and `colors` are optional maps using only `warning`,
+`critical` and `clear`; omitted entries use the defaults shown above. Icons are literal text without control characters;
+colors are six hexadecimal digits without `#`. An explicit empty string suppresses that status's icon or color.
+
+The MessageCard carries the status/title, common native alert facts, timestamp, summary and information. The title
+preserves the node name and configured icon as plain text, following the
+[Teams formatting rules](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/cards/cards-format).
+Event text in the body is escaped as Markdown. Navigation uses a clickable inline link because Workflows does not
+render MessageCard buttons. See [Microsoft's migration notice](https://devblogs.microsoft.com/microsoft365dev/retirement-of-office-365-connectors-within-microsoft-teams/).
+
+Cards exceeding 28 KiB of serialized JSON fail before sending, without truncation. Workflow processing can impose
+additional limits. Any HTTP 2xx response means the webhook accepted the request; it does not confirm that the later
+workflow action posted successfully. Response bodies are closed without reading. There are no retries or redirects.
+
+### Local Teams exercise
+
+Use the receiver above:
+
+```yaml
+version: 1
+destinations:
+  teams:
+    type: msteams
+    url: http://127.0.0.1:18080/teams
+routing:
+  roles:
+    teams_ops: [teams]
+```
+
+Save as `teams-local.yaml` and run:
+
+```sh
+/tmp/alarm-notify send --config teams-local.yaml --role teams_ops < examples/event.json
+```
+
+## Matrix room notices
+
+Use a Matrix account already joined to an **unencrypted room**, with permission to send messages. Supply its access
+token and the full room ID from your client, not a room alias. The provider uses the
+[Client-Server API](https://spec.matrix.org/latest/client-server-api/#put_matrixclientv3roomsroomidsendeventtypetxnid).
+Like Bash, it sends unencrypted `m.notice` events; it does not log in, join rooms or perform end-to-end encryption.
+
+```yaml
+version: 1
+destinations:
+  matrix:
+    type: matrix
+    api_url: https://matrix.example.org
+    access_token: ${env:NOTIFY_MATRIX_ACCESS_TOKEN}
+    room_id: '!room:example.org'
+routing:
+  roles:
+    matrix_ops: [matrix]
+```
+
+`api_url` is the homeserver's client API base and may contain a reverse-proxy prefix. It accepts literal, environment
+or file references, requires a nonempty HTTP(S) URL and rejects query strings, fragments and embedded credentials.
+The public `matrix.org` and `matrix-client.matrix.org` hosts require HTTPS; custom bases permit deliberate local HTTP.
+`access_token` also accepts literal/environment/file references and must resolve to printable ASCII without whitespace.
+
+Use one named destination per room; route a role to several destinations for fan-out. `room_id` is a literal, opaque,
+case-sensitive `!`-prefixed ID without whitespace or controls. Both older IDs containing a server name and newer IDs
+without one are accepted. Path-sensitive characters are escaped when building the request URL.
+
+Each send uses `PUT /_matrix/client/v3/rooms/<room>/send/m.room.message/<transaction>` with a fresh random transaction
+ID and Bearer authentication. Repeating an invocation creates another notice, including when the incident ID and event
+are unchanged. WARNING/CRITICAL/CLEAR retain their status icons; notices contain plain text plus escaped HTML with the
+same native facts and navigation. Client notification settings may suppress `m.notice` push notifications.
+
+Success requires HTTP 200 and a bounded JSON `event_id` acknowledgment. Replies are limited to 256 KiB and the
+invocation deadline. Homeserver errors, including permission and complete-event size limits, fail the destination
+without logging response content. The notifier does not truncate content, retry requests or follow redirects.
+
+### Local Matrix exercise
+
+The receiver above accepts PUT and returns a synthetic event ID:
+
+```yaml
+version: 1
+destinations:
+  matrix:
+    type: matrix
+    api_url: http://127.0.0.1:18080
+    access_token: synthetic-token
+    room_id: '!room:example.org'
+routing:
+  roles:
+    matrix_ops: [matrix]
+```
+
+Save as `matrix-local.yaml` and run:
+
+```sh
+/tmp/alarm-notify send --config matrix-local.yaml --role matrix_ops < examples/event.json
+```
+
+The local receiver verifies request shape; it does not simulate Matrix membership, encryption or client rendering.
+
+## Custom commands
+
+`command` destinations execute a configured program on Linux or macOS. Use an absolute executable path and an optional
+list of literal arguments. The program receives one native JSON event followed by a newline on stdin. The notifier
+does not start a shell, interpolate arguments, source Bash functions or export Bash alert variables. Executable scripts
+with a valid interpreter line work like other programs.
+
+```yaml
+version: 1
+destinations:
+  custom:
+    type: command
+    executable: /opt/notifications/send-alert
+    args: [--recipient, ops]
+    env:
+      NOTIFY_TOKEN: ${env:NOTIFY_CUSTOM_TOKEN}
+routing:
+  roles:
+    custom_ops: [custom]
+```
+
+The only default environment entry is `PATH=/usr/local/bin:/usr/bin:/bin`. The optional `env` map extends or replaces
+these defaults; nothing else is inherited, including HOME, locale, proxy settings or credentials. Environment names
+use letters, digits and underscores and cannot start with a digit. Values accept literals and whole environment/file
+secret references; referenced values use the existing trimming/nonempty rules. Empty literal values are allowed.
+NUL bytes are rejected. References are resolved only for selected destinations. Arguments are always literal, including
+`${...}`, spaces and shell metacharacters. The executable is a literal path; it is never looked up through PATH.
+The child inherits the notifier's working directory and operating-system identity; this is not a privilege boundary.
+
+Commands **must stay in the foreground, wait for their children and keep them in the same process group**. Daemonizing,
+detaching or handing work to a persistent background process is unsupported. On cancellation or timeout, the notifier
+sends SIGKILL to the running command's process group and waits for the direct child and its stdin-copy cleanup before
+exiting. Process groups are cancellation support, not a sandbox for arbitrary programs. An additional cleanup allowance
+of up to 250 ms bounds an inherited stdin pipe if a command violates the foreground contract by exiting early.
+
+Exit status zero means success; any other exit status or launch failure fails that destination. Output goes directly
+to the null device, with no buffering or logging. Errors report launch/exit/cancellation categories without including
+the executable, arguments, environment or child output. Commands are not retried. Arguments can still be visible in
+the operating system's process listing; use the event on stdin or explicit environment for sensitive input.
+
+`validate` checks the configuration without inspecting the executable, resolving secrets or running programs.
+Windows and other platforms can validate configurations, but selected command delivery currently returns an explicit
+unsupported-platform error. Native Windows process management remains a later increment.
+
+### Local command exercise
+
+This example appends the received JSON to a local file using `tee` (adjust its absolute path if needed):
+
+```yaml
+version: 1
+destinations:
+  custom:
+    type: command
+    executable: /usr/bin/tee
+    args: [-a, /tmp/netdata-notify-events.jsonl]
+```
+
+Save as `command-local.yaml`, then run:
+
+```sh
+/tmp/alarm-notify validate --config command-local.yaml
+/tmp/alarm-notify send --config command-local.yaml --destination custom < examples/event.json
+cat /tmp/netdata-notify-events.jsonl
+```
+
+## SMS Server Tools 3
+
+Install and configure [SMS Server Tools 3](https://smstools3.kekekasvi.com/index.php?p=run), including its `sendsms`
+program, modem and `smsd` service. The invoking user needs the spool-directory permissions required by that installation.
+This provider uses the same foreground runner and platform support as custom commands.
+
+```yaml
+version: 1
+destinations:
+  sms:
+    type: smstools3
+    executable: /usr/local/bin/sendsms
+    to: '15005550009'
+    env:
+      LANG: C.UTF-8
+routing:
+  roles:
+    sms_ops: [sms]
+```
+
+Supply one phone number (digits with an optional leading `+`) per named destination. Route to multiple destinations
+for multiple recipients. `executable`, `to` and optional `env` are the only provider settings; arbitrary `args` are
+reserved for custom commands. Choose a locale supported by the gateway host when configuring `env`.
+
+Each delivery runs `sendsms <phone> <message>` as two literal arguments with empty stdin. The message uses Bash's
+status wording (needs attention, is critical, recovered), node, optional chart and summary, with the current value and
+units outside recovery. Summary underscores become spaces, and the text is truncated to 160 Unicode characters.
+Recovery durations remain pending with richer shared event facts. The gateway controls encoding and SMS segmentation;
+160 characters do not necessarily fit in one SMS. An exit status of zero reports tool acceptance, not handset delivery.
+
 ## Event document
 
-The webhook receives the typed event as JSON. `version` must be `1`. Required fields are `incident_id`, `timestamp`
+The webhook and custom command receive the typed event as JSON. `version` must be `1`. Required fields are `incident_id`, `timestamp`
 (RFC 3339), `node`, `alert`, `status`, and `summary`. `incident_id` is an opaque stable incident identifier supplied by
 the caller. Current statuses are `WARNING`, `CRITICAL`, and `CLEAR`.
 
@@ -1283,7 +1600,7 @@ go test -race -count=1 ./...
 go vet ./...
 ```
 
-Tests use tables keyed by case name and local HTTP receivers; no provider account or credentials are needed.
+Tests use tables keyed by case name, local HTTP receivers and owned helper processes; no provider account or credentials are needed.
 CI runs this module's tests on Linux. To check Windows compilation locally, use:
 
 ```sh
