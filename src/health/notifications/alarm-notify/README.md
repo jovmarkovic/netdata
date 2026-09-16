@@ -2,7 +2,8 @@
 
 This standalone Go module routes JSON notifications to webhook, Slack, Discord, Telegram, Pushover, Pushbullet,
 Twilio, MessageBird, Gotify, ntfy, Rocket.Chat, Flock, Fleep, ilert, SIGNL4, Alerta, Dynatrace, Prowl, Kavenegar,
-SMSEagle, PagerDuty, Opsgenie, Microsoft Teams, Matrix, custom commands, SMS Server Tools 3, syslog, AWS SNS and Kafka HTTP bridges.
+SMSEagle, PagerDuty, Opsgenie, Microsoft Teams, Matrix, custom commands, SMS Server Tools 3, syslog, AWS SNS, Kafka HTTP
+bridges, email through sendmail and IRC through nc.
 It has no imports from the existing `src/go` module. It is for local development and is not installed, packaged, or
 invoked by the Agent.
 The active notifier remains `../alarm-notify.sh.in` and its shell configuration.
@@ -12,7 +13,7 @@ Telegram bot messages, Pushover/Pushbullet/Gotify/ntfy notifications, Twilio/Mes
 Rocket.Chat/Flock/Fleep webhooks, ilert/SIGNL4 incident events and recovery, Alerta/Dynatrace monitoring events,
 Prowl push notifications, Kavenegar SMS, SMSEagle SMS/MMS and voice calls, PagerDuty v1/v2 incident events,
 Opsgenie alert creation and closure, Teams Workflows cards, Matrix room notices, foreground command delivery, syslog,
-AWS SNS and Kafka HTTP bridges.
+AWS SNS, Kafka HTTP bridges, email through sendmail and IRC through nc.
 [CAPABILITIES.md](CAPABILITIES.md) tracks the remaining Bash functionality. Configuration and code may change substantially
 before production adoption; final redesign follows the working functional baseline.
 
@@ -150,6 +151,8 @@ Syslog requires `type: syslog` and `executable`, with optional facility, level, 
 AWS SNS requires `type: awssns`, `executable`, `target_arn` and `credential_source`, with mode-specific `env` and an optional
 `message_template`.
 Kafka HTTP bridges require `type: kafka`, a full `url` and literal `sender_ip`.
+Email requires `type: email`, `executable` and a `recipients` array; `from`, `plain_text_only`, `threading` and `env` are optional.
+IRC requires `type: irc`, `executable`, `host`, `nickname`, `realname` and `channel`; `port` and `env` are optional.
 Destination names are nonsecret identifiers.
 The URL must be an absolute HTTP or HTTPS URL with a host and without embedded user/password information
 or a fragment. HTTP allows deliberate local or self-hosted delivery; HTTPS verifies certificates. Proxy selection
@@ -1488,6 +1491,136 @@ Save as `matrix-local.yaml` and run:
 
 The local receiver verifies request shape; it does not simulate Matrix membership, encryption or client rendering.
 
+## Email through sendmail
+
+`email` destinations submit MIME messages to an explicitly configured sendmail-compatible executable on Linux or
+macOS. Configure the MTA or submission client separately, including its SMTP server, authentication and TLS settings.
+The notifier does not open SMTP connections or discover a mail executable.
+
+```yaml
+version: 1
+destinations:
+  mail_ops:
+    type: email
+    executable: /usr/sbin/sendmail
+    recipients:
+      - Operations <ops@example.com>
+      - root
+    from: Netdata Alerts <netdata@example.com>
+    plain_text_only: false
+    threading: true
+routing:
+  roles:
+    sysadmin: [mail_ops]
+```
+
+Save as `email.yaml`. After configuring the chosen MTA, validate and send with:
+
+```sh
+/tmp/alarm-notify validate --config email.yaml
+/tmp/alarm-notify send --config email.yaml --role sysadmin < examples/event.json
+```
+
+Each recipient entry identifies one mailbox (optionally with a display name) or a local alias such as `root`.
+Local aliases use letters, digits, underscores and, after the first character, dots, plus signs or hyphens. Addresses
+and `from` are literal configuration, not secret references. Control characters, address lists, command/file targets,
+and addresses beginning with an option are rejected. Quoted mailbox local parts and UTF-8 display names are supported;
+non-ASCII mailbox addresses themselves require an MTA with internationalized address support. Recipients share a
+visible `To` header. Use separate destinations when recipients should not see each other's addresses.
+
+The optional `from` sets both the `From` header (including any display name) and the envelope sender through `-f`.
+Omitting it delegates sender identity and the `From` header to the configured MTA. Local aliases also work as senders;
+the MTA must qualify them into complete addresses for remote delivery. The notifier supplies submission-time `Date`
+and a fresh `Message-ID`; the message body separately retains the event timestamp. The MTA may rewrite headers or
+restrict sender identities according to its configuration.
+
+The default message is UTF-8 `multipart/alternative`, with quoted-printable plain text followed by escaped HTML.
+`plain_text_only: true` selects a single `text/plain` body. There is no charset override: UTF-8 correctly describes the
+bytes, replacing Bash's label-only charset setting. Both modes include the native alert facts, incident ID, supplied
+`duration`/`non_clear_duration` in seconds, and the optional event URL. Unknown durations are omitted; explicit zero
+is retained. HTML includes a clickable navigation link. `X-Netdata-Severity`, `X-Netdata-Alert-Name`, `X-Netdata-Chart`
+and `X-Netdata-Host` headers retain the available metadata; text headers use MIME encoded words.
+
+Threading defaults on. `In-Reply-To` and `References` use a stable identifier derived from node, chart and alert,
+retaining Bash's grouping across status changes and incidents. `Message-ID` stays unique per submission.
+`threading: false` omits both grouping headers. These are best-effort grouping hints, not a stored conversation tree;
+mail clients decide whether to group messages and may also consider subjects and recipients.
+
+The executable receives `-t -i`, optional `-f <sender>`, and the message on stdin. `-t` takes recipients from headers;
+`-i` prevents a dot-only body line from terminating input on compatible MTAs. The same explicit environment,
+foreground cleanup, timeout and safe diagnostics as [custom commands](#custom-commands) apply. The command runner
+supplies only its default PATH; configure `env` explicitly when the mail client needs HOME, locale, proxy or other
+environment settings. Environment values accept whole environment/file secret references. For example, a
+submission client using a user configuration file may need `env: {HOME: /var/lib/netdata}`. No shell is involved and
+no capability probe or retry is performed. Windows validates configurations but command execution remains pending.
+
+Exit zero means the local submission program accepted the message; it does not prove remote inbox delivery or
+individual recipient acceptance. Nonzero exit, launch failure or timeout fails the destination, and normal any-success
+routing applies. Child output is discarded and not included in diagnostics.
+
+This increment uses the native Event content. Classification, source/edit/expression details, role headers,
+active-alert counts/listings, cloud-specific links/artwork and richer presentation remain explicitly tracked for
+later implementation or a separate removal decision in [CAPABILITIES.md](CAPABILITIES.md). Production Bash is unchanged.
+
+## IRC through nc
+
+`irc` destinations use an explicitly configured nc-compatible executable on Linux or macOS. Each named destination
+opens one connection and sends to one channel. Use role routing for multiple channels; each connection needs a
+nickname the server will accept. The notifier does not discover nc or fall back to another nickname.
+
+```yaml
+version: 1
+destinations:
+  irc_ops:
+    type: irc
+    executable: /usr/bin/nc
+    host: irc.example.com
+    port: 6667
+    nickname: netdata-alerts
+    realname: Netdata alerts
+    channel: '#operations'
+routing:
+  roles:
+    sysadmin: [irc_ops]
+```
+
+Save as `irc.yaml`, adjust the executable and server settings, then validate and send:
+
+```sh
+/tmp/alarm-notify validate --config irc.yaml
+/tmp/alarm-notify send --config irc.yaml --role sysadmin < examples/event.json
+```
+
+The executable receives only the literal host and decimal port as separate arguments. The default port is `6667`;
+transport remains plaintext, matching the current Bash default. Choosing another port does not enable TLS. This
+increment supports guest access to channels without server passwords, SASL, channel keys or service authentication.
+Configure a hostname or an unbracketed IPv4/IPv6 address, a protocol-safe ASCII nickname and a nonempty realname.
+IPv6 zones such as `%eth0` or `%2` are supported; zone text must also pass the host character restrictions.
+A channel starts with `#`, `&`, `+` or `!`, has at most 50 UTF-8 bytes and contains no spaces, controls or commas.
+These settings are literal; only optional `env` values accept secret references. Arbitrary nc arguments are not exposed.
+
+The session sends `NICK`/`USER`, answers registration `PING` challenges, waits for the server's welcome, then waits
+for its own channel join. Notifications contain the native summary/info, node, alert, status transition, chart,
+context, values, timestamp and optional URL. Newlines become comma-space, other controls are visibly escaped and
+backslashes stay literal. Long messages split at UTF-8 boundaries, reserving room for the sender prefix reported
+by the server so forwarded lines fit the 512-byte IRC limit. There is no automatic retry or nickname fallback.
+
+Each message chunk is followed by a synchronization `PING`. A matching `PONG` permits the next chunk or `QUIT`;
+completion also requires connection closure and a zero process exit. This confirms the exchange progressed without
+an observed rejection, not that another client received or read the alert. Numeric errors `400`–`599` fail delivery,
+except `422` (no MOTD). Registration/join failures, early EOF, malformed or oversized protocol frames, process errors
+and timeout also fail. If both the protocol and the process fail, diagnostics retain both errors, including the
+process exit status when available. An ordinary server `ERROR` closing the connection after our `QUIT` is expected.
+
+The invocation deadline covers the whole exchange. Increase `--timeout` for servers with slow registration or flood
+limits. Explicit environment, foreground process ownership and platform restrictions follow
+[custom commands](#custom-commands). Protocol output is parsed with bounded buffers; raw replies and child stderr
+are never logged. Cancellation closes the owned protocol pipes and waits for cleanup; inherited pipes from a command
+that exits early have the same 250 ms cleanup allowance. No external IRC network is needed by the test suite.
+
+These behaviors deliberately correct Bash's blind send-and-quit sequence, unhandled PING challenges, unchecked nc
+exit status, backslash interpretation and unbounded message lines. Production Bash and its configuration are unchanged.
+
 ## Custom commands
 
 `command` destinations execute a configured program on Linux or macOS. Use an absolute executable path and an optional
@@ -1626,7 +1759,8 @@ backslashes are preserved.
 The notifier passes one message argument; logger controls any wire-format limits or truncation.
 
 Omit `host` to use local logging. Remote `host` is a literal hostname or unbracketed IPv4/IPv6 address; use the separate
-integer `port` field (1–65535) when needed. An omitted port leaves the logger's default in effect. Remote logging retains
+integer `port` field (1–65535) when needed. IPv6 zones such as `%eth0` or `%2` are supported and must pass the host
+character restrictions. An omitted port leaves the logger's default in effect. Remote logging retains
 the existing plaintext behavior; no TLS transport is added in this increment.
 
 Optional `args` preserves Bash's `logger_options` capability as a list of literal, complete logger options. These
