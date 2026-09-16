@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/netdata/netdata/src/health/notifications/alarm-notify/internal/commandexec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -228,7 +229,7 @@ func TestRunCommandSelectionAndFailures(t *testing.T) {
 				"validate never executes or resolves": {validate: true, secret: "${env:NOTIFIER_TEST_MISSING_COMMAND_SECRET}", message: "configuration is valid"},
 				"unselected never resolves":           {selection: "silent", secret: "${env:NOTIFIER_TEST_MISSING_COMMAND_SECRET}"},
 				"any success and deduplication":       {selection: "mixed", calls: 1, message: "1 succeeded, 1 failed"},
-				"all failures":                        {selection: "mixed", mode: "fail", calls: 1, code: 1, message: "all selected destinations failed"},
+				"all failures":                        {selection: "mixed", mode: "fail", calls: 1, code: 1, message: "all attempted destinations failed"},
 				"missing executable":                  {missing: true, code: 1, message: "could not start command"},
 				"missing secret":                      {secret: "${env:NOTIFIER_TEST_MISSING_COMMAND_SECRET}", code: 1, message: "not set"},
 				"resolved NUL":                        {secret: "FILE_NUL", code: 1, message: "NUL"},
@@ -377,8 +378,8 @@ func TestRunCommandCancellation(t *testing.T) {
 
 func TestClosedCommandAdmission(t *testing.T) {
 	dst, capture := testCommandDestination(t, "record")
-	processes := &commandProcesses{}
-	processes.closeAndWait()
+	processes := &commandexec.Runner{}
+	processes.CloseAndWait()
 	require.ErrorIs(t, sendCommand(context.Background(), processes, dst, expectedEvent()), context.Canceled)
 	_, err := os.Stat(capture)
 	assert.ErrorIs(t, err, os.ErrNotExist)

@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	notifyevent "github.com/netdata/netdata/src/health/notifications/alarm-notify/internal/event"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -162,7 +163,7 @@ func TestRunIncidentDelivery(t *testing.T) {
 						assert.Contains(t, stderr.String(), `destination "`+provider+`" sent`)
 					}
 					if failed && test.explicit {
-						assert.Contains(t, stderr.String(), "all selected destinations failed")
+						assert.Contains(t, stderr.String(), "all attempted destinations failed")
 					}
 					selected := []string{"ilert", "signl4", "archive"}
 					if test.explicit {
@@ -276,7 +277,7 @@ func TestRunIncidentLifecycle(t *testing.T) {
 			args := []string{"send", "--config", writeConfig(t, string(config)), "--role", "ops"}
 			// Separate invocations change all presentation facts; only incident_id supplies correlation.
 			for step, status := range []string{"WARNING", "CRITICAL", "CLEAR"} {
-				event := Event{
+				event := notifyevent.Event{
 					Version:    1,
 					IncidentID: test.id,
 					Timestamp:  expectedEvent().Timestamp.Add(time.Duration(step) * time.Minute),

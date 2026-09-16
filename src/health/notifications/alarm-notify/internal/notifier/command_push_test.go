@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/netdata/netdata/src/health/notifications/alarm-notify/internal/httpclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -39,9 +40,9 @@ func TestSendPush(t *testing.T) {
 				"resolved URL credentials": {secret: "url-credentials", err: "user information"},
 				"resolved URL fragment":    {secret: "url-fragment", err: "fragment"},
 				"no redirect":              {status: 307, err: "HTTP 307"}, "no rate limit retry": {status: 429, err: "HTTP 429"},
-				"no server retry": {status: 503, err: "HTTP 503"}, "all fail": {status: 403, explicit: true, err: "all selected destinations failed"},
+				"no server retry": {status: 503, err: "HTTP 503"}, "all fail": {status: 403, explicit: true, err: "all attempted destinations failed"},
 				"missing ack": {body: `{}`, err: "invalid"}, "bad ack": {body: "synthetic-private-value", err: "invalid"},
-				"large ack": {body: strings.Repeat(" ", notificationResponseLimit+1), err: "256 KiB"},
+				"large ack": {body: strings.Repeat(" ", httpclient.ResponseLimit+1), err: "256 KiB"},
 				"transport": {drop: true, err: "transport failed"}, "arbitrary content": {content: true},
 			} {
 				t.Run(name, func(t *testing.T) {

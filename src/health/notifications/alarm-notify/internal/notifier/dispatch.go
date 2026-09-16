@@ -6,27 +6,36 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/netdata/netdata/src/health/notifications/alarm-notify/internal/commandexec"
+	notifyevent "github.com/netdata/netdata/src/health/notifications/alarm-notify/internal/event"
 )
 
 type deliveryResult struct {
 	destination string
+	skipReason  string
 	err         error
 }
 
 func dispatch(
 	ctx context.Context,
-	processes *commandProcesses,
+	processes *commandexec.Runner,
 	cfg Config,
 	destinations []string,
-	event Event,
+	event notifyevent.Event,
 	timeout time.Duration,
 	report func(deliveryResult),
 ) error {
-	succeeded := 0
+	succeeded, attempted := 0, 0
 	for _, name := range destinations {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if reason := cfg.Routing.Policies[name].skipReason(event.Status); reason != "" {
+			report(deliveryResult{destination: name, skipReason: reason})
+			continue
+		}
+		attempted++
 		dst := cfg.Destinations[name]
 		var err error
 		switch dst.Type {
@@ -101,8 +110,8 @@ func dispatch(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if len(destinations) > 0 && succeeded == 0 {
-		return errors.New("all selected destinations failed")
+	if attempted > 0 && succeeded == 0 {
+		return errors.New("all attempted destinations failed")
 	}
 	return nil
 }

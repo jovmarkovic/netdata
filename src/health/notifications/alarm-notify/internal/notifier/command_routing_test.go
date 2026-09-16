@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	notifyevent "github.com/netdata/netdata/src/health/notifications/alarm-notify/internal/event"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -91,7 +92,7 @@ func TestRunRouting(t *testing.T) {
 				"HTTP 401",
 				"HTTP 503",
 				"0 succeeded, 2 failed",
-				"all selected destinations failed",
+				"all attempted destinations failed",
 			},
 		},
 		"missing secret does not stop others": {
@@ -135,14 +136,14 @@ func TestRunRouting(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			type received struct {
 				destination string
-				event       Event
+				event       notifyevent.Event
 				err         error
 			}
 			requests := make(chan received, 16)
 			server := httptest.NewServer(
 				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					target := strings.TrimPrefix(r.URL.Path, "/")
-					var event Event
+					var event notifyevent.Event
 					err := json.NewDecoder(r.Body).Decode(&event)
 					requests <- received{target, event, err}
 					status := test.statuses[target]
@@ -198,8 +199,11 @@ func TestRunFanoutCancellation(t *testing.T) {
 	for name, test := range map[string]struct {
 		provider string
 		cancel   bool
+		policies bool
 	}{
-		"msteams cancel": {provider: "msteams", cancel: true}, "msteams deadline": {provider: "msteams"},
+		"filtered webhook cancel":   {provider: "webhook", cancel: true, policies: true},
+		"filtered webhook deadline": {provider: "webhook", policies: true},
+		"msteams cancel":            {provider: "msteams", cancel: true}, "msteams deadline": {provider: "msteams"},
 		"matrix cancel": {provider: "matrix", cancel: true}, "matrix deadline": {provider: "matrix"},
 		"opsgenie create deadline": {provider: "opsgenie"}, "opsgenie create cancel": {provider: "opsgenie", cancel: true},
 		"opsgenie close deadline": {provider: "opsgenie-close"}, "opsgenie close cancel": {provider: "opsgenie-close", cancel: true},
@@ -316,6 +320,9 @@ routing:
   roles:
     sysadmin: [first, blocked, after]
 `, server.URL+"/first", blocked, server.URL+"/after")
+			if test.policies {
+				config += "  policies:\n    first: {nowarn: true}\n    after: {nowarn: true}\n"
+			}
 			path := writeConfig(t, config)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -348,8 +355,15 @@ routing:
 				t.Fatal("command did not stop")
 			}
 			assert.Empty(t, stdout.String())
-			assert.Contains(t, stderr.String(), `destination "first" sent`)
-			assert.Contains(t, stderr.String(), "1 succeeded")
+			if test.policies {
+				assert.Contains(t, stderr.String(), `destination "first" skipped: nowarn`)
+				assert.Contains(t, stderr.String(), "0 succeeded")
+				assert.Contains(t, stderr.String(), "1 skipped")
+				assert.NotContains(t, stderr.String(), `destination "after"`)
+			} else {
+				assert.Contains(t, stderr.String(), `destination "first" sent`)
+				assert.Contains(t, stderr.String(), "1 succeeded")
+			}
 			if test.cancel {
 				assert.Contains(t, stderr.String(), "notification canceled")
 			} else {
@@ -405,7 +419,7 @@ func TestRunQuotesDestinationNames(t *testing.T) {
 			assert.Equal(
 				t,
 				fmt.Sprintf(
-					"alarm-notify: destination %q sent\nalarm-notify: delivery summary: 1 succeeded, 0 failed\n",
+					"alarm-notify: destination %q sent\nalarm-notify: delivery summary: 1 succeeded, 0 failed, 0 skipped\n",
 					destination,
 				),
 				stderr.String(),
