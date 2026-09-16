@@ -25,49 +25,58 @@ type Routing struct {
 }
 
 type Destination struct {
-	Executable      string            `yaml:"executable,omitempty"`
-	Args            []string          `yaml:"args,omitempty"`
-	Env             map[string]string `yaml:"env,omitempty"`
-	RoomID          string            `yaml:"room_id,omitempty"`
-	Icons           map[string]string `yaml:"icons,omitempty"`
-	Colors          map[string]string `yaml:"colors,omitempty"`
-	APIVersion      *configInteger    `yaml:"api_version,omitempty"`
-	Recipients      []string          `yaml:"recipients,omitempty"`
-	MessageType     string            `yaml:"message_type,omitempty"`
-	CallDuration    *configInteger    `yaml:"call_duration,omitempty"`
-	VoiceID         *configInteger    `yaml:"voice_id,omitempty"`
-	Type            string            `yaml:"type"`
-	URL             string            `yaml:"url,omitempty"`
-	Channel         string            `yaml:"channel,omitempty"`
-	Sender          string            `yaml:"sender,omitempty"`
-	IntegrationKey  string            `yaml:"integration_key,omitempty"`
-	APIKey          string            `yaml:"api_key,omitempty"`
-	Environment     string            `yaml:"environment,omitempty"`
-	APIToken        string            `yaml:"api_token,omitempty"`
-	EntitySelector  string            `yaml:"entity_selector,omitempty"`
-	EventType       string            `yaml:"event_type,omitempty"`
-	Source          string            `yaml:"source,omitempty"`
-	BearerToken     string            `yaml:"bearer_token,omitempty"`
-	BotToken        string            `yaml:"bot_token,omitempty"`
-	AppToken        string            `yaml:"app_token,omitempty"`
-	UserKey         string            `yaml:"user_key,omitempty"`
-	AccessToken     string            `yaml:"access_token,omitempty"`
-	Username        string            `yaml:"username,omitempty"`
-	Password        string            `yaml:"password,omitempty"`
-	Email           string            `yaml:"email,omitempty"`
-	ChannelTag      string            `yaml:"channel_tag,omitempty"`
-	SourceDeviceID  string            `yaml:"source_device_id,omitempty"`
-	AccountSID      string            `yaml:"account_sid,omitempty"`
-	AuthToken       string            `yaml:"auth_token,omitempty"`
-	From            string            `yaml:"from,omitempty"`
-	To              string            `yaml:"to,omitempty"`
-	AccessKey       string            `yaml:"access_key,omitempty"`
-	Originator      string            `yaml:"originator,omitempty"`
-	Recipient       string            `yaml:"recipient,omitempty"`
-	ChatID          string            `yaml:"chat_id,omitempty"`
-	MessageThreadID *configInteger    `yaml:"message_thread_id,omitempty"`
-	APIURL          string            `yaml:"api_url,omitempty"`
-	RetriesOnLimit  *configInteger    `yaml:"retries_on_limit,omitempty"`
+	SenderIP         string            `yaml:"sender_ip,omitempty"`
+	TargetARN        string            `yaml:"target_arn,omitempty"`
+	CredentialSource string            `yaml:"credential_source,omitempty"`
+	MessageTemplate  string            `yaml:"message_template,omitempty"`
+	Facility         string            `yaml:"facility,omitempty"`
+	Level            string            `yaml:"level,omitempty"`
+	Prefix           string            `yaml:"prefix,omitempty"`
+	Host             string            `yaml:"host,omitempty"`
+	Port             *configInteger    `yaml:"port,omitempty"`
+	Executable       string            `yaml:"executable,omitempty"`
+	Args             []string          `yaml:"args,omitempty"`
+	Env              map[string]string `yaml:"env,omitempty"`
+	RoomID           string            `yaml:"room_id,omitempty"`
+	Icons            map[string]string `yaml:"icons,omitempty"`
+	Colors           map[string]string `yaml:"colors,omitempty"`
+	APIVersion       *configInteger    `yaml:"api_version,omitempty"`
+	Recipients       []string          `yaml:"recipients,omitempty"`
+	MessageType      string            `yaml:"message_type,omitempty"`
+	CallDuration     *configInteger    `yaml:"call_duration,omitempty"`
+	VoiceID          *configInteger    `yaml:"voice_id,omitempty"`
+	Type             string            `yaml:"type"`
+	URL              string            `yaml:"url,omitempty"`
+	Channel          string            `yaml:"channel,omitempty"`
+	Sender           string            `yaml:"sender,omitempty"`
+	IntegrationKey   string            `yaml:"integration_key,omitempty"`
+	APIKey           string            `yaml:"api_key,omitempty"`
+	Environment      string            `yaml:"environment,omitempty"`
+	APIToken         string            `yaml:"api_token,omitempty"`
+	EntitySelector   string            `yaml:"entity_selector,omitempty"`
+	EventType        string            `yaml:"event_type,omitempty"`
+	Source           string            `yaml:"source,omitempty"`
+	BearerToken      string            `yaml:"bearer_token,omitempty"`
+	BotToken         string            `yaml:"bot_token,omitempty"`
+	AppToken         string            `yaml:"app_token,omitempty"`
+	UserKey          string            `yaml:"user_key,omitempty"`
+	AccessToken      string            `yaml:"access_token,omitempty"`
+	Username         string            `yaml:"username,omitempty"`
+	Password         string            `yaml:"password,omitempty"`
+	Email            string            `yaml:"email,omitempty"`
+	ChannelTag       string            `yaml:"channel_tag,omitempty"`
+	SourceDeviceID   string            `yaml:"source_device_id,omitempty"`
+	AccountSID       string            `yaml:"account_sid,omitempty"`
+	AuthToken        string            `yaml:"auth_token,omitempty"`
+	From             string            `yaml:"from,omitempty"`
+	To               string            `yaml:"to,omitempty"`
+	AccessKey        string            `yaml:"access_key,omitempty"`
+	Originator       string            `yaml:"originator,omitempty"`
+	Recipient        string            `yaml:"recipient,omitempty"`
+	ChatID           string            `yaml:"chat_id,omitempty"`
+	MessageThreadID  *configInteger    `yaml:"message_thread_id,omitempty"`
+	APIURL           string            `yaml:"api_url,omitempty"`
+	RetriesOnLimit   *configInteger    `yaml:"retries_on_limit,omitempty"`
 }
 
 // YAML normally truncates floats assigned to integers, which could select the wrong topic.
@@ -118,11 +127,29 @@ func readConfig(r io.Reader) (Config, error) {
 }
 
 func (dst Destination) validate() error {
+	if dst.Type == "kafka" {
+		return dst.validateKafka()
+	}
+	if dst.SenderIP != "" {
+		return errors.New("destination contains fields for another provider: sender_ip requires kafka")
+	}
+	if dst.Type == "awssns" {
+		return dst.validateAWSSNS()
+	}
+	if dst.TargetARN != "" || dst.CredentialSource != "" || dst.MessageTemplate != "" {
+		return errors.New("destination contains fields for another provider: target_arn, credential_source and message_template require awssns")
+	}
+	if dst.Type == "syslog" {
+		return dst.validateSyslog()
+	}
+	if dst.Facility != "" || dst.Level != "" || dst.Prefix != "" || dst.Host != "" || dst.Port != nil {
+		return errors.New("destination contains fields for another provider: facility, level, prefix, host and port require syslog")
+	}
 	if dst.Type == "command" || dst.Type == "smstools3" {
 		return dst.validateCommand()
 	}
 	if dst.Executable != "" || dst.Args != nil || dst.Env != nil {
-		return errors.New("destination contains fields for another provider: executable, args and env require command or smstools3")
+		return errors.New("destination contains fields for another provider: executable, args and env require a command provider")
 	}
 	if dst.Type == "msteams" {
 		return dst.validateMSTeams()
@@ -217,7 +244,7 @@ func (dst Destination) validate() error {
 	}
 	if dst.Type != "webhook" && dst.Type != "slack" && dst.Type != "discord" && dst.Type != "signl4" {
 		return errors.New(
-			"destination.type must be webhook, slack, discord, telegram, pushover, pushbullet, twilio, messagebird, gotify, ntfy, rocketchat, flock, fleep, ilert, signl4, alerta, dynatrace, prowl, kavenegar, smseagle, pagerduty, opsgenie, msteams, matrix, command or smstools3; other providers are not implemented yet",
+			"destination.type must be webhook, slack, discord, telegram, pushover, pushbullet, twilio, messagebird, gotify, ntfy, rocketchat, flock, fleep, ilert, signl4, alerta, dynatrace, prowl, kavenegar, smseagle, pagerduty, opsgenie, msteams, matrix, command, smstools3, syslog, awssns or kafka; other providers are not implemented yet",
 		)
 	}
 	if dst.BotToken != "" || dst.ChatID != "" || dst.MessageThreadID != nil || dst.APIURL != "" ||

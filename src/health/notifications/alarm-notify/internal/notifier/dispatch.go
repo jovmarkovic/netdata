@@ -30,6 +30,12 @@ func dispatch(
 		dst := cfg.Destinations[name]
 		var err error
 		switch dst.Type {
+		case "kafka":
+			err = postJSON(ctx, dst, renderKafka(dst, event), timeout)
+		case "syslog":
+			err = sendSyslog(ctx, processes, dst, event)
+		case "awssns":
+			err = sendAWSSNS(ctx, processes, dst, event)
 		case "command", "smstools3":
 			err = sendCommand(ctx, processes, dst, event)
 		case "webhook":
