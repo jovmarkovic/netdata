@@ -13,63 +13,11 @@ type redfishLink struct {
 }
 
 type serviceRootDocument struct {
-	ODataID        string `json:"@odata.id"`
-	ODataType      string `json:"@odata.type"`
-	ID             string `json:"Id"`
-	Name           string `json:"Name"`
-	RedfishVersion string `json:"RedfishVersion"`
-	UUID           string `json:"UUID"`
-	Vendor         string `json:"Vendor"`
-	Product        string `json:"Product"`
-
-	Systems        redfishLink `json:"Systems"`
-	Chassis        redfishLink `json:"Chassis"`
-	Managers       redfishLink `json:"Managers"`
-	Storage        redfishLink `json:"Storage"`
-	SessionService redfishLink `json:"SessionService"`
-	UpdateService  redfishLink `json:"UpdateService"`
-	Links          struct {
-		Sessions redfishLink `json:"Sessions"`
-	} `json:"Links"`
-	ProtocolFeaturesSupported struct {
-		MultipleHTTPRequests *bool `json:"MultipleHTTPRequests"`
-		ExpandQuery          struct {
-			ExpandAll bool `json:"ExpandAll"`
-			Levels    bool `json:"Levels"`
-			Links     bool `json:"Links"`
-			MaxLevels uint `json:"MaxLevels"`
-			NoLinks   bool `json:"NoLinks"`
-		} `json:"ExpandQuery"`
-	} `json:"ProtocolFeaturesSupported"`
-
-	Raw      map[string]any   `json:"-"`
-	Response responseMetadata `json:"-"`
-}
-
-type collectionPage struct {
-	ODataID   string          `json:"@odata.id"`
-	ODataType string          `json:"@odata.type"`
-	Count     *int            `json:"Members@odata.count"`
-	Members   json.RawMessage `json:"Members"`
-	NextLink  string          `json:"Members@odata.nextLink"`
-}
-
-type collectionMember struct {
-	Ref      redfishLink
-	Data     map[string]any
-	Raw      []byte
+	Raw      map[string]any
 	Response responseMetadata
 }
 
-type collectionProgress struct {
-	CollectionIdentity string
-	ExpectedCount      int
-	Members            []collectionMember
-	SeenPages          map[string]struct{}
-	SeenMembers        map[string]struct{}
-	InvalidMembers     int
-	FirstMemberError   string
-}
+type collectionMember struct{ Ref redfishLink }
 
 type genericStatus struct {
 	Health       string             `json:"Health"`
@@ -158,9 +106,35 @@ func normalizedConditionSeverity(raw json.RawMessage) (string, bool) {
 	}
 }
 
-func dereferenceInt(value *int) int {
-	if value == nil {
-		return 0
+// resourceDecodeError marks malformed optional typed properties. Base resources
+// reject it; descendant and embedded adapters retain the partial document.
+type resourceDecodeError struct{ cause error }
+
+func (err *resourceDecodeError) Error() string { return err.cause.Error() }
+func (err *resourceDecodeError) Unwrap() error { return err.cause }
+
+// decodeGenericResource projects only the generic envelope before conversion.
+// encoding/json retains its case-insensitive, null, and partial-decode behavior;
+// unrelated source fields and potentially large OEM payloads are not serialized.
+func decodeGenericResource(data map[string]any) (genericResource, error) {
+	envelope := make(map[string]any, 6)
+	for key, value := range data {
+		for _, property := range []string{"@odata.id", "Id", "Name", "Status", "PowerState", "FailurePredicted"} {
+			if strings.EqualFold(key, property) {
+				envelope[key] = value
+				break
+			}
+		}
 	}
-	return *value
+	var doc genericResource
+	raw, err := json.Marshal(envelope)
+	if err == nil {
+		err = json.Unmarshal(raw, &doc)
+	}
+	if err != nil {
+		return doc, &resourceDecodeError{
+			cause: err,
+		}
+	}
+	return doc, nil
 }

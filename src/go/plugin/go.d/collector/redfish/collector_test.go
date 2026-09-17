@@ -32,15 +32,16 @@ func (c *staticEndpointClient) Collect(ctx context.Context) (collectionResult, e
 	c.deadline, c.hasDeadline = ctx.Deadline()
 	return c.result, c.err
 }
-func (c *staticEndpointClient) Close(context.Context) error {
+func (c *staticEndpointClient) Close() {
 	c.closed = true
-	return nil
 }
 func (c *staticEndpointClient) selectedAuthenticationMethod() string { return c.auth }
 
 func TestCollectorLogsSelectedAuthenticationMethodOnce(t *testing.T) {
 	var output bytes.Buffer
-	client := &staticEndpointClient{auth: "basic"}
+	client := &staticEndpointClient{
+		auth: "basic",
+	}
 	collector := New()
 	collector.Logger = logger.NewWithWriter(&output)
 	collector.Config = Config{
@@ -105,7 +106,9 @@ func TestCollectorCollectionErrorCanAbortMetricCycle(t *testing.T) {
 	collector := New()
 	collector.Name = "endpoint-a"
 	collector.endpointKey = "endpoint-key"
-	collector.client = &staticEndpointClient{err: sentinel}
+	collector.client = &staticEndpointClient{
+		err: sentinel,
+	}
 
 	managed, ok := metrix.AsCycleManagedStore(collector.store)
 	require.True(t, ok)
@@ -117,9 +120,13 @@ func TestCollectorCollectionErrorCanAbortMetricCycle(t *testing.T) {
 }
 
 func TestCollectorDerivesCollectionDeadlineFromUpdateEvery(t *testing.T) {
-	client := &staticEndpointClient{result: collectionResult{
-		Metrics: cycleMetrics{Status: "success"},
-	}}
+	client := &staticEndpointClient{
+		result: collectionResult{
+			Metrics: cycleMetrics{
+				Status: "success",
+			},
+		},
+	}
 	collector := New()
 	collector.UpdateEvery = 12
 	collector.Name = "endpoint-a"
@@ -142,7 +149,9 @@ func TestCollectorPublishesPartialResultAtCycleDeadline(t *testing.T) {
 	client := &staticEndpointClient{
 		result: collectionResult{
 			ObservedAt: time.Now(),
-			Metrics:    cycleMetrics{Status: "partial"},
+			Metrics: cycleMetrics{
+				Status: "partial",
+			},
 		},
 		err: context.DeadlineExceeded,
 	}
@@ -157,15 +166,23 @@ func TestCollectorPublishesPartialResultAtCycleDeadline(t *testing.T) {
 	cycle.BeginCycle()
 	require.NoError(t, collector.Collect(context.Background()))
 	require.NoError(t, cycle.CommitCycleSuccess())
-	point, ok := collector.store.Read().StateSet("collection_status", metrix.Labels{"endpoint_key": "endpoint-key", "endpoint_job": "endpoint-a"})
+	point, ok := collector.store.Read().
+		StateSet("collection_status", metrix.Labels{
+			"endpoint_key": "endpoint-key",
+			"endpoint_job": "endpoint-a",
+		})
 	require.True(t, ok)
 	assert.True(t, point.States["partial"])
 }
 
 func TestCollectorParentCancellationAbortsPartialResult(t *testing.T) {
-	client := &staticEndpointClient{result: collectionResult{
-		Metrics: cycleMetrics{Status: "partial"},
-	}}
+	client := &staticEndpointClient{
+		result: collectionResult{
+			Metrics: cycleMetrics{
+				Status: "partial",
+			},
+		},
+	}
 	collector := New()
 	collector.Name = "endpoint-a"
 	collector.endpointKey = "endpoint-key"
