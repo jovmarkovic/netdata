@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/netdata/netdata/src/health/notifications/alarm-notify/internal/config/field"
 	"github.com/netdata/netdata/src/health/notifications/alarm-notify/internal/event"
+	"github.com/netdata/netdata/src/health/notifications/alarm-notify/internal/message"
 )
 
 func eventValues(e event.Event, roles []string) map[string]string {
@@ -17,6 +19,8 @@ func eventValues(e event.Event, roles []string) map[string]string {
 		"when": strconv.FormatInt(e.Timestamp.Unix(), 10), "name": e.Alert, "chart": e.Chart,
 		"context": e.Context, "status": e.Status, "old_status": e.PreviousStatus,
 		"units": e.Units, "info": e.Info, "summary": e.Summary,
+		"date": e.Timestamp.UTC().Format(time.RFC3339), "status_message": message.StatusDescription(e.Status),
+		"value_string": message.ValueString(e.Value, e.Units), "old_value_string": message.ValueString(e.PreviousValue, e.Units),
 		"value": "", "old_value": "", "duration": "", "non_clear_duration": "",
 	}
 	if e.Value != nil {
@@ -56,22 +60,23 @@ func unsupportedSettings(values, initial map[string]string, eligible []method) e
 		return fmt.Errorf("legacy setting %s is not supported for this delivery; use native event/configuration settings", key)
 	}
 	// These presentation and event mutations have no mapping to the current event contract.
-	for _, key := range []string{"date_format", "images_base_url"} {
-		if values[key] != "" {
-			return unsupported(key)
-		}
+	if values["date_format"] != "" {
+		return unsupported("date_format")
 	}
 	for _, key := range []string{"use_fqdn", "clear_alarm_always"} {
 		if values[key] == "YES" {
 			return unsupported(key)
 		}
 	}
-	for _, key := range []string{"roles", "host", "args_host", "when", "name", "chart", "context", "status", "old_status", "units", "info", "summary", "value", "old_value", "duration", "non_clear_duration"} {
+	for _, key := range []string{"roles", "host", "args_host", "when", "name", "chart", "context", "status", "old_status", "units", "info", "summary", "value", "old_value", "duration", "non_clear_duration", "date", "status_message", "value_string", "old_value_string"} {
 		if values[key] != initial[key] {
 			return unsupported(key)
 		}
 	}
 	for _, m := range eligible {
+		if values["images_base_url"] != "" && m.name != "slack" {
+			return unsupported("images_base_url")
+		}
 		if m.tool == "" {
 			for _, key := range []string{"curl", "curl_options"} {
 				if strings.TrimSpace(values[key]) != "" {
