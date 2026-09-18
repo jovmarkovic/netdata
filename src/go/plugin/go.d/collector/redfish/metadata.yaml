@@ -44,8 +44,10 @@ modules:
 
           For session and auto authentication, the configuration test identifies the endpoint without creating a session.
           Credentials are validated when collection starts. Session authentication requires an origin-relative `Links.Sessions`
-          endpoint; use Basic authentication if the BMC does not provide one. BMC health states are reported directly; the collector does not
-          infer alarms from numeric thresholds.
+          endpoint; use Basic authentication if the BMC does not provide one.
+
+          BMC health states are reported directly. Sensor thresholds are evaluated separately as derived health, without
+          replacing BMC-reported health. Derived health describes observed threshold conditions, not overall hardware health.
 
           Collection is best-effort: one unreadable resource does not stop independently reachable resources. Missing current
           values produce gaps rather than zeroes. Complete membership scans obsolete removed components; partial scans retain
@@ -711,7 +713,15 @@ modules:
         - id: sensors
           name: Redfish Sensors
           description: |
-            Inspect current primary sensor readings and their reported health. Average, peak and threshold companion values are not separate rows. Power calculated from energy is explicitly labeled.
+            Inspect current primary sensor readings, BMC-reported health and independently derived threshold health. Average, peak and threshold companion values are not separate rows. Power calculated from energy is explicitly labeled.
+
+            Derived health evaluates supplied numeric upper and lower thresholds independently of BMC health, including when BMC health is present.
+            OK means none of the evaluated thresholds is active; the BMC may report other faults. Legacy temperature, fan and voltage limits and modern Sensor thresholds are supported.
+
+            Modern thresholds honor increasing upper/decreasing lower activation, dwell time and clearing hysteresis using successive observed samples.
+            Omitted timing settings add no delay; explicit unknown settings, unsupported crossing directions, disabled sensors and unusable readings show Unavailable and leave a metric gap.
+            Missing or null numeric limits supply no threshold. Without usable enabled thresholds, derived health is Not applicable.
+            Collection gaps, restarts and threshold changes discard timing history; evaluation may remain unavailable until enough new samples establish a status.
           parameters:
             - id: __job
               name: Instance
@@ -754,6 +764,10 @@ modules:
                 type: string
                 unit: ""
                 description: "BMC-reported health of this reading; not inherited component health."
+              - name: "Derived health (thresholds)"
+                type: string
+                unit: ""
+                description: "Locally evaluated threshold status; OK does not imply overall hardware health."
               - name: "Data availability"
                 type: string
                 unit: ""
@@ -802,7 +816,7 @@ modules:
         - id: hardware
           name: Redfish Hardware
           description: |
-            Find components needing attention and inspect their identity and reported condition. Component health, aggregate health and collection availability are kept distinct.
+            Find components needing attention and inspect their identity, configuration and reported condition. Optional columns show CPU counts, memory and storage capacity, firmware release dates and assembly revisions. Component health, aggregate health and collection availability are kept distinct.
           parameters:
             - id: __job
               name: Instance
@@ -813,7 +827,7 @@ modules:
               options: []
           returns:
             description: |
-              One row per monitored component or logical resource, including known resources that could not be read. Model, serial, part number and firmware are optional detail columns.
+              One row per monitored component or logical resource, including known resources that could not be read. Identity, configuration and version details are optional columns populated when reported by the BMC. Capacity belongs to the individual resource; physical drives and logical volumes must not be added together. Release date describes the firmware or software release, not its installation. Missing or unusable details are blank.
             columns:
               - name: "Key"
                 type: string
@@ -907,6 +921,61 @@ modules:
                 unit: ""
                 visibility: hidden
                 description: "Source resource address."
+              - name: "Processor cores"
+                type: integer
+                unit: "cores"
+                visibility: hidden
+                description: "Total cores in this processor."
+              - name: "Enabled cores"
+                type: integer
+                unit: "cores"
+                visibility: hidden
+                description: "Enabled cores in this processor."
+              - name: "Supported threads"
+                type: integer
+                unit: "threads"
+                visibility: hidden
+                description: "Execution threads supported by this processor."
+              - name: "Capacity"
+                type: integer
+                unit: "bytes"
+                visibility: hidden
+                description: "Capacity of this memory device, physical drive or logical volume. Memory capacity is converted from MiB to bytes."
+              - name: "Memory type"
+                type: string
+                unit: ""
+                visibility: hidden
+                description: "Memory device technology, such as DDR4 or DDR5."
+              - name: "Media type"
+                type: string
+                unit: ""
+                visibility: hidden
+                description: "Drive media type, such as SSD or HDD."
+              - name: "Drive protocol"
+                type: string
+                unit: ""
+                visibility: hidden
+                description: "Protocol used by this drive, such as SAS, SATA or NVMe."
+              - name: "RAID type"
+                type: string
+                unit: ""
+                visibility: hidden
+                description: "RAID configuration of this logical volume."
+              - name: "Release date"
+                type: timestamp
+                unit: ""
+                visibility: hidden
+                description: "Firmware or software release/production date; not installation time."
+              - name: "Hardware version"
+                type: string
+                unit: ""
+                visibility: hidden
+                description: "Vendor-reported hardware version of this assembly."
+              - name: "Engineering revision"
+                type: string
+                unit: ""
+                visibility: hidden
+                description: "Engineering change level or revision of this assembly."
               - name: "rowOptions"
                 type: none
                 unit: ""
@@ -4272,6 +4341,14 @@ modules:
               chart_type: stacked
               dimensions:
                 - name: clear
+                - name: warning
+                - name: critical
+            - name: redfish.reading.derived_health
+              description: Redfish Reading Derived Health (Thresholds)
+              unit: state
+              chart_type: stacked
+              dimensions:
+                - name: ok
                 - name: warning
                 - name: critical
             - name: redfish.reading.absolute_humidity
