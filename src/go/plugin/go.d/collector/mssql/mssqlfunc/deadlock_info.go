@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-package mssql
+package mssqlfunc
 
 import (
 	"context"
@@ -22,9 +22,16 @@ import (
 const (
 	deadlockInfoHelp         = "Latest deadlock from the system_health Extended Events session. WARNING: query text may include unmasked sensitive literals; restrict dashboard access."
 	deadlockParseErrorStatus = 561
+	deadlockSourceEventFile  = "event_file"
+	deadlockSourceRingBuffer = "ring_buffer"
 )
 
 const deadlockInfoMethodID = "deadlock-info"
+
+var (
+	errDeadlockEventFileUnavailable  = errors.New("system_health event_file target unavailable")
+	errDeadlockRingBufferUnavailable = errors.New("system_health ring_buffer target unavailable")
+)
 
 const deadlockInfoAzureSQLDatabaseUnavailable = "deadlock-info is unavailable on Azure SQL Database because it has no built-in system_health Extended Events session"
 
@@ -237,88 +244,77 @@ func deadlockInfoFunctionConfig() funcapi.FunctionConfig {
 
 // funcDeadlockInfo handles the deadlock-info function.
 type funcDeadlockInfo struct {
-	router *funcRouter
+	router *router
 }
 
-func newFuncDeadlockInfo(r *funcRouter) *funcDeadlockInfo {
-	return &funcDeadlockInfo{router: r}
+func newFuncDeadlockInfo(r *router) *funcDeadlockInfo {
+	return &funcDeadlockInfo{
+		router: r,
+	}
 }
 
 // Compile-time interface check.
 var _ funcapi.MethodHandler = (*funcDeadlockInfo)(nil)
 
 func (f *funcDeadlockInfo) MethodParams(ctx context.Context, method string) ([]funcapi.ParamConfig, error) {
-	if f.router.collector.Functions.DeadlockInfo.Disabled {
+	if f.router.cfg.DeadlockInfo.Disabled {
 		return nil, fmt.Errorf("deadlock-info function disabled in configuration")
 	}
-	if f.router.collector.isAzureSQLDatabase() {
+	if f.router.deps.ServerInfo().AzureSQLDatabase {
 		return nil, errors.New(deadlockInfoAzureSQLDatabaseUnavailable)
 	}
 	return []funcapi.ParamConfig{}, nil
 }
 
 func (f *funcDeadlockInfo) Handle(ctx context.Context, method string, params funcapi.ResolvedParams) *funcapi.FunctionResponse {
-	if f.router.collector.db == nil {
-		db, err := f.router.collector.openConnection()
-		if err != nil {
-			return funcapi.UnavailableResponse("collector is still initializing, please retry in a few seconds")
-		}
-		f.router.collector.db = db
-	}
-	queryCtx, cancel := context.WithTimeout(ctx, f.router.collector.deadlockInfoTimeout())
-	defer cancel()
-	if _, err := f.router.collector.ensureEngineEdition(queryCtx); err != nil {
-		if response := mssqlFunctionContextError(queryCtx, err); response != nil {
-			return response
-		}
-		return funcapi.ErrorResponse(500, "failed to detect SQL engine edition: %v", err)
-	}
-	return f.collectData(queryCtx)
+	r := f.router
+	return r.runFunction(ctx, r.cfg.deadlockInfoTimeout(), f.collectData)
 }
 
 func (f *funcDeadlockInfo) Cleanup(ctx context.Context) {}
 
 func (f *funcDeadlockInfo) collectData(ctx context.Context) *funcapi.FunctionResponse {
-	if f.router.collector.Functions.DeadlockInfo.Disabled {
+	if f.router.cfg.DeadlockInfo.Disabled {
 		return funcapi.UnavailableResponse("deadlock-info function has been disabled in configuration")
 	}
-	if f.router.collector.isAzureSQLDatabase() {
+	if f.router.deps.ServerInfo().AzureSQLDatabase {
 		return funcapi.UnavailableResponse(deadlockInfoAzureSQLDatabaseUnavailable)
 	}
 
-	deadlockTime, deadlockXML, err := f.queryLatestDeadlock(ctx)
+	timeout := f.router.cfg.deadlockInfoTimeout()
+	deadlockTime, deadlockXML, source, err := f.queryLatestDeadlock(ctx)
 	if err != nil {
-		if response := mssqlFunctionContextError(ctx, err); response != nil {
+		if response := timeout.contextError(ctx, err); response != nil {
 			return f.buildResponse(response.Status, response.Message, nil)
 		}
 		if isDeadlockPermissionError(err) {
-			return f.buildResponse(403, f.router.collector.deadlockPermissionMessage(), nil)
+			return f.buildResponse(403, f.router.deadlockPermissionMessage(), nil)
 		}
-		f.router.collector.Warningf("deadlock-info: query failed: %v", err)
+		f.router.log.Warningf("deadlock-info: query failed: %v", err)
 		return f.buildResponse(500, fmt.Sprintf("deadlock query failed: %v", err), nil)
 	}
 
 	if deadlockXML == "" {
-		return f.buildResponse(200, "no deadlock found in system_health Extended Events", nil)
+		return f.buildResponse(200, noDeadlockFoundMessage(source), nil)
 	}
 
 	dbNames, dbErr := f.queryDatabaseNames(ctx)
 	if dbErr != nil {
-		if response := mssqlFunctionContextError(ctx, dbErr); response != nil {
+		if response := timeout.contextError(ctx, dbErr); response != nil {
 			return f.buildResponse(response.Status, response.Message, nil)
 		}
-		f.router.collector.Debugf("deadlock-info: database name mapping failed: %v", dbErr)
+		f.router.log.Debugf("deadlock-info: database name mapping failed: %v", dbErr)
 		dbNames = map[int]string{}
 	}
 
 	parseRes := parseDeadlockGraph(deadlockXML, deadlockTime)
 	if parseRes.parseErr != nil {
-		f.router.collector.Warningf("deadlock-info: parse failed: %v", parseRes.parseErr)
+		f.router.log.Warningf("deadlock-info: parse failed: %v", parseRes.parseErr)
 		return f.buildResponse(deadlockParseErrorStatus, "deadlock graph could not be parsed", nil)
 	}
 
 	if !parseRes.found {
-		return f.buildResponse(200, "no deadlock found in system_health Extended Events", nil)
+		return f.buildResponse(200, noDeadlockFoundMessage(source), nil)
 	}
 
 	deadlockID := generateDeadlockID(parseRes.deadlockTime)
@@ -328,7 +324,7 @@ func (f *funcDeadlockInfo) collectData(ctx context.Context) *funcapi.FunctionRes
 		return f.buildResponse(200, "deadlock detected but no processes could be parsed", nil)
 	}
 
-	return f.buildResponse(200, "latest detected deadlock", rows)
+	return f.buildResponse(200, fmt.Sprintf("latest detected deadlock from system_health %s target", source), rows)
 }
 
 func (f *funcDeadlockInfo) buildResponse(status int, message string, rowsData []deadlockRowData) *funcapi.FunctionResponse {
@@ -353,51 +349,75 @@ func (f *funcDeadlockInfo) buildResponse(status int, message string, rowsData []
 	}
 }
 
-func (f *funcDeadlockInfo) queryLatestDeadlock(ctx context.Context) (time.Time, string, error) {
-	c := f.router.collector
+func noDeadlockFoundMessage(source string) string {
+	return fmt.Sprintf("no deadlock found in system_health %s target; retained events may have aged out", source)
+}
+
+// queryLatestDeadlock returns the newest xml_deadlock_report and the system_health target
+// it was read from. An empty graph with a nil error means the target held no deadlock.
+func (f *funcDeadlockInfo) queryLatestDeadlock(ctx context.Context) (time.Time, string, string, error) {
+	r := f.router
 	var deadlockTime sql.NullTime
 	var deadlockXML sql.NullString
+
 	readRingBuffer := func() error {
-		available, err := c.mssqlRingBufferAvailable(ctx, "system_health")
+		available, err := r.mssqlRingBufferAvailable(ctx, "system_health")
 		if err != nil {
 			return err
 		}
 		if !available {
-			return errors.New("system_health ring_buffer target unavailable")
+			return errDeadlockRingBufferUnavailable
 		}
-		return c.db.QueryRowContext(ctx, querySystemHealthLatestDeadlockRingBuffer).Scan(&deadlockTime, &deadlockXML)
+		return r.deps.DB().QueryRowContext(ctx, querySystemHealthLatestDeadlockRingBuffer).Scan(&deadlockTime, &deadlockXML)
+	}
+	readEventFile := func() error {
+		target, available, err := r.resolveMSSQLXEventReadTarget(ctx, "system_health", false)
+		if err != nil {
+			return err
+		}
+		if !available {
+			return errDeadlockEventFileUnavailable
+		}
+		args := target.fileQueryArgs("xml_deadlock_report")
+		row := r.deps.DB().QueryRowContext(ctx, querySystemHealthLatestDeadlockEventFile, args...)
+		return row.Scan(&deadlockTime, &deadlockXML)
 	}
 
+	source := deadlockSourceRingBuffer
 	var err error
-	if c.Functions.DeadlockInfo.UseRingBuffer {
+	if r.cfg.DeadlockInfo.UseRingBuffer {
 		err = readRingBuffer()
 	} else {
-		err = c.db.QueryRowContext(ctx, querySystemHealthLatestDeadlockEventFile).Scan(&deadlockTime, &deadlockXML)
+		source = deadlockSourceEventFile
+		err = readEventFile()
 		if err != nil && shouldFallbackDeadlockEventFile(err) {
-			// Retry only on a file read error, not on an available but empty file target.
+			// Retry unavailable targets and file read errors, not an available but empty target.
+			source = deadlockSourceRingBuffer
 			err = readRingBuffer()
 		}
 	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, "", source, nil
+	}
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return time.Time{}, "", nil
-		}
-		return time.Time{}, "", err
+		return time.Time{}, "", source, err
 	}
 
 	if !deadlockXML.Valid || strings.TrimSpace(deadlockXML.String) == "" {
-		return time.Time{}, "", nil
+		return time.Time{}, "", source, nil
 	}
-
 	if deadlockTime.Valid {
-		return deadlockTime.Time, deadlockXML.String, nil
+		return deadlockTime.Time, deadlockXML.String, source, nil
 	}
-	return time.Now().UTC(), deadlockXML.String, nil
+	return time.Now().UTC(), deadlockXML.String, source, nil
 }
 
 func shouldFallbackDeadlockEventFile(err error) bool {
 	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || isDeadlockPermissionError(err) {
 		return false
+	}
+	if errors.Is(err, errDeadlockEventFileUnavailable) {
+		return true
 	}
 
 	var sqlErr mssqlDriver.Error
@@ -408,7 +428,7 @@ func shouldFallbackDeadlockEventFile(err error) bool {
 }
 
 func (f *funcDeadlockInfo) queryDatabaseNames(ctx context.Context) (map[int]string, error) {
-	rows, err := f.router.collector.db.QueryContext(ctx, queryDatabaseNamesByID)
+	rows, err := f.router.deps.DB().QueryContext(ctx, queryDatabaseNamesByID)
 	if err != nil {
 		return nil, err
 	}
@@ -533,7 +553,9 @@ func parseDeadlockGraph(deadlockXML string, deadlockTime time.Time) mssqlDeadloc
 		if txn, ok := txnByID[id]; ok {
 			return txn
 		}
-		txn := &mssqlDeadlockTxn{processID: id}
+		txn := &mssqlDeadlockTxn{
+			processID: id,
+		}
 		txnByID[id] = txn
 		return txn
 	}
@@ -725,8 +747,8 @@ func isDeadlockPermissionError(err error) bool {
 		strings.Contains(msg, "denied")
 }
 
-func (c *Collector) deadlockPermissionMessage() string {
-	permission := c.xeReadPermission()
+func (r *router) deadlockPermissionMessage() string {
+	permission := r.xeReadPermission()
 	return fmt.Sprintf("deadlock-info requires %s permission. Grant with: GRANT %s TO [netdata_user];", permission, permission)
 }
 
