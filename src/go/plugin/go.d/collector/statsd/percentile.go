@@ -12,12 +12,30 @@ import (
 )
 
 // Numeric-domain bounds keep rank certification valid; these are not input quotas.
-const percentileBins = 1024
-const maxObservations = 1 << 26
-const minRate = 0x1p-128
-const maxExactUnits = 1 << 53
+const (
+	percentileBins  = 1024
+	maxObservations = 1 << 26
+	minRate         = 0x1p-128
+	maxExactUnits   = 1 << 53
+)
+
+// Percentile withholding reasons are a fixed diagnostic vocabulary.
+const (
+	withheldNumericDomain    = "numeric_domain"
+	withheldObservationBound = "observation_bound"
+	withheldMappingDomain    = "mapping_domain"
+	withheldMappingError     = "mapping_error"
+	withheldSpan             = "span"
+	withheldAmbiguousRank    = "ambiguous_rank"
+)
+
+var withheldReasons = [...]string{
+	withheldNumericDomain, withheldObservationBound, withheldMappingDomain,
+	withheldMappingError, withheldSpan, withheldAmbiguousRank,
+}
 
 type percentileBin struct{ value, count float64 }
+
 type percentiles struct {
 	mapping            *mapping.LogarithmicMapping
 	positive, negative *store.CollapsingLowestDenseStore
@@ -44,8 +62,30 @@ func newPercentiles(limit int) *percentiles {
 	}
 }
 
-func down(v float64) float64 { return math.Nextafter(v, math.Inf(-1)) }
-func up(v float64) float64   { return math.Nextafter(v, math.Inf(1)) }
+// down and up step a finite value to the adjacent float64, as math.Nextafter
+// toward -Inf and +Inf does. Zero, of either sign, steps to the smallest subnormal.
+func down(v float64) float64 {
+	switch {
+	case v == 0:
+		return -0x1p-1074
+	case v > 0:
+		return math.Float64frombits(math.Float64bits(v) - 1)
+	default:
+		return math.Float64frombits(math.Float64bits(v) + 1)
+	}
+}
+
+func up(v float64) float64 {
+	switch {
+	case v == 0:
+		return 0x1p-1074
+	case v > 0:
+		return math.Float64frombits(math.Float64bits(v) + 1)
+	default:
+		return math.Float64frombits(math.Float64bits(v) - 1)
+	}
+}
+
 func (a *percentiles) fail(reason string) {
 	if a.reason == "" {
 		a.reason = reason
@@ -59,11 +99,11 @@ func (a *percentiles) add(value, rate float64) {
 		return
 	}
 	if !(rate >= minRate && rate <= 1) || math.IsNaN(value) || math.IsInf(value, 0) {
-		a.fail("numeric_domain")
+		a.fail(withheldNumericDomain)
 		return
 	}
 	if a.n == maxObservations {
-		a.fail("observation_bound")
+		a.fail(withheldObservationBound)
 		return
 	}
 	if a.n == 0 {
@@ -104,7 +144,7 @@ func (a *percentiles) add(value, rate float64) {
 	}
 	magnitude := math.Abs(value)
 	if magnitude < a.mapping.MinIndexableValue() || magnitude > a.mapping.MaxIndexableValue() {
-		a.fail("mapping_domain")
+		a.fail(withheldMappingDomain)
 		return
 	}
 	index := a.mapping.Index(magnitude)
@@ -112,7 +152,7 @@ func (a *percentiles) add(value, rate float64) {
 	// Outward error and inward budget prove the 1% inequality for THIS mapping,
 	// without assuming the implementation's transcendental errors are zero.
 	if !finite(rep) || rep <= 0 || (rep != magnitude && up(math.Abs(rep-magnitude)) > down(magnitude/100)) {
-		a.fail("mapping_error")
+		a.fail(withheldMappingError)
 		return
 	}
 	target := a.positive
@@ -125,13 +165,15 @@ func (a *percentiles) add(value, rate float64) {
 		lo = min(lo, index)
 		hi = max(hi, index)
 		if hi-lo+1 > a.limit {
-			a.fail("span")
+			a.fail(withheldSpan)
 			return
 		}
 	}
 	target.AddWithCount(index, z)
 }
+
 func finite(x float64) bool { return !math.IsNaN(x) && !math.IsInf(x, 0) }
+
 func (a *percentiles) reset() {
 	a.positive.Clear()
 	a.negative.Clear()
@@ -143,6 +185,7 @@ func (a *percentiles) reset() {
 	a.unitExp = 0
 	a.reason = ""
 }
+
 func (a *percentiles) query(scratch []percentileBin) ([2]float64, []percentileBin) {
 	result := [2]float64{math.NaN(), math.NaN()}
 	scratch = scratch[:0]
@@ -186,30 +229,33 @@ func (a *percentiles) query(scratch []percentileBin) ([2]float64, []percentileBi
 	// Each rounded normalized weight and its bin summation contributes at most
 	// gamma_n relative error. 4*n*u bounds both directions for n<=2^26.
 	delta := 4 * float64(a.n) * 0x1p-53
+	growth, shrink := up(1+delta), down(1-delta)
 	var totalLo, totalHi float64
 	for _, b := range scratch {
-		lo := down(b.count / up(1+delta))
-		hi := up(b.count / down(1-delta))
-		totalLo = down(totalLo + lo)
-		totalHi = up(totalHi + hi)
+		totalLo = down(totalLo + down(b.count/growth))
+		totalHi = up(totalHi + up(b.count/shrink))
+	}
+	var thresholdLo, thresholdHi [2]float64
+	for q := range result {
+		thresholdLo[q] = down(down(totalLo*float64(numer[q])) / float64(denom[q]))
+		thresholdHi[q] = up(up(totalHi*float64(numer[q])) / float64(denom[q]))
 	}
 	var prefixLo, prefixHi float64
 	for _, b := range scratch {
 		beforeHi := prefixHi
-		lo := down(b.count / up(1+delta))
-		hi := up(b.count / down(1-delta))
-		prefixLo = down(prefixLo + lo)
-		prefixHi = up(prefixHi + hi)
+		prefixLo = down(prefixLo + down(b.count/growth))
+		prefixHi = up(prefixHi + up(b.count/shrink))
 		for q := range result {
-			thresholdLo := down(down(totalLo*float64(numer[q])) / float64(denom[q]))
-			thresholdHi := up(up(totalHi*float64(numer[q])) / float64(denom[q]))
-			if math.IsNaN(result[q]) && beforeHi < thresholdLo && prefixLo >= thresholdHi {
+			if math.IsNaN(result[q]) && beforeHi < thresholdLo[q] && prefixLo >= thresholdHi[q] {
 				result[q] = b.value
 			}
 		}
+		if !math.IsNaN(result[0]) && !math.IsNaN(result[1]) {
+			break // Later bins cannot change a certified rank.
+		}
 	}
 	if math.IsNaN(result[0]) || math.IsNaN(result[1]) {
-		a.fail("ambiguous_rank")
+		a.fail(withheldAmbiguousRank)
 		return [2]float64{math.NaN(), math.NaN()}, scratch
 	}
 	return result, scratch
