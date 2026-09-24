@@ -561,6 +561,10 @@ func TestProcessCoreSecretCRUDAndValidationRedaction(t *testing.T) {
 	}()
 	output.waitContains(t, "CONFIG go.d:secretstore:vault create accepted template")
 
+	client := &secretAdoptionProcess{
+		t:       t,
+		process: process,
+	}
 	steps := []struct {
 		uid     string
 		command string
@@ -598,6 +602,9 @@ func TestProcessCoreSecretCRUDAndValidationRedaction(t *testing.T) {
 		},
 	}
 	for _, step := range steps {
+		// Responses and Running frames precede physical release of the Store attempt.
+		// Wait so contention cannot mask the next step's validation result.
+		client.waitStoreAttemptReleased("vault:main")
 		if step.payload == "" {
 
 			_, writeStringErr := io.WriteString(
@@ -1183,6 +1190,12 @@ func testProcessCoreStoreRemovalCancelsPendingMaterialization(t *testing.T, inst
 		done <- process.run(context.Background(), controls)
 	}()
 	output.waitContains(t, "CONFIG go.d:secretstore:vault create accepted template")
+	client := &secretAdoptionProcess{
+		t:       t,
+		writer:  writer,
+		output:  output,
+		process: process,
+	}
 
 	if installInitial {
 		_, err = io.WriteString(
@@ -1196,6 +1209,8 @@ func testProcessCoreStoreRemovalCancelsPendingMaterialization(t *testing.T, inst
 		require.NoError(t, err)
 		output.waitContains(t, "FUNCTION_RESULT_BEGIN secret-remove-initial 202 application/json")
 		output.waitContains(t, "CONFIG go.d:secretstore:vault:main create running job")
+		// Running publication precedes physical release of the acquisition attempt.
+		client.waitStoreAttemptReleased("vault:main")
 	}
 
 	command := "\"config go.d:secretstore:vault add main\" "
@@ -1221,11 +1236,6 @@ func testProcessCoreStoreRemovalCancelsPendingMaterialization(t *testing.T, inst
 		_, err = io.WriteString(writer, "FUNCTION_CANCEL secret-remove-blocked\n")
 		require.NoError(t, err)
 		output.waitContains(t, "FUNCTION_RESULT_BEGIN secret-remove-blocked 499 application/json")
-		client := &secretAdoptionProcess{
-			t:      t,
-			writer: writer,
-			output: output,
-		}
 		require.JSONEq(t, `{"value":"initial"}`,
 			client.call("secret-canceled-get", "config go.d:secretstore:vault:main get", "", 200))
 	} else {
