@@ -21,6 +21,42 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSecretWireRejectsChangedIdentity(t *testing.T) {
+	for name, command := range map[string]string{
+		"GET trailing NBSP":    "config go.d:secretstore:vault:db\u00a0 get",
+		"ADD trailing NBSP":    "config go.d:secretstore:vault add db\u00a0",
+		"ADD inner NBSP":       "config go.d:secretstore:vault add db\u00a0one",
+		"ADD literal hex":      `config go.d:secretstore:vault add d\x62`,
+		"ADD trailing slash":   `config go.d:secretstore:vault add db\`,
+		"UPDATE trailing NBSP": "config go.d:secretstore:vault:db\u00a0 update",
+		"UPDATE leading NBSP":  "config go.d:secretstore:vault:\u00a0db update",
+		"UPDATE kind NBSP":     "config go.d:secretstore:vault\u00a0:db update",
+		"UPDATE literal hex":   `config go.d:secretstore:vault:d\x62 update`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := newSecretAdoptionProcess(t, secretstore.Creator{
+				Kind: secretstore.KindVault, Schema: `{}`,
+				Create: func() secretstore.Store { return &processSecretStore{} },
+			}, []secretstore.Config{{
+				"name": "db", "kind": "vault", "value": "original",
+				"__source__": "file=test", "__source_type__": confgroup.TypeUser,
+			}})
+			p.output.waitContains(t, "CONFIG go.d:secretstore:vault:db create running job")
+			p.waitStoreAttemptReleased("vault:db")
+			payload := `{"value":"replacement"}`
+			if strings.HasSuffix(command, " get") {
+				payload = ""
+			}
+			p.call("invalid", command, payload, 400)
+			require.JSONEq(t, `{"value":"original"}`, p.call("get", "config go.d:secretstore:vault:db get", "", 200))
+			require.NotContains(t, p.output.String(), "job /collectors/go.d/SecretStores dyncfg")
+			// A rejected payload must not corrupt the next request; safe Unicode remains valid.
+			p.call("valid", "config go.d:secretstore:vault add db-α", `{"value":"valid"}`, 202)
+			require.JSONEq(t, `{"value":"valid"}`, p.call("get-valid", "config go.d:secretstore:vault:db-α get", "", 200))
+		})
+	}
+}
+
 func TestSecretInitialAcquisitionDoesNotBlockCommands(t *testing.T) {
 	for _, value := range []string{"replacement", "public-failure"} {
 		t.Run(value, func(t *testing.T) {
@@ -260,9 +296,10 @@ func newSecretAdoptionProcess(
 	catalog, err := secretstore.NewCreatorCatalog([]secretstore.Creator{creator})
 	require.NoError(t, err)
 	jobs := testRunJobServices(t)
-	jobs.Resolver, err = secretresolver.NewDefaultAtomicResolver()
+	secretConfig := testRunSecrets(t)
+	secretConfig.Providers.Resolver, err = secretresolver.NewDefaultAtomicResolver()
 	require.NoError(t, err)
-	jobs.StoreCreators = catalog
+	secretConfig.Providers.Creators = catalog
 	reader, writer := io.Pipe()
 	output := newProcessSynchronizedBuffer()
 	process, err := newProcessCore(processCoreConfig{
@@ -271,8 +308,9 @@ func newSecretAdoptionProcess(
 		ShutdownTimeout: time.Second,
 		Modules:         collectorapi.Registry{},
 		Jobs:            jobs,
-		Secrets: runSecretServices{
-			Initial: initial,
+		Secrets: &SecretsConfig{
+			Providers: secretConfig.Providers,
+			Initial:   initial,
 		},
 		Discovery:   testRunDiscoveryServices(t),
 		Diagnostics: testProcessDiagnostics(),
@@ -322,10 +360,14 @@ func (p *secretAdoptionProcess) waitStoreAttemptReleased(key string) {
 
 func (p *secretAdoptionProcess) call(uid, command, payload string, status int) string {
 	p.t.Helper()
-	line := fmt.Sprintf("FUNCTION %s 10 %q 0xFFFF \"user=test\"\n", uid, command)
+	return callProcessFunction(p.t, p.writer, p.output, uid, command, payload, status)
+}
+func callProcessFunction(t *testing.T, writer io.Writer, output *processSynchronizedBuffer, uid, command, payload string, status int) string {
+	t.Helper()
+	line := fmt.Sprintf("FUNCTION %s 10 \"%s\" 0xFFFF \"user=test\"\n", uid, command)
 	if payload != "" {
 		line = fmt.Sprintf(
-			"FUNCTION_PAYLOAD %s 10 %q 0xFFFF \"user=test\" application/json\n%s\nFUNCTION_PAYLOAD_END\n",
+			"FUNCTION_PAYLOAD %s 10 \"%s\" 0xFFFF \"user=test\" application/json\n%s\nFUNCTION_PAYLOAD_END\n",
 			uid,
 			command,
 			payload,
@@ -333,21 +375,21 @@ func (p *secretAdoptionProcess) call(uid, command, payload string, status int) s
 	}
 	written := make(chan error, 1)
 	go func() {
-		_, err := io.WriteString(p.writer, line)
+		_, err := io.WriteString(writer, line)
 		written <- err
 	}()
 	select {
 	case err := <-written:
-		require.NoError(p.t, err)
+		require.NoError(t, err)
 	case <-time.After(time.Second):
-		p.t.Fatal("Store acquisition blocked command ingress")
+		t.Fatal("command ingress blocked")
 	}
 	begin := fmt.Sprintf("FUNCTION_RESULT_BEGIN %s %d application/json", uid, status)
-	p.output.waitContains(p.t, begin)
-	result := p.output.String()
+	output.waitContains(t, begin)
+	result := output.String()
 	result = result[strings.Index(result, begin):]
 	result = result[strings.IndexByte(result, '\n')+1:]
 	result = strings.TrimSpace(result[:strings.Index(result, "FUNCTION_RESULT_END")])
-	require.True(p.t, json.Valid([]byte(result)))
+	require.True(t, json.Valid([]byte(result)))
 	return result
 }

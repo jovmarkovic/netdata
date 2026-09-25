@@ -23,6 +23,10 @@ import (
 	"github.com/netdata/netdata/go/plugins/plugin/agent/discovery/dummy"
 	"github.com/netdata/netdata/go/plugins/plugin/agent/jobmgr/lifecycle"
 	"github.com/netdata/netdata/go/plugins/plugin/agent/policy"
+	secretconfig "github.com/netdata/netdata/go/plugins/plugin/agent/secrets"
+	secretresolver "github.com/netdata/netdata/go/plugins/plugin/agent/secrets/resolver"
+	"github.com/netdata/netdata/go/plugins/plugin/agent/secrets/secretstore"
+	"github.com/netdata/netdata/go/plugins/plugin/agent/secrets/secretstore/backends"
 	"github.com/netdata/netdata/go/plugins/plugin/framework/collectorapi"
 	frameworkfunctions "github.com/netdata/netdata/go/plugins/plugin/framework/functions"
 	"github.com/netdata/netdata/go/plugins/plugin/framework/vnodes"
@@ -307,7 +311,12 @@ func startAgentFixtureConfiguredWithRegistry(
 	if wrapOutput != nil {
 		agentOutput = wrapOutput(output)
 	}
+	secrets, err := fixtureSecrets()
+	if err != nil {
+		return nil, err
+	}
 	instance := agent.New(agent.Config{
+		Secrets:         secrets,
 		Name:            "jobmgrtest",
 		ModuleRegistry:  registry,
 		RunModule:       productionFixtureModule,
@@ -767,7 +776,7 @@ func runAgentFunctionResultBoundaries(ctx context.Context) error {
 			if _, err := io.WriteString(
 				fixture.input,
 				fmt.Sprintf(
-					"FUNCTION %s 30 %q 0xFFFF %q\n",
+					"FUNCTION %s 30 \"%s\" 0xFFFF \"%s\"\n",
 					largeUID,
 					fmt.Sprintf("jobmgrtest:echo result-deferred:%d", largeDeferredBytes),
 					"method=api,role=test",
@@ -823,7 +832,7 @@ func sendFunctionAndRequireStatus(
 ) error {
 	if _, err := io.WriteString(
 		fixture.input,
-		fmt.Sprintf("FUNCTION %s %s %q 0xFFFF %q\n", uid, timeout, call, "method=api,role=test"),
+		fmt.Sprintf("FUNCTION %s %s \"%s\" 0xFFFF \"%s\"\n", uid, timeout, call, "method=api,role=test"),
 	); err != nil {
 		return err
 	}
@@ -888,7 +897,7 @@ func writeAgentFunctionPayload(
 	value byte,
 ) ([sha256.Size]byte, error) {
 	header := fmt.Sprintf(
-		"FUNCTION_PAYLOAD %s 30 %q 0xFFFF %q %s\n",
+		"FUNCTION_PAYLOAD %s 30 \"%s\" 0xFFFF \"%s\" %s\n",
 		uid,
 		route,
 		"method=api,role=test",
@@ -924,7 +933,7 @@ func writeAgentRawFunctionPayload(
 	payload []byte,
 ) ([sha256.Size]byte, error) {
 	header := fmt.Sprintf(
-		"FUNCTION_PAYLOAD %s 30 %q 0xFFFF %q %s\n",
+		"FUNCTION_PAYLOAD %s 30 \"%s\" 0xFFFF \"%s\" %s\n",
 		uid,
 		route,
 		"method=api,role=test",
@@ -1258,4 +1267,16 @@ func indexOf(values []string, value string, occurrence int) int {
 		occurrence--
 	}
 	return -1
+}
+
+func fixtureSecrets() (*secretconfig.Config, error) {
+	resolver, err := secretresolver.NewDefaultAtomicResolver()
+	if err != nil {
+		return nil, err
+	}
+	creators, err := secretstore.NewCreatorCatalog(backends.Creators())
+	if err != nil {
+		return nil, err
+	}
+	return &secretconfig.Config{Resolver: resolver, Creators: creators}, nil
 }
