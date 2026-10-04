@@ -12,14 +12,14 @@ import (
 	"net/url"
 
 	"github.com/netdata/netdata/go/plugins/pkg/tlscfg"
-	"github.com/netdata/netdata/go/plugins/plugin/dem/geoip"
+	"github.com/netdata/netdata/go/plugins/plugin/dem/rum/geoip"
 )
 
 func (c *Collector) Init(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if c.hub == nil {
+	if c.registry == nil {
 		return errors.New("missing runtime routes")
 	}
 	_, port, err := net.SplitHostPort(c.Listen)

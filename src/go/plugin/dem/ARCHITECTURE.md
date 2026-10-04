@@ -1,12 +1,72 @@
 # Native DEM ownership
 
+## Package boundaries
+
+The root `dem` package composes native collectors, process Function providers, query services and retention.
+It does not decode domain journal records, reduce investigation results or serialize Function tables. The command
+creates and closes shared resources across framework generations.
+
+| Package | Responsibility |
+|---|---|
+| `collector/{receiver,rum,journey,lighthouse}` | Native lifecycle, configuration, scheduling callbacks and metric publication |
+| `rum/registry` | Admitted sites, exact-generation request/read leases and receiver availability |
+| `rum/query` | Copied site observations, live cursors, redaction and active/retained investigation results |
+| `rum/history` | RUM record encoding, retained-event reducers and the per-site queued writer |
+| `rum/functions` | Function declarations, arguments, permissions, columns and response serialization |
+| `synthetic` | Shared request, run, event and artifact values plus request validation |
+| `synthetic/registry` | Copied active-job observations, generation fencing and freshness |
+| `synthetic/query` | Active-first run lookup, retained runs and recorded-artifact membership/availability |
+| `synthetic/history` | Synthetic record encoding and run reduction |
+| `synthetic/functions` | Function declarations, arguments, permissions, columns and response serialization |
+| `synthetic/runner` | Prepared browser execution, admission, process supervision and private reporter protocol |
+| `synthetic/runner/assets` | Immutable Node adapters and pinned dependency manifests |
+| `synthetic/artifacts` | Work directories, verified publication, immutable captures, reads and retention |
+| `journal` | One shared journal chain, SDK admission, independent snapshots, retention and close |
+| `internal/redact` | DEM text and credential redaction |
+| `internal/attemptmetrics` | Shared synthetic outcome and duration instruments |
+
+RUM processing is separate from investigation queries and Function presentation:
+
+| Package | Responsibility |
+|---|---|
+| `rum/beacon` | Normalized browser observations, event kinds and pure sampling/privacy rules |
+| `rum/config` | Receiver/site declarations, validation and effective sampling policy |
+| `rum/faro` | Faro wire decoding, spans, event classification and pinned bootstrap rendering/assets |
+| `rum/httpapi` | HTTP endpoints, exact route leases, origin/proxy/body/rate policy, caching and demo responses |
+| `rum/diagnostics` | Per-site public-address observations, reachability, snippet/CSP probes and rejected origins |
+| `rum/aggregate` | One site's rolling measurements and investigation state, behind one lock |
+| `rum/otlp` | RUM log/span mapping, export queues, transport and drainage |
+| `rum/geoip` | Receiver-owned MMDB reader and RUM location policy |
+
+The top-level `config/` directory holds installed configuration files, not a Go package. Configuration policy does
+not read the hostname or generate UI prose; diagnostics derives fallback addresses and Functions owns presentation.
+
+Function adapters depend on query results and shared domain values. Query services combine registry snapshots,
+domain history and artifact reads; they do not import Function adapters or acquire browser execution admission.
+The history adapters borrow one `journal.Store`; they cannot close it or independently apply retention. Journal
+knows SDK fields and snapshots, not RUM or synthetic schemas. Shared Go interfaces live with their consumers;
+pure synthetic values do not define executor, persistence or transport interfaces.
+
+Aggregate files separate state/construction, ingestion/results, activity, snapshots/ranking, vital statistics and
+cohesive topic operations without creating extra state owners. HTTP never imports the registry or collectors; its
+small Processor and Routes interfaces describe its consumers. Diagnostics does not depend on HTTP. Faro is a pure
+protocol adapter; its embedded bootstrap template requires no frontend build.
+
+Files follow these boundaries within packages: Function methods keep their columns beside their row builders;
+history separates record codecs from reducers; the runner separates configuration, preparation, execution, process
+ownership and reporter decoding; artifact files separate work creation, publication, reads, retention and filesystem
+checks. Pure DEM helpers stay under their domain or `internal/`; moving code to repository `pkg/` requires a real
+shared contract and consumers outside DEM.
+
+## Resource and runtime ownership
+
 The command owns the investigation journal and the plugin-wide retention service. It closes it only after `agenthost.Result` reports
 `Err == nil` and `ExitRequired == false`. An error or recovery requiring process exit may leave consumers alive; process
 exit owns their handles. Process-service finalizers run before job retirement and cannot close resources used by jobs.
 
 The framework owns desired configuration, preflight, scheduling, admission, retries, status and DynCfg. The constructor
-injects a runtime hub into collectors and a domain-only source into process Function providers. Providers construct
-fresh handlers for each contained framework run generation and remain available independently of collector selection. The hub contains actual admitted
+injects domain registries into collectors and query services into process Function providers. Providers construct
+fresh handlers for each contained framework run generation and remain available independently of collector selection. The RUM registry contains actual admitted
 site registrations and receiver availability. It has no desired config mirror, scheduler or job status.
 
 Receiver `Init` / `Check` validate and prepare without binding. `Run` binds the listener, publishes availability and
@@ -18,17 +78,30 @@ Each package in `collector/` is a registered native collector. Its lifecycle met
 collection and retirement; its metric definitions show the measurements it publishes. Fixed instruments are prepared
 once, with site labels bound during initialization. Dynamic breakdown handles are not retained in an unbounded cache.
 
-One RUM job constructs one aggregator, route, history writer and OTLP exporter. These objects have no site inventory
-or reconfiguration API. The route owns scalar reachability/snippet diagnostics; aggregation and export reject a beacon
-for another site before changing state. Ordered fan-out lets aggregation establish page-view and sampling decisions
-before export. The history writer accounts for its own queue; the exporter binds its trace destination at construction,
+One RUM job constructs one aggregator, diagnostic state, route, history writer and OTLP exporter. These objects have
+no site inventory or reconfiguration API. The registry admits references to those exact owners; it does not construct
+them. The route records address/rejection observations in the separate diagnostic state. Aggregation and export reject
+an observation for another site before changing state.
+
+The collector's processor calls aggregation and then export directly. Aggregation leaves the normalized Beacon
+unchanged and returns Accepted, PageView and Investigated decisions. Every accepted observation contributes to
+measurements and the live stream; investigation sampling controls retained history and OTLP export. History promotion
+can replay retained session events, while OTLP exports only the current observation. Faro classifies protocol event
+names into domain kinds without changing their original names for presentation. HTTP rejection accounting reaches
+aggregation only. History enqueue remains nonblocking under the aggregate lock and does not call back into it.
+
+The history writer accounts for its own queue; the exporter binds its trace destination at construction,
 while preserving each beacon's trace resource attributes. Shared receiver/site policy belongs to `rum/config`, and OTLP
 connection options belong to `rum/otlp`. Native `Name` identifies the site; `DisplayName` is presentation metadata.
 
-An HTTP request acquires one exact site registration containing both policy and sinks. Bootstrap, preflight, demo and
+An HTTP request acquires one exact site registration containing both policy and its processor. Bootstrap, preflight, demo and
 beacon endpoints use this same admission. Retirement removes future admission, cancels admitted request contexts and
 joins their leases. Cancellation interrupts socket reads through a response-controller deadline before closing bodies;
 closing a net/http request body alone can wait behind a stalled read. Cancellation callbacks join before leases release.
+Concurrent body reads can complete out of receipt-time order. Rolling-window reads filter all expired observations;
+session activity and deduplication keep the newest receipt time without rewriting event timestamps.
+Live queries merge per-site stream heads by receipt time while preserving each stream's sequence prefix; concurrent receipt and ingestion order can differ.
+All-site Errors, Pages and Sessions use a separate site-scoped row key without replacing their filter values.
 Function reads lease domain state only while copying snapshots, and historical queries own independent journal snapshots and check caller cancellation between files and rows.
 
 A retiring site joins its HTTP and Function readers before cancelling the history/export worker context. Export queues
@@ -82,7 +155,7 @@ joins. The command cannot close stores when the host returns forced recovery or 
 Run starts/completions are immutable self-contained journal records. Saved-time filters are applied before phase grouping;
 a selected start without a selected completion is unknown. Outcome filtering occurs after grouping. Summary reduction
 is O(selected runs) memory and stores no full timelines; SDK snapshots additionally own O(retained entry) offsets.
-Current Hub registrations own copied generation observations and reset unknown on replacement. Freshness is two native
+Current synthetic registry registrations own copied generation observations and reset unknown on replacement. Freshness is two native
 intervals and remains independent of an in-flight attempt; history does not drive current incidents.
 
 Chromium receives a short `/tmp/nd-dem-<run-id>` alias for its private work directory because its profile singleton uses Unix sockets with a small pathname limit. The artifact owner never adopts an existing alias and removes it only after verified drainage and an exact target check.

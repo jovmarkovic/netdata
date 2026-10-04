@@ -10,12 +10,12 @@ import (
 
 	"github.com/netdata/netdata/go/plugins/pkg/confopt"
 	"github.com/netdata/netdata/go/plugins/pkg/metrix"
-	"github.com/netdata/netdata/go/plugins/plugin/dem/rum/agg"
+	redact "github.com/netdata/netdata/go/plugins/plugin/dem/internal/redact"
+	"github.com/netdata/netdata/go/plugins/plugin/dem/rum/aggregate"
 	"github.com/netdata/netdata/go/plugins/plugin/dem/rum/config"
+	rumhistory "github.com/netdata/netdata/go/plugins/plugin/dem/rum/history"
 	"github.com/netdata/netdata/go/plugins/plugin/dem/rum/otlp"
-	"github.com/netdata/netdata/go/plugins/plugin/dem/runtimehub"
-	"github.com/netdata/netdata/go/plugins/plugin/dem/secrets"
-	"github.com/netdata/netdata/go/plugins/plugin/dem/store"
+	rumregistry "github.com/netdata/netdata/go/plugins/plugin/dem/rum/registry"
 	"github.com/netdata/netdata/go/plugins/plugin/framework/collectorapi"
 )
 
@@ -32,16 +32,16 @@ type Config struct {
 	OTLP        otlp.Config `yaml:"otlp"                   json:"otlp"`
 }
 type Dependencies struct {
-	Hub     *runtimehub.Hub
-	History *store.Store
+	Registry *rumregistry.Registry
+	History  *rumhistory.Store
 }
 type Collector struct {
 	collectorapi.Base
 	Config     `yaml:",inline" json:""`
 	deps       Dependencies
 	store      metrix.CollectorStore
-	aggregator *agg.Aggregator
-	redactor   *secrets.Redactor
+	aggregator *aggregate.Aggregator
+	redactor   *redact.Redactor
 	metrics    collectorMetrics
 }
 
