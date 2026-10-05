@@ -29,8 +29,8 @@ RUM processing is separate from investigation queries and Function presentation:
 
 | Package | Responsibility |
 |---|---|
-| `rum/beacon` | Normalized browser observations, event kinds and pure sampling/privacy rules |
-| `rum/config` | Receiver/site declarations, validation and effective sampling policy |
+| `rum/beacon` | Normalized browser observations, event kinds and pure sampling and normalization rules |
+| `rum/config` | Receiver/site declarations, validation and effective capture and sampling policy |
 | `rum/faro` | Faro wire decoding, spans, event classification and pinned bootstrap rendering/assets |
 | `rum/httpapi` | HTTP endpoints, exact route leases, origin/proxy/body/rate policy, caching and demo responses |
 | `rum/diagnostics` | Per-site public-address observations, reachability, snippet/CSP probes and rejected origins |
@@ -78,21 +78,46 @@ Each package in `collector/` is a registered native collector. Its lifecycle met
 collection and retirement; its metric definitions show the measurements it publishes. Fixed instruments are prepared
 once, with site labels bound during initialization. Dynamic breakdown handles are not retained in an unbounded cache.
 
-One RUM job constructs one aggregator, diagnostic state, route, history writer and OTLP exporter. These objects have
-no site inventory or reconfiguration API. The registry admits references to those exact owners; it does not construct
-them. The route records address/rejection observations in the separate diagnostic state. Aggregation and export reject
-an observation for another site before changing state.
+One RUM job constructs one aggregator, diagnostic state, route and history writer. It also constructs an event-log
+exporter when event_logs is enabled and a browser-trace exporter when tracing is enabled. Both default to disabled.
+Each enabled exporter owns its complete destination, gRPC connection, bounded queue and worker; disabled signals
+create none of these resources. The destinations have identical security options and do not inherit from each other.
+These objects have no site inventory or reconfiguration API. The registry admits references to those exact owners;
+it does not construct them. The route records address/rejection observations in the separate diagnostic state.
+Aggregation and each exporter reject an observation for another site before changing state.
 
-The collector's processor calls aggregation and then export directly. Aggregation leaves the normalized Beacon
+Each site owns immutable capture policy. Config materializes country-only geolocation and disabled frustration
+heuristics without mutating the stored input. Browser bootstrap limits instrumentation and outgoing metadata; the
+receiver independently enforces the same policy and normalizes supported URLs, paths and text before aggregation,
+retained history or enabled exports. Geolocation off skips lookup while HTTP IP admission remains active. Country mode
+retains only country; city mode adds approximate city/coordinates to live observations only. Journals and OTLP never
+receive city coordinates. Disabled frustration has no instruments or page counts. Application-provided user IDs use bounded text normalization without path-style numeric/UUID substitution; per-event attribution and retained observed-ID membership are distinct from display summaries.
+These targeted transformations do not constitute general privacy or consent enforcement.
+
+Faro's `beforeSend` runs before its session sampling hook. Browser shaping clones metadata and preserves the
+`isSampled` session attribute until the SDK consumes it; removing it early silently drops telemetry. Session lifecycle
+and `view_changed` envelopes carry metadata even on quiet pages, so they stay on the wire. Native history suppresses
+generic session lifecycle rows and uses explicit view events to preserve transitions between identically normalized
+routes. The pinned-SDK capture and sampling fixtures exercise the real metadata providers and transport hooks,
+including selected/excluded session rollover; SDK upgrades MUST verify this ordering against the new bundle.
+The decoder targets the pinned SDK's measurement `values` map. Legacy experimental scalar `value.duration` and
+`value.value` payloads are unsupported; no compatibility adapter is retained.
+
+The collector's processor calls aggregation and then each enabled exporter directly. Aggregation leaves the normalized Beacon
 unchanged and returns Accepted, PageView and Investigated decisions. Every accepted observation contributes to
-measurements and the live stream; investigation sampling controls retained history and OTLP export. History promotion
-can replay retained session events, while OTLP exports only the current observation. Faro classifies protocol event
+measurements and the live stream; investigation sampling controls retained history and OTLP export. Config owns
+omitted/null defaults; the aggregator receives literal effective rates, including zero. Receiver collection zero
+acknowledges otherwise admissible requests before decode, geo lookup or processing; bootstrap zero avoids SDK startup.
+History promotion replays preceding bounded context with each event's original attribution, then emits current
+entries independently of the live ring cap. Poor-vital entries do not require element attribution. OTLP exports only
+newly selected observations; prior exports and asynchronously arriving spans are not reconstructed. Faro classifies protocol event
 names into domain kinds without changing their original names for presentation. HTTP rejection accounting reaches
 aggregation only. History enqueue remains nonblocking under the aggregate lock and does not call back into it.
 
-The history writer accounts for its own queue; the exporter binds its trace destination at construction,
-while preserving each beacon's trace resource attributes. Shared receiver/site policy belongs to `rum/config`, and OTLP
-connection options belong to `rum/otlp`. Native `Name` identifies the site; `DisplayName` is presentation metadata.
+The history writer and each enabled exporter account for their own queues. The trace exporter preserves each
+beacon's trace resource attributes. Shared receiver/site policy and destination declarations belong to `rum/config`;
+`rum/otlp` implements transport security, signal mapping and drainage. Native `Name` identifies the site;
+`DisplayName` is presentation metadata. Runtime export failure does not stop native aggregation or history.
 
 An HTTP request acquires one exact site registration containing both policy and its processor. Bootstrap, preflight, demo and
 beacon endpoints use this same admission. Retirement removes future admission, cancels admitted request contexts and

@@ -190,7 +190,7 @@ func (a *Aggregator) Ingest(b *beacon.Beacon) Result {
 		investigated = st.touchSession(b, pageView, now, a.history)
 	} else {
 		inv := st.cfg.Investigate
-		investigated = inv.rate() >= 1 || inv.alwaysKeep(b)
+		investigated = inv.Rate >= 1 || inv.alwaysKeep(b)
 	}
 	// Sessions already emitted self-contained error events with their timeline.
 	// Sessionless errors remain investigable without creating a parent session.
@@ -207,7 +207,6 @@ func (a *Aggregator) Ingest(b *beacon.Beacon) Result {
 				Browser:     b.Browser,
 				Device:      b.Device,
 				Country:     b.Country,
-				City:        b.City,
 				Version:     b.AppVersion,
 				UserID:      b.UserID,
 				Fingerprint: e.Fingerprint,

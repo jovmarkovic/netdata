@@ -28,7 +28,7 @@ type collectorMetrics struct {
 	firstPartyResources, thirdPartyResources        metrix.SnapshotCounter
 }
 
-func newCollectorMetrics(m metrix.SnapshotMeter) collectorMetrics {
+func newCollectorMetrics(m metrix.SnapshotMeter, logs, traces, frustrationSignals bool) collectorMetrics {
 	metrics := collectorMetrics{
 		meter: m,
 		ingress: m.StateSet(
@@ -46,13 +46,34 @@ func newCollectorMetrics(m metrix.SnapshotMeter) collectorMetrics {
 		firstPartyResources: m.Counter("resources_first_party"),
 		thirdPartyResources: m.Counter("resources_third_party"),
 	}
-	for _, name := range []string{aggregate.CounterOTLPSent, aggregate.CounterOTLPDropped, aggregate.CounterOTLPErrors, aggregate.CounterHistoryWritten, aggregate.CounterHistoryDropped, aggregate.CounterSpansSent, aggregate.CounterSpansDropped, aggregate.CounterSpansErrors} {
+	diagnostics := []string{aggregate.CounterHistoryWritten, aggregate.CounterHistoryDropped}
+	if logs {
+		diagnostics = append(
+			diagnostics,
+			aggregate.CounterOTLPSent,
+			aggregate.CounterOTLPDropped,
+			aggregate.CounterOTLPErrors,
+		)
+	}
+	if traces {
+		diagnostics = append(
+			diagnostics,
+			aggregate.CounterSpansSent,
+			aggregate.CounterSpansDropped,
+			aggregate.CounterSpansErrors,
+		)
+	}
+	for _, name := range diagnostics {
 		metrics.diagnostics = append(metrics.diagnostics, counterMetric{
 			name:       name,
 			instrument: m.Counter(name),
 		})
 	}
-	for _, name := range []string{aggregate.CounterPageviews, aggregate.CounterJSErrors, aggregate.CounterAccepted, beacon.RejectOrigin, beacon.RejectRate, beacon.RejectSize, beacon.RejectInvalid, beacon.RejectBot, aggregate.CounterRageClicks, aggregate.CounterDeadClicks, aggregate.CounterErrorClicks, aggregate.CounterSamplesDropped} {
+	traffic := []string{aggregate.CounterPageviews, aggregate.CounterJSErrors, aggregate.CounterAccepted, beacon.RejectOrigin, beacon.RejectRate, beacon.RejectSize, beacon.RejectInvalid, beacon.RejectBot, aggregate.CounterSamplesDropped}
+	if frustrationSignals {
+		traffic = append(traffic, aggregate.CounterRageClicks, aggregate.CounterDeadClicks, aggregate.CounterErrorClicks)
+	}
+	for _, name := range traffic {
 		metrics.traffic = append(metrics.traffic, counterMetric{
 			name:       name,
 			instrument: m.Counter(name),

@@ -508,10 +508,12 @@ func (g fullGeo) Lookup(string) (string, string, float64, float64, bool) {
 }
 
 func TestGeoCityLatLonAppliedFromResolver(t *testing.T) {
+	cfg := testCfg()
+	cfg.Sites[0].Capture = &config.Capture{Geolocation: new(config.GeolocationCity)}
 	sink := newRecSink()
 	_, ts := newTestServer(
 		t,
-		testCfg(),
+		cfg,
 		sink,
 		fullGeo{
 			country: "GR",
@@ -687,7 +689,7 @@ func TestBootstrapRevalidates(t *testing.T) {
 		t.Fatalf("unchanged snippet: %d, want 304", resp.StatusCode)
 	}
 	cfg := testCfg()
-	cfg.Sites[0].MeasureSampleRate = 0.5
+	cfg.Sites[0].MeasureSampleRate = new(0.5)
 	s.Update(cfg)
 	if resp := get(etag); resp.StatusCode != 200 || resp.Header.Get("ETag") == etag {
 		t.Fatalf("changed settings must send a new snippet: %d", resp.StatusCode)

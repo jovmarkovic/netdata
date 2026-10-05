@@ -105,7 +105,6 @@ func TestNativeJobsIngressReplacementAndHistory(t *testing.T) {
 	site.Name = "shop"
 	site.DisplayName = "Shop"
 	site.AllowedOrigins = []string{"https://example.org"}
-	site.OTLP.Enabled = "no"
 	siteJob, siteOut, stopSite := startJob(t, "rum", "shop", site)
 	tickUntil(t, siteJob, siteOut, "SET 'unavailable' = 1")
 	assert.NotContains(t, siteOut.String(), "rum.lcp", "no browser measurement has been made")
@@ -156,7 +155,7 @@ func TestNativeJobsIngressReplacementAndHistory(t *testing.T) {
 	send("/checkout")
 	stopNext()
 	stopSite()
-	rows, err := rumhistory.NewStore(db).QuerySessions(context.Background(), "shop", 0, time.Now().Unix()+10, 10)
+	rows, err := rumhistory.NewStore(db).QuerySessions(context.Background(), "shop", "", 0, time.Now().Unix()+10, 10)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.EqualValues(t, 2, rows[0].Pageviews)
@@ -174,7 +173,9 @@ func TestCancelledOTLPPreparationHonorsCaller(t *testing.T) {
 	})
 	site.Name = "shop"
 	site.AllowedOrigins = []string{"https://example.org"}
-	site.OTLP.TLSCA = "synthetic-ca.pem"
+	site.EventLogs.Enabled = true
+	site.EventLogs.Destination.Endpoint = new("https://localhost:4317")
+	site.EventLogs.Destination.TLSCA = "synthetic-ca.pem"
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	require.ErrorIs(t, site.Init(ctx), context.Canceled)
@@ -191,7 +192,7 @@ func TestIndependentSitesSurviveReceiverReplacementAndRetirement(t *testing.T) {
 			Registry: hub,
 			History:  rumhistory.NewStore(db),
 		})
-		c.Name, c.AllowedOrigins, c.OTLP.Enabled = name, []string{"https://example.org"}, "no"
+		c.Name, c.AllowedOrigins = name, []string{"https://example.org"}
 		_, _, stop := startJob(t, "rum", name, c)
 		return stop
 	}
@@ -245,7 +246,7 @@ func TestIndependentSitesSurviveReceiverReplacementAndRetirement(t *testing.T) {
 	stopBeta()
 	stopNext()
 	for name, want := range map[string]uint64{"alpha": 1, "beta": 2} {
-		rows, err := rumhistory.NewStore(db).QuerySessions(ctx, name, 0, time.Now().Unix()+10, 10)
+		rows, err := rumhistory.NewStore(db).QuerySessions(ctx, name, "", 0, time.Now().Unix()+10, 10)
 		require.NoError(t, err)
 		require.Len(t, rows, 1)
 		require.Equal(t, "same-session", rows[0].SessionID)
@@ -264,7 +265,6 @@ func TestOversizedChunkedUploadRespondsPromptlyAndDisablesKeepAlive(t *testing.T
 	})
 	site.Name = "shop"
 	site.AllowedOrigins = []string{"https://example.org"}
-	site.OTLP.Enabled = "no"
 	startJob(t, "rum", "shop", site)
 	listener := receiver.New(hub)
 	listener.Listen = "127.0.0.1:0"

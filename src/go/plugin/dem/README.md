@@ -61,6 +61,189 @@ The browser normalization, bounded aggregation, OTLP and query behavior originat
 `b3de4662f567dc63d33fee6201f8c2313568301b`. Its private configuration controller, scheduler, protocol emitter and root
 state reconciliation are replaced by the native Agent framework. Embedded third-party asset notices remain beside their source.
 
+## Browser capture contract
+
+Core capture supports page and SPA-view activity, Web Vitals and attribution selectors, navigation/resource timing,
+uncaught exceptions and unhandled rejections with structured error frames, and the browser/OS/device, release,
+session and view dimensions used by native diagnosis. Selectors locate the element involved; they are not DOM snapshots
+or entered form values. Unsupported SDK metadata is removed before transmission and again at native normalization.
+
+| Evidence | Browser/native capture | Live and measurements | Retained native history | Optional export |
+|---|---|---|---|---|
+| Core activity, vitals, timings and errors | Enabled for collected sessions | Relevant measurements and live entries | Selected investigation entries | Supported event logs; request spans only with tracing |
+| Application user ID | Explicit `setUser` ID only | No live-feed field or measurement dimension | Per-event ID in pending/retained timelines; observed retained IDs for session lookup | No automatic ID export |
+| Country | Receiver IP lookup; default `capture.geolocation: country` | Country comparisons | Country on retained entries | Country on supported records |
+| Approximate city and coordinates | Only `capture.geolocation: city` | City and map markers | No city or coordinates | No city or coordinates |
+| Rage, dead and error clicks | Only `capture.frustration_signals: true` | Heuristic counts and activity; absent when disabled | Selected heuristic entries | Selected events when event logs are enabled |
+| Custom-event attributes | Only with event logs enabled | No arbitrary attribute dimensions | No generic attributes | Searchable event attributes |
+| Console messages | Only with event logs and `include_console_logs` enabled | No core-error substitution | No console archive | Selected console logs |
+| Browser request spans | Only with tracing enabled | Native resource timing remains independent | No span archive | Selected browser spans |
+
+`capture.geolocation` accepts `off`, `country` and `city`. Omission or `null` selects `country`; an empty string is
+invalid. Quote `'off'` in YAML because unquoted `off` is a YAML boolean. Country-only capture supplies no map coordinates. City mode provides approximate IP-derived locations,
+not browser GPS or precise visitor positions. `off` skips location lookup entirely; network IP handling for request
+admission, trusted proxies and rate limiting still operates. Client IP addresses are not stored as telemetry.
+
+Frustration signals default to false, including omission or `null`. Enabling them adds browser interaction listeners
+and heuristic evidence; repeated clicks, clicks without a detected response and clicks near an error do not prove user
+intent, frustration or causality. A disabled signal is unavailable, not a measured zero.
+
+An application-provided user ID is an explicit capture choice. IDs remain application-controlled values and are not
+hashed or anonymized by DEM. Use an internal, non-sensitive ID of at most 128 bytes and clear it on logout. IDs undergo the same bounded text
+normalization as other diagnostic strings; numeric and UUID IDs are not generalized as URL paths. Per-event attribution survives login,
+logout and user changes. The `user_id` filter matches exact stored, normalized IDs within the selected saved-time range.
+Original IDs changed by normalization cannot be recovered through lookup. Current configured credentials also mask
+query output, so a displayed `[REDACTED]` value is not a reliable lookup key or a unique identity.
+User names, email fields and arbitrary user attributes are not part of this identity contract.
+
+Recognized structured URL fields lose query strings, fragments and credentials; path grouping and configured `redact_paths` rules normalize
+supported URL paths. Stack source URLs retain hashed JavaScript basenames for source attribution; configured path rules
+still apply. Targeted text transformations apply to diagnostic strings before grouping, history and export. Exact
+configured-secret replacement applies to values of at least four bytes; shorter strings remain unchanged unless they
+match a credential pattern such as `token=...` or `Bearer ...`. Use strong destination credentials.
+These limited transformations are not a general anonymization, data-loss-prevention or consent system: application IDs,
+error text, selectors and explicitly exported attributes can still be identifying. Choose application instrumentation
+and optional capture settings accordingly. Sampling and the independent event-log/trace switches retain their existing
+roles; capture choices do not imply consent or reconstruct evidence that was never collected.
+
+## Collection and retained detail
+
+RUM has two sampling decisions, both defaulting to 100%. Omitted or `null` rates use that default; explicit zero
+means zero at that stage:
+
+- `measure_sample_rate` selects new browser sessions for collection. Received measurements and live activity describe
+  admitted traffic; counts are not scaled to estimate all visitors.
+- `investigate.sample_rate` selects a stable baseline of received sessions for native history and enabled event-log
+  and browser-trace exports. It does not reduce the received measurements or live activity further.
+- `investigate.always_keep` adds problem-triggered detail beyond that baseline. It defaults to `errors` and
+  `poor_vitals`; an explicit empty list disables these overrides. Overrides bias retained evidence toward problems,
+  so retained rows cannot establish the prevalence of failures or enforce a fixed export budget.
+
+For example, retain problem-triggered detail while measuring all received sessions:
+
+```yaml
+measure_sample_rate: 1
+investigate:
+  sample_rate: 0
+  always_keep: [errors, poor_vitals]
+```
+
+With `sample_rate: 0` and `always_keep: []`, only measurements and live activity remain, even when optional exports
+are enabled. With `measure_sample_rate: 0`, the generated bootstrap does not start the SDK, and the receiver returns
+204 for otherwise admissible collection attempts without decoding or recording them. Existing origin, size, bot and
+rate checks still apply. Intentional discard is neither accepted traffic nor a rejection/export-loss count. The
+Sites table reports `collection_disabled`. Browser measurement charts are absent, so the stock missing-beacon alert
+does not treat intentional disablement as a broken installation; receiver diagnostics remain available.
+
+Already open pages can continue sending and propagating trace context until navigation. Positive collection-rate
+changes apply to new SDK sampling decisions; valid existing SDK sessions keep their earlier decision. Collection
+zero also discards those sessions at the receiver. Sampling is a cost control, not a privacy opt-out or job disablement.
+
+A configured problem promotes an identified session while it remains tracked. Native history receives the available
+preceding timeline context (up to 100 entries), the triggering beacon's generated entries, and subsequent detail.
+Each entry keeps the user, release and location observed with it; later login or navigation does not relabel earlier
+context. Poor vitals retain their name and value even without element attribution. The current beacon's entries are
+not truncated by the context ring, but normal admission and delivery bounds still apply.
+
+This is bounded evidence, not a complete session archive: only 2,000 sessions are tracked per site, inactivity
+expiry and eviction lose context and promotion state, and reload/restart starts new in-memory state. Promotion does
+not reconstruct earlier discarded logs or spans. Browser spans can arrive separately from the error that promotes a
+session, so traces can remain fragmented; a trace ID alone does not establish stored span availability.
+
+Observations without a session ID still contribute measurements. At 100% detail they qualify for supported exports
+and standalone error history; below 100%, only configured problem-triggering observations qualify. They do not
+create a synthetic session or a standalone vital timeline. Function help describes the current policy; historical
+evidence can reflect earlier settings, bounded context, retention and delivery loss.
+
+## Optional event logs and browser tracing
+
+Native RUM charts, session timelines and errors work without an OTLP receiver. Two optional features add evidence
+for deeper investigation, each disabled by default and configured independently for each site:
+
+- **Event logs** preserve searchable browser events, custom-event attributes and, when explicitly included, console
+  info, warn and error messages. Search by site, session and time in the destination's logs to inspect that evidence.
+  Console errors remain logs with severity and bounded, redacted error type/stack when supplied; actual uncaught
+  exceptions and unhandled rejections remain core RUM errors.
+- **Browser tracing** exports sampled browser request spans and propagates trace context. To follow requests into a
+  backend, instrument its services, accept propagated context, coordinate sampling and send browser and backend
+  spans to the same tracing system. Cross-origin APIs must allow trace headers in CORS. Browser spans alone show
+  browser requests; they do not establish backend execution or trace completeness.
+
+Enable local searchable events after preparing a local OTLP/gRPC receiver:
+
+```yaml
+jobs:
+  - name: shop
+    allowed_origins: [https://shop.example.org]
+    event_logs:
+      enabled: true
+      include_console_logs: true
+```
+
+For a Netdata receiver, follow [OTLP receiver setup and log verification](../../../../docs/opentelemetry/otlp-ingestion.md).
+Open that receiver node's Logs tab, select `otel-logs`, and choose `netdata-rum` in **Services**
+(`resource.attributes.service.name`). Narrow the time range and filter `resource.attributes.rum.site` by site key
+and `attributes.session.id` by session ID. Inspect `attributes.rum.type` (`console`, `event`, `error` or `pageview`),
+the message body, `attributes.console.level`, `attributes.event.name` and `attributes.event.attr.<key>`.
+Error detail, when supplied, is in `attributes.error.type` and `attributes.error.stack`. Log access requires
+Netdata Cloud sign-in. The final frontend stage will verify this complete RUM-to-Logs workflow in the UI.
+
+Alternatively, enable browser tracing with an existing backend tracing receiver, leaving event logs disabled:
+
+```yaml
+jobs:
+  - name: shop
+    allowed_origins: [https://shop.example.org]
+    tracing:
+      enabled: true
+      propagate_to: [https://api.example.org]
+      destination:
+        endpoint: https://traces.example.org:4317
+        auth_token: ${env:TRACE_EXPORT_TOKEN}
+```
+
+Both features accept the same complete `destination` object. There is no inheritance between them. The default
+endpoint is `http://127.0.0.1:4317`; it does not enable or discover a receiver. Set `http://host:port` for plaintext or
+`https://host:port` for TLS, always with an explicit port from 1 to 65535 (bracket IPv6 addresses). The protocol is
+OTLP/gRPC, not OTLP/HTTP. Paths, URL credentials, queries, fragments and resolver targets are not supported.
+`auth_token` supplies Bearer authentication. With HTTPS, `tls_ca` selects a CA file (otherwise system roots apply),
+and paired `tls_cert` / `tls_key` files enable client certificate authentication. Files must be readable by the service.
+Destination credentials are used for collector-to-receiver authentication and are omitted from browser snippets and
+investigation results.
+
+Omitted or null feature blocks are disabled. An omitted or null destination or endpoint uses the local default;
+an explicitly empty endpoint is invalid for an enabled feature. Null booleans mean false, null auth/TLS strings mean
+empty, and null `propagate_to` means no additional origins. Disabling a feature retains its well-typed saved settings
+without checking destination, TLS or propagation semantics. Native secret references throughout the job must still
+resolve before it can start, including references in disabled features.
+
+Investigation sampling applies to exported events and spans. Later promotion of a session does not reconstruct
+previously discarded logs or spans. SDK session lifecycle events are ordinary sampled events; the exporter does not
+invent a session-start event. Native history and the export destination retain data independently, so neither is a
+complete archive of every session. A session can contain multiple traces, and event logs do not guarantee automatic
+Logs-to-Traces correlation.
+
+For an external trace receiver, look up the copied trace ID in your existing tracing system. An export endpoint URL
+is not a Netdata node identity. Correct Netdata receiver selection and direct browser-to-backend trace navigation
+remain part of the final frontend integration; backend export alone does not establish those UI flows.
+
+Export is best effort and does not block native ingestion or history when a receiver is slow or unavailable. The
+`rum.otlp` event-log and `rum.spans` browser-span charts appear only for their enabled feature, including before first
+traffic. Their diagnostic dimensions mean:
+
+| Dimension | Meaning |
+|---|---|
+| `sent` | Records accepted by the receiver, without a guarantee of queryability or durable storage. |
+| `errors` | Records whose attempted export failed or was rejected; a timeout may have an unknown delivery outcome. |
+| `dropped` | Records lost locally because a queue was full or shutdown ended before export was attempted. |
+
+Intentional disablement and sampling are not export loss. Zero traffic proves neither receiver health nor failure.
+The event-log and browser-span warnings each report the average combined rate of failed delivery and local loss
+over the last five minutes;
+they have no instance when the corresponding feature is disabled. Check the destination, authentication and TLS
+settings when they fire. Failed batches are not a durable retry archive, though future batches can succeed after
+receiver recovery.
+
 ## Synthetic monitoring
 
 Each `journey` job runs one configured Playwright Test entry and its imports. Each `lighthouse` job runs one desktop

@@ -20,7 +20,9 @@ func (c *Collector) Collect(context.Context) error {
 	for _, counter := range c.metrics.diagnostics {
 		counter.instrument.ObserveTotal(float64(s.Counters[counter.name]))
 	}
-	if !available {
+	// Disabled collection has no browser observations. Publishing zero traffic
+	// would misleadingly attach the stock missing-beacon alert.
+	if !available || c.MeasureRate() == 0 {
 		return nil
 	}
 	for _, counter := range c.metrics.traffic {
@@ -44,7 +46,7 @@ func (c *Collector) Collect(context.Context) error {
 		for _, g := range groups {
 			gm := m.WithLabels(metrix.Label{
 				Key:   kind,
-				Value: c.redactor.Apply(g.Value),
+				Value: g.Value,
 			})
 			gm.Counter("breakdown_" + kind + "_pageviews").ObserveTotal(float64(g.Pageviews))
 			gm.Counter("breakdown_" + kind + "_js_errors").ObserveTotal(float64(g.JSErrors))
@@ -54,7 +56,7 @@ func (c *Collector) Collect(context.Context) error {
 		}
 	}
 	for _, g := range s.ErrorGroups {
-		msg := []rune(c.redactor.Apply(g.Message))
+		msg := []rune(g.Message)
 		if len(msg) > 80 {
 			msg = msg[:80]
 		}
@@ -74,7 +76,7 @@ func (c *Collector) Collect(context.Context) error {
 		for _, host := range s.ResourceHosts {
 			hm := m.WithLabels(metrix.Label{
 				Key:   "host",
-				Value: c.redactor.Apply(host.Host),
+				Value: host.Host,
 			})
 			hm.Counter("resource_host_count").ObserveTotal(float64(host.Count))
 			if host.HasDuration {
